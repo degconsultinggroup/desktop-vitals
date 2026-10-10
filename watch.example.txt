@@ -20,6 +20,17 @@
 # Price bot = price_bot.py | check: C:\bots\price\heartbeat.json | log: C:\bots\price\bot.log | code: C:\bots\price
 # Local API = uvicorn | check: http://127.0.0.1:8000/health
 
+# ---- AI ----
+# Lines that name a known AI program (Claude, Cursor, Ollama, OpenClaw ...) go in the AI card, not Bots or Watching.
+# "| ai" puts any other line there. "| kind:" sets its tag: Agent, App, Model, Bot or Watching.
+#
+# Research agent = agent_loop.py | ai | kind: Agent
+#
+# The review screen (the gear button) writes these for you:
+# @hide = <name>             don't show something Desktop Vitals found on its own
+# @kind = <name> | Agent     change the tag of something it found
+# @reviewed = <date>         the first-run review is done
+
 # ---- Processor temperature ----
 # Windows doesn't hand CPU temperature to normal apps. If a sensor tool keeps writing a JSON file like
 #   {"ts": "2026-10-10T14:03:22Z", "cpu_temp_c": 48.5, "cpu_pkg_power_w": 21.0}

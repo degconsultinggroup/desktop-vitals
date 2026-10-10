@@ -351,7 +351,13 @@ namespace DesktopVitals
         public string Check;      // a file, folder or http address that shows the bot is working
         public string Log;        // the supervisor log, for counting crash restarts
         public string Code;       // the bot's folder, opened in your editor on click
+        public bool Ai;           // shown in the AI card: "| ai", or the match names a known AI program
+        public string Kind;       // "| kind: Agent" overrides what the line is called in the AI card
+        public string Raw;        // the line as written, so the review screen can change it in place
         public bool IsBot { get { return Check != null; } }
+
+        static readonly string[] AiWords = { "claude", "openclaw", "codex", "gemini", "chatgpt", "openai", "anthropic", "grok", "cursor", "windsurf", "copilot", "aider", "ollama", "llama", "lm studio", "koboldcpp", "vllm", "perplexity" };
+        public static bool SoundsLikeAi(string s) { return AiWords.Any(w => s.IndexOf(w, StringComparison.OrdinalIgnoreCase) >= 0); }
 
         public string Crash = "restart";   // text in a log line that marks a crash restart
 
@@ -382,6 +388,22 @@ namespace DesktopVitals
             return d;
         }
 
+        // Every value of a setting that can repeat, such as "@hide = <name>".
+        public static List<string> Many(string key)
+        {
+            var list = new List<string>();
+            string file = ConfigFile();
+            if (!File.Exists(file)) return list;
+            foreach (string raw in File.ReadAllLines(file))
+            {
+                string line = raw.Trim();
+                int eq = line.IndexOf('=');
+                if (line.StartsWith("@") && eq > 1 && line.Substring(1, eq - 1).Trim().Equals(key, StringComparison.OrdinalIgnoreCase))
+                    list.Add(line.Substring(eq + 1).Trim());
+            }
+            return list;
+        }
+
         // "Label = something.exe" matches a process name; anything else matches text in the command line.
         public static List<WatchRule> Load()
         {
@@ -405,7 +427,12 @@ namespace DesktopVitals
                     else if (x.StartsWith("log:", StringComparison.OrdinalIgnoreCase)) r.Log = x.Substring(4).Trim();
                     else if (x.StartsWith("code:", StringComparison.OrdinalIgnoreCase)) r.Code = x.Substring(5).Trim();
                     else if (x.StartsWith("crash:", StringComparison.OrdinalIgnoreCase)) r.Crash = x.Substring(6).Trim();
+                    else if (x.Equals("ai", StringComparison.OrdinalIgnoreCase)) r.Ai = true;
+                    else if (x.StartsWith("kind:", StringComparison.OrdinalIgnoreCase)) r.Kind = Theme.Kinds.Keys.FirstOrDefault(k => k.Equals(x.Substring(5).Trim(), StringComparison.OrdinalIgnoreCase));
                 }
+                r.Raw = raw;
+                if (r.Kind != null && Theme.AiKinds.Contains(r.Kind)) r.Ai = true;
+                if (SoundsLikeAi(r.Label + " " + r.Match)) r.Ai = true;
                 r.ByExe = r.Match.EndsWith(".exe", StringComparison.OrdinalIgnoreCase);
                 if (r.Match.Length > 0) rules.Add(r);
             }
@@ -562,6 +589,7 @@ namespace DesktopVitals
     static class TaskList
     {
         public static List<TaskInfo> Items = new List<TaskInfo>();
+        public static bool Ready { get { return read != DateTime.MinValue; } }
         static bool busy;
         static DateTime read = DateTime.MinValue;
 
@@ -824,6 +852,34 @@ namespace DesktopVitals
         public static readonly Brush AmberV = Gradient(Color.FromRgb(0xFF, 0xCF, 0x5C), Color.FromRgb(0xFF, 0x9F, 0x2E), false);
         public static readonly Brush RedV = Gradient(Color.FromRgb(0xFF, 0x7E, 0x6B), Color.FromRgb(0xFF, 0x45, 0x5A), false);
         public static readonly Brush Edge = Gradient(Color.FromArgb(0x40, 0xFF, 0xFF, 0xFF), Color.FromArgb(0x0A, 0xFF, 0xFF, 0xFF), false);
+        // One color per kind of thing, kept apart from the green / amber / grey status dots.
+        public static readonly Dictionary<string, Color> Kinds = new Dictionary<string, Color>
+        {
+            { "Model", Color.FromRgb(0xC3, 0x9B, 0xFF) },
+            { "Agent", Color.FromRgb(0x5F, 0xD8, 0xE8) },
+            { "App", Color.FromRgb(0x8F, 0xB2, 0xFF) },
+            { "Bot", Color.FromRgb(0xFF, 0x8A, 0xC4) },
+            { "Watching", Color.FromRgb(0xC8, 0xCD, 0xD6) },
+            { "Script", Color.FromRgb(0xFF, 0xB8, 0x8C) },
+            { "Task", Color.FromRgb(0xA9, 0xC4, 0xD8) },
+        };
+        public static readonly string[] AiKinds = { "Bot", "Agent", "App", "Model", "Watching" };
+
+        public static Border Tag(string kind)
+        {
+            var b = new Border { Child = Label("", 10.5, Sub, FontWeights.SemiBold), CornerRadius = new CornerRadius(4), Padding = new Thickness(5, 0, 5, 1), VerticalAlignment = VerticalAlignment.Center };
+            Paint(b, kind);
+            return b;
+        }
+
+        public static void Paint(Border tag, string kind)
+        {
+            Color c = Kinds[kind];
+            var t = (TextBlock)tag.Child;
+            t.Text = kind;
+            t.Foreground = new SolidColorBrush(c);
+            tag.Background = new SolidColorBrush(Color.FromArgb(0x2E, c.R, c.G, c.B));
+        }
         public static readonly FontFamily Font = new FontFamily("Segoe UI Variable Text, Segoe UI");
         public static readonly FontFamily Display = new FontFamily("Segoe UI Variable Display, Segoe UI");
 
@@ -1017,7 +1073,9 @@ namespace DesktopVitals
     {
         readonly Image icon = new Image();
         readonly Ellipse dot = new Ellipse();
-        readonly TextBlock name, count, cpu, mem;
+        readonly TextBlock name, count, cpu, mem, kindText;
+        readonly Border kindTag = new Border();
+        public string Kind;         // set on rows in the AI card: Model, Agent, App, Bot, Watching
         public int[] Pids = new int[0];
         public string Title = "";
         public int State = -1;
@@ -1034,6 +1092,7 @@ namespace DesktopVitals
             {
                 var parts = new[] { count.Text, cpu.Text, mem.Text }.Where(x => x.Length > 0);
                 string mark = State == 1 ? "[ok] " : State == 2 ? "[QUIET] " : State == 0 ? "[DOWN] " : "";
+                if (Kind != null) mark += Kind + ": ";
                 return mark + name.Text + "  " + string.Join("  \u00B7  ", parts);
             }
         }
@@ -1060,7 +1119,14 @@ namespace DesktopVitals
             name = Theme.Label("", 13, Theme.Text, FontWeights.Normal);
             count = Theme.Label("", 12, Theme.Faint, FontWeights.Normal);
             count.Margin = new Thickness(6, 1, 0, 0);
-            nameLine.Children.Add(name); nameLine.Children.Add(count);
+            kindText = Theme.Label("", 10.5, Theme.Sub, FontWeights.SemiBold);
+            kindTag.Child = kindText;
+            kindTag.CornerRadius = new CornerRadius(4);
+            kindTag.Padding = new Thickness(5, 0, 5, 1);
+            kindTag.Margin = new Thickness(7, 1, 0, 0);
+            kindTag.VerticalAlignment = VerticalAlignment.Center;
+            kindTag.Visibility = Visibility.Collapsed;
+            nameLine.Children.Add(name); nameLine.Children.Add(kindTag); nameLine.Children.Add(count);
             cpu = Theme.Label("", 12.5, Theme.Text, FontWeights.Normal);
             cpu.HorizontalAlignment = HorizontalAlignment.Right;
             mem = Theme.Label("", 12.5, Theme.Sub, FontWeights.Normal);
@@ -1128,6 +1194,28 @@ namespace DesktopVitals
             if (mem.Foreground != want) mem.Foreground = want;
         }
 
+        // A line in the AI card. state: 0 not running, 1 running or working, 2 running but quiet or failing.
+        public void SetAi(string title, string kind, int state, string detail, string cpuText, string memText, string tip)
+        {
+            Title = title;
+            State = kind == "Bot" ? state : -1;
+            icon.Visibility = Visibility.Collapsed;
+            dot.Visibility = Visibility.Visible;
+            dot.Fill = state == 1 ? Theme.Green : state == 2 ? Theme.AmberDot : Theme.Off;
+            if (Kind != kind)
+            {
+                Kind = kind;
+                Color c = Theme.Kinds[kind];
+                kindText.Text = kind;
+                kindText.Foreground = new SolidColorBrush(c);
+                kindTag.Background = new SolidColorBrush(Color.FromArgb(0x2E, c.R, c.G, c.B));
+                kindTag.Visibility = Visibility.Visible;
+            }
+            Fill(title, detail, cpuText, memText, state == 0 ? Theme.Faint : Theme.Text, tip);
+            var want = state == 2 ? Theme.AmberDot : Theme.Sub;
+            if (mem.Foreground != want) mem.Foreground = want;
+        }
+
         void Fill(string t, string c, string cp, string m, Brush color, string tip)
         {
             if (name.Text != t) name.Text = t;
@@ -1149,6 +1237,23 @@ namespace DesktopVitals
         public int[] Pids { get { return Items.Select(p => p.Pid).ToArray(); } }
     }
 
+    // One line on the review screen.
+    class ReviewItem
+    {
+        public string Name, Kind, OrigKind, Detail, Match, Section;
+        public bool On = true, Missed;
+        public WatchRule Rule;
+        public string[] Kinds;      // what clicking the tag cycles through; null when the kind is fixed
+    }
+
+    // One line in the AI card: a model, agent or app found running, or an AI line from your settings.
+    class AiLine
+    {
+        public string Kind, Name;
+        public List<Proc> Procs = new List<Proc>();
+        public WatchRule Rule;
+    }
+
     class VitalsWindow : Window
     {
         const int TopCount = 9;
@@ -1158,8 +1263,9 @@ namespace DesktopVitals
         readonly DispatcherTimer timer = new DispatcherTimer(DispatcherPriority.Background);
         readonly Stopwatch clock = Stopwatch.StartNew();
         readonly int cores = Environment.ProcessorCount;
-        readonly List<WatchRule> rules = WatchRule.Load().Where(r => !r.IsBot).ToList();
-        readonly List<WatchRule> botRules = WatchRule.Load().Where(r => r.IsBot).ToList();
+        List<WatchRule> rules, botRules, aiRules;
+        HashSet<string> hidden;                 // "@hide = <name>": found items you unticked in the review
+        Dictionary<string, string> kindOf;      // "@kind = <name> | Agent": found items you re-tagged
         readonly Dictionary<string, BotStatus> botStatus = new Dictionary<string, BotStatus>();
         Dictionary<int, Proc> prev = new Dictionary<int, Proc>();
         readonly Dictionary<long, string> cmdCache = new Dictionary<long, string>();
@@ -1172,10 +1278,10 @@ namespace DesktopVitals
         double diskFrac;
         string diskValue = "";
 
-        TextBlock subtitle, stateLabel, modelsEmpty;
+        TextBlock subtitle, stateLabel;
         Border switchTrack;
         TranslateTransform knob;
-        StackPanel body, modelsList, botList, watchList, topList;
+        StackPanel body, aiList, botList, watchList, topList;
         StatRow cpuRow, memRow, gpuRow, vramRow, diskRow;
         ThreadStrip threadStrip;
         StackPanel vramList;
@@ -1184,26 +1290,41 @@ namespace DesktopVitals
         DateTime vramRead = DateTime.MinValue;
         readonly List<string> vramLines = new List<string>();
         long[] threadBusy, threadTotal, prevThreadBusy, prevThreadTotal;
-        readonly List<ProcRow> modelRows = new List<ProcRow>();
+        readonly List<ProcRow> aiRows = new List<ProcRow>();
         readonly List<ProcRow> watchRows = new List<ProcRow>();
         readonly List<ProcRow> botRows = new List<ProcRow>();
         readonly List<ProcRow> topRows = new List<ProcRow>();
         readonly List<ProcRow> scriptRows = new List<ProcRow>();
         readonly List<ProcRow> taskRows = new List<ProcRow>();
         StackPanel scriptList, taskList;
-        Border modelsCard, scriptsCard, tasksCard;
+        Border aiCard, scriptsCard, tasksCard;
+        readonly Dictionary<long, string[]> aiCache = new Dictionary<long, string[]>();
+        static readonly List<string> KindOrder = new List<string> { "Bot", "Agent", "App", "Model", "Watching" };
+        List<AiLine> lastAi = new List<AiLine>();
+        List<KeyValuePair<string, List<Proc>>> lastScripts = new List<KeyValuePair<string, List<Proc>>>();
+        List<Proc> lastProcs = new List<Proc>();
+        Grid rootGrid;
+        ScrollViewer dashScroll;
+        UIElement reviewView;
+        bool needReview;
+        static readonly string[] AiChoices = { "Agent", "App", "Model", "Bot", "Watching" };
+        static readonly string[] ScriptChoices = { "Script", "Agent", "Bot" };
+        static readonly string[] WatchChoices = { "Watching", "App", "Agent", "Bot", "Model" };
         readonly Dictionary<long, string> scriptCache = new Dictionary<long, string>();
-        readonly Dictionary<string, string> settings = WatchRule.Settings();
+        Dictionary<string, string> settings;
         static readonly string DiskRoot = System.IO.Path.GetPathRoot(Environment.SystemDirectory);
 
         readonly string snapshotDir;
 
-        public VitalsWindow() : this(null) { }
+        public VitalsWindow() : this(null, false) { }
 
         // With a folder, the window renders off screen, writes vitals.txt and vitals.png there, and closes.
-        public VitalsWindow(string snapshotDir)
+        public VitalsWindow(string snapshotDir, bool review)
         {
             this.snapshotDir = snapshotDir;
+            LoadConfig();
+            // First run: once the first readings are in, show what was found and ask if it's right.
+            needReview = review || (snapshotDir == null && !settings.ContainsKey("reviewed"));
             Title = "Desktop Vitals";
             Width = 400;
             SizeToContent = SizeToContent.Height;
@@ -1248,11 +1369,29 @@ namespace DesktopVitals
             KeyDown += (s, e) => { if (e.Key == Key.Escape) Close(); };
         }
 
+        void LoadConfig()
+        {
+            var all = WatchRule.Load();
+            rules = all.Where(r => !r.IsBot && !r.Ai).ToList();
+            botRules = all.Where(r => r.IsBot && !r.Ai).ToList();
+            aiRules = all.Where(r => r.Ai).ToList();
+            settings = WatchRule.Settings();
+            hidden = new HashSet<string>(WatchRule.Many("hide"), StringComparer.OrdinalIgnoreCase);
+            kindOf = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (string v in WatchRule.Many("kind"))
+            {
+                int bar = v.LastIndexOf('|');
+                if (bar <= 0) continue;
+                string k = Theme.Kinds.Keys.FirstOrDefault(x => x.Equals(v.Substring(bar + 1).Trim(), StringComparison.OrdinalIgnoreCase));
+                if (k != null) kindOf[v.Substring(0, bar).Trim()] = k;
+            }
+        }
+
         // ---------- layout ----------
 
         UIElement Build()
         {
-            var root = new Grid();
+            var root = rootGrid = new Grid();
             root.Background = snapshotDir == null && TransparencyOn() ? new SolidColorBrush(Color.FromArgb(0x70, 0x0E, 0x10, 0x16)) : new SolidColorBrush(Color.FromArgb(0xFF, 0x17, 0x1A, 0x21));
             root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
             root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
@@ -1260,7 +1399,7 @@ namespace DesktopVitals
             root.Children.Add(BuildHeader());
 
             body = new StackPanel { Margin = new Thickness(14, 2, 14, 14) };
-            var scroll = new ScrollViewer();
+            var scroll = dashScroll = new ScrollViewer();
             scroll.VerticalScrollBarVisibility = ScrollBarVisibility.Hidden;
             scroll.Content = body;
             Grid.SetRow(scroll, 1);
@@ -1277,23 +1416,20 @@ namespace DesktopVitals
             vramList = new StackPanel { Margin = new Thickness(0, -2, 0, 6) };
             body.Children.Add(Card("System", null, cpuRow, threadStrip, memRow, gpuRow, vramRow, vramList, diskRow));
 
-            modelsList = new StackPanel();
-            modelsEmpty = Theme.Label("No local models running", 12.5, Theme.Faint, FontWeights.Normal);
-            modelsEmpty.Margin = new Thickness(0, 2, 0, 2);
-            modelsList.Children.Add(modelsEmpty);
-            modelsCard = Card("Models", Columns(Head("CPU"), Head("Memory")), modelsList);
-            modelsCard.Visibility = Visibility.Collapsed;
-            body.Children.Add(modelsCard);
+            aiList = new StackPanel();
+            aiCard = Card("AI", Columns(Head("CPU"), Head("Memory")), aiList);
+            aiCard.Visibility = Visibility.Collapsed;
+            body.Children.Add(aiCard);
 
             botList = new StackPanel();
-            if (botRules.Count > 0) body.Children.Add(Card("Bots", Columns(Head("CPU"), Head("Last work")), botList));
+            if (botRules.Count > 0) body.Children.Add(Card("Bot", Columns(Head("CPU"), Head("Last work")), botList));
             scriptList = new StackPanel();
-            scriptsCard = Card("Scripts", Columns(Head("CPU"), Head("Memory")), scriptList);
+            scriptsCard = Card("Script", Columns(Head("CPU"), Head("Memory")), scriptList);
             scriptsCard.Visibility = Visibility.Collapsed;
             body.Children.Add(scriptsCard);
 
             taskList = new StackPanel();
-            tasksCard = Card("Scheduled tasks", Columns(Head("Result"), Head("Last run")), taskList);
+            tasksCard = Card("Task", Columns(Head("Result"), Head("Last run")), taskList);
             tasksCard.Visibility = Visibility.Collapsed;
             body.Children.Add(tasksCard);
 
@@ -1341,7 +1477,7 @@ namespace DesktopVitals
             Grid.SetColumn(right, 1);
 
             // The on/off switch. Off stops every reading until it is turned back on.
-            var sw = new StackPanel { Orientation = Orientation.Horizontal, Background = Brushes.Transparent, Cursor = Cursors.Hand, Margin = new Thickness(0, 4, 8, 0) };
+            var sw = new StackPanel { Orientation = Orientation.Horizontal, Background = Brushes.Transparent, Cursor = Cursors.Hand, Margin = new Thickness(10, 4, 6, 0) };
             stateLabel = Theme.Label("Live", 12, Theme.Sub, FontWeights.Normal);
             stateLabel.Margin = new Thickness(0, 0, 8, 0);
             stateLabel.Width = 26;
@@ -1359,6 +1495,7 @@ namespace DesktopVitals
             WindowChrome.SetIsHitTestVisibleInChrome(sw, true);
             right.Children.Add(sw);
 
+            right.Children.Add(CaptionButton("\uE713", "Review what's shown", delegate { ShowReview(); }));
             right.Children.Add(CaptionButton("\uE9D9", "Open Task Manager", delegate
             {
                 try { using (Process.Start(new ProcessStartInfo("taskmgr.exe") { UseShellExecute = true })) { } }
@@ -1372,7 +1509,7 @@ namespace DesktopVitals
 
         UIElement CaptionButton(string glyph, string tip, MouseButtonEventHandler click)
         {
-            var b = new Border { Width = 32, Height = 30, CornerRadius = new CornerRadius(8), Background = Brushes.Transparent, Cursor = Cursors.Hand, ToolTip = tip };
+            var b = new Border { Width = 28, Height = 30, CornerRadius = new CornerRadius(8), Background = Brushes.Transparent, Cursor = Cursors.Hand, ToolTip = tip };
             var t = new TextBlock { Text = glyph, FontFamily = new FontFamily("Segoe Fluent Icons, Segoe MDL2 Assets"), FontSize = 10, Foreground = Theme.Sub, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
             b.Child = t;
             b.MouseEnter += delegate { b.Background = Theme.Hover; t.Foreground = Theme.Text; };
@@ -1407,7 +1544,17 @@ namespace DesktopVitals
             var head = new Grid { Margin = new Thickness(0, 0, 0, 4) };
             head.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             head.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-            head.Children.Add(Theme.Label(heading, 12, Theme.Sub, FontWeights.SemiBold));
+            // Cards that hold one kind of thing are headed by that kind's colored tag, the same tag AI lines carry.
+            string[] plural = { "Bot", "Bots", "Script", "Scripts", "Task", "Scheduled tasks", "Watching", "Watching" };
+            int at = Array.IndexOf(plural, heading);
+            if (at >= 0 && at % 2 == 0)
+            {
+                var tag = Theme.Tag(heading);
+                ((TextBlock)tag.Child).Text = plural[at + 1];
+                tag.HorizontalAlignment = HorizontalAlignment.Left;
+                head.Children.Add(tag);
+            }
+            else head.Children.Add(Theme.Label(heading, 12, Theme.Sub, FontWeights.SemiBold));
             if (extra is Grid) { Grid.SetColumnSpan(extra, 2); head.Children.Add(extra); }
             else if (extra != null) { Grid.SetColumn(extra, 1); head.Children.Add(extra); }
             stack.Children.Add(head);
@@ -1594,26 +1741,13 @@ namespace DesktopVitals
             string upText = up.TotalDays >= 1 ? string.Format("{0}d {1}h", (int)up.TotalDays, up.Hours) : string.Format("{0}h {1}m", up.Hours, up.Minutes);
             subtitle.Text = "Up " + upText + " \u00B7 " + procs.Count + " processes";
 
-            // Models
-            var models = new List<KeyValuePair<string, Group>>();
-            foreach (var p in procs)
-            {
-                string label = ModelLabel(p);
-                if (label == null) continue;
-                var g = new Group { Key = label, Cpu = p.Cpu, Mem = p.Private };
-                g.Items.Add(p);
-                models.Add(new KeyValuePair<string, Group>(label, g));
-            }
-            modelsEmpty.Visibility = models.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
-            modelsCard.Visibility = models.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
-            EnsureRows(modelsList, modelRows, models.Count);
-            for (int i = 0; i < models.Count; i++)
-            {
-                var g = models[i].Value;
-                var id = AppIdentity.For(g.Items[0].Exe, g.Pids);
-                modelRows[i].SetApp(id.Icon, models[i].Key, 1, g.Cpu, g.Mem, g.Items[0].Cmd);
-                modelRows[i].Pids = g.Pids;
-            }
+            // AI: local models, coding agents, AI apps, and the bots and watched lines that are AI.
+            lastProcs = procs;
+            lastAi = FindAi(procs);
+            var ai = lastAi.Where(l => !hidden.Contains(l.Name)).ToList();
+            aiCard.Visibility = ai.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
+            EnsureRows(aiList, aiRows, ai.Count);
+            for (int i = 0; i < ai.Count; i++) ShowAi(aiRows[i], ai[i]);
 
             // Watching
             EnsureRows(watchList, watchRows, rules.Count);
@@ -1630,33 +1764,17 @@ namespace DesktopVitals
             for (int i = 0; i < botRules.Count; i++)
             {
                 var r = botRules[i];
-                BotStatus st;
-                if (!botStatus.TryGetValue(r.Label, out st)) botStatus[r.Label] = st = new BotStatus();
-                st.Refresh(r);
                 var hits = procs.Where(r.Hit).ToList();
-                var tip = hits.Count == 0 ? null : string.Join("\n", hits.Select(h => h.Pid + "  " + Trim(h.Cmd.Length > 0 ? h.Cmd : h.Exe, 140)));
                 botRows[i].Pids = hits.Select(h => h.Pid).ToArray();
                 botRows[i].Bot = r;
-                if (r.Code != null)
-                {
-                    string how = st.Crashes > 0 && r.Log != null ? OpenInEditor + " at the crash from " + st.CrashTime.ToString("ddd h:mm tt") : OpenInEditor;
-                    tip = tip == null ? how : how + "\n\n" + tip;
-                }
-                if (hits.Count == 0) { botRows[i].SetBot(r.Label, 0, "", "", "not running", null); continue; }
-
-                TimeSpan botUp = st.Uptime ?? (DateTime.UtcNow - DateTime.FromFileTimeUtc(hits.Max(h => h.CreateTime)));
-                var bits = new List<string> { "up " + Ago(botUp) };
-                if (st.Problem != null) bits.Add(st.Problem);
-                else if (st.Crashes == 0) bits.Add("no crashes");
-                else if (st.Crashes > 0) bits.Add(st.Crashes + (st.Crashes == 1 ? " crash" : " crashes") + " in 24h");
-                double quiet = st.LastSign.HasValue ? (DateTime.Now - st.LastSign.Value).TotalSeconds : -1;
-                bool stale = st.Read != DateTime.MinValue && (quiet < 0 || quiet > 300);
-                string right = st.Read == DateTime.MinValue ? "" : quiet < 0 ? "no sign" : quiet < 60 ? "just now" : Short(TimeSpan.FromSeconds(quiet)) + " ago";
-                botRows[i].SetBot(r.Label, stale || st.Problem != null ? 2 : 1, string.Join(" \u00B7 ", bits), Theme.Pct(hits.Sum(h => h.Cpu)), right, tip);
+                int state; string detail, right, tip;
+                BotView(r, hits, out state, out detail, out right, out tip);
+                botRows[i].SetBot(r.Label, state, detail, state == 0 ? "" : Theme.Pct(hits.Sum(h => h.Cpu)), right, tip);
             }
 
             // Scripts: anything an interpreter is running from a script file of yours, one line per script.
             var claimed = new HashSet<int>(botRules.SelectMany(r => procs.Where(r.Hit)).Select(p => p.Pid));
+            foreach (var l in lastAi) foreach (var p in l.Procs) claimed.Add(p.Pid);
             var byScript = new Dictionary<string, List<Proc>>(StringComparer.OrdinalIgnoreCase);
             foreach (var p in procs)
             {
@@ -1679,7 +1797,8 @@ namespace DesktopVitals
                 var keep = new HashSet<long>(procs.Select(p => ((long)p.Pid << 32) ^ p.CreateTime));
                 foreach (var k in scriptCache.Keys.Where(k => !keep.Contains(k)).ToList()) scriptCache.Remove(k);
             }
-            var scripts = byScript.OrderBy(kv => Scripts.Label(kv.Key), StringComparer.OrdinalIgnoreCase).Take(12).ToList();
+            lastScripts = byScript.OrderBy(kv => Scripts.Label(kv.Key), StringComparer.OrdinalIgnoreCase).ToList();
+            var scripts = lastScripts.Where(kv => !hidden.Contains(Scripts.Label(kv.Key))).Take(12).ToList();
             scriptsCard.Visibility = scripts.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
             EnsureRows(scriptList, scriptRows, scripts.Count);
             for (int i = 0; i < scripts.Count; i++)
@@ -1696,7 +1815,7 @@ namespace DesktopVitals
 
             // Scheduled tasks: running first, then failures, then the most recent runs.
             TaskList.Refresh(null);
-            var tasks = TaskList.Items.OrderByDescending(t => t.Running).ThenByDescending(t => t.Failed).ThenByDescending(t => t.LastRun).Take(8).ToList();
+            var tasks = TaskList.Items.Where(t => !hidden.Contains(t.Name)).OrderByDescending(t => t.Running).ThenByDescending(t => t.Failed).ThenByDescending(t => t.LastRun).Take(8).ToList();
             tasksCard.Visibility = tasks.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
             EnsureRows(taskList, taskRows, tasks.Count);
             for (int i = 0; i < tasks.Count; i++)
@@ -1729,6 +1848,8 @@ namespace DesktopVitals
                 topRows[i].SetApp(id.Icon, id.Title, g.Items.Count, g.Cpu, g.Mem, g.Key + "\n" + g.Items.Count + (g.Items.Count == 1 ? " process" : " processes"));
                 topRows[i].Pids = g.Pids;
             }
+
+            if (needReview && tickCount >= 2 && TaskList.Ready) { needReview = false; ShowReview(); }
         }
 
         static string Trim(string s, int n) { return s.Length <= n ? s : s.Substring(0, n) + "\u2026"; }
@@ -1748,6 +1869,168 @@ namespace DesktopVitals
             if (t.TotalMinutes < 60) return (int)t.TotalMinutes + "m";
             if (t.TotalHours < 24) return (int)t.TotalHours + "h " + t.Minutes.ToString("00") + "m";
             return (int)t.TotalDays + "d " + t.Hours + "h";
+        }
+
+        // A bot's state from its check: 0 not running, 1 working, 2 quiet or failing. right is when it last showed work.
+        void BotView(WatchRule r, List<Proc> hits, out int state, out string detail, out string right, out string tip)
+        {
+            BotStatus st;
+            if (!botStatus.TryGetValue(r.Label, out st)) botStatus[r.Label] = st = new BotStatus();
+            st.Refresh(r);
+            tip = hits.Count == 0 ? null : string.Join("\n", hits.Select(h => h.Pid + "  " + Trim(h.Cmd.Length > 0 ? h.Cmd : h.Exe, 140)));
+            if (r.Code != null)
+            {
+                string how = st.Crashes > 0 && r.Log != null ? OpenInEditor + " at the crash from " + st.CrashTime.ToString("ddd h:mm tt") : OpenInEditor;
+                tip = tip == null ? how : how + "\n\n" + tip;
+            }
+            state = 0; detail = ""; right = "not running";
+            if (hits.Count == 0) return;
+
+            TimeSpan botUp = st.Uptime ?? (DateTime.UtcNow - DateTime.FromFileTimeUtc(hits.Max(h => h.CreateTime)));
+            var bits = new List<string> { "up " + Ago(botUp) };
+            if (st.Problem != null) bits.Add(st.Problem);
+            else if (st.Crashes == 0) bits.Add("no crashes");
+            else if (st.Crashes > 0) bits.Add(st.Crashes + (st.Crashes == 1 ? " crash" : " crashes") + " in 24h");
+            double quiet = st.LastSign.HasValue ? (DateTime.Now - st.LastSign.Value).TotalSeconds : -1;
+            bool stale = st.Read != DateTime.MinValue && (quiet < 0 || quiet > 300);
+            right = st.Read == DateTime.MinValue ? "" : quiet < 0 ? "no sign" : quiet < 60 ? "just now" : Short(TimeSpan.FromSeconds(quiet)) + " ago";
+            state = stale || st.Problem != null ? 2 : 1;
+            detail = string.Join(" \u00B7 ", bits);
+        }
+
+        // What AI program a process is, as { kind, name }, or null. Looked up once per process.
+        string[] AiOf(Proc p)
+        {
+            long key = ((long)p.Pid << 32) ^ p.CreateTime;
+            string[] id;
+            if (aiCache.TryGetValue(key, out id)) return id;
+            id = Identify(p);
+            if (aiCache.Count > 4000) aiCache.Clear();
+            aiCache[key] = id;
+            return id;
+        }
+
+        static string[] Identify(Proc p)
+        {
+            string model = ModelLabel(p);
+            if (model != null) return new[] { "Model", model };
+            string exe = (p.Exe ?? "").ToLowerInvariant(), cmd = p.Cmd ?? "";
+            Func<string, bool> has = w => cmd.IndexOf(w, StringComparison.OrdinalIgnoreCase) >= 0;
+            if (exe == "claude.exe")
+            {
+                // The Claude desktop app and Claude Code share a file name; the desktop app lives in its own install folder.
+                string path = Procs.ImagePath(p.Pid) ?? "";
+                bool desktop = path.IndexOf("AnthropicClaude", StringComparison.OrdinalIgnoreCase) >= 0
+                    || path.IndexOf("\\WindowsApps\\", StringComparison.OrdinalIgnoreCase) >= 0
+                    || path.IndexOf("\\Programs\\Claude\\", StringComparison.OrdinalIgnoreCase) >= 0;
+                return desktop ? new[] { "App", "Claude" } : new[] { "Agent", "Claude Code" };
+            }
+            if (has("openclaw")) return new[] { "Agent", "OpenClaw" };
+            if (exe == "codex.exe" || (has("@openai") && has("codex"))) return new[] { "Agent", "Codex" };
+            if (exe == "gemini.exe" || has("gemini-cli")) return new[] { "Agent", "Gemini CLI" };
+            if (has("@anthropic-ai") && has("claude-code")) return new[] { "Agent", "Claude Code" };
+            if (exe == "opencode.exe") return new[] { "Agent", "opencode" };
+            if (exe == "goose.exe") return new[] { "Agent", "Goose" };
+            if (exe.StartsWith("python") && Regex.IsMatch(cmd, "[\\\\/ ]aider(\\.exe)?[\" ]|-m aider", RegexOptions.IgnoreCase)) return new[] { "Agent", "Aider" };
+            if (exe == "cursor.exe") return new[] { "App", "Cursor" };
+            if (exe == "chatgpt.exe") return new[] { "App", "ChatGPT" };
+            if (exe == "windsurf.exe") return new[] { "App", "Windsurf" };
+            if (exe == "perplexity.exe") return new[] { "App", "Perplexity" };
+            if (exe == "copilot.exe") return new[] { "App", "Copilot" };
+            if (exe.Contains("grok") && exe.EndsWith(".exe")) return new[] { "App", System.IO.Path.GetFileNameWithoutExtension(p.Exe) };
+            return null;
+        }
+
+        // Everything AI on the machine, running first, grouped by kind.
+        List<AiLine> FindAi(List<Proc> procs)
+        {
+            var lines = new List<AiLine>();
+            var taken = new HashSet<int>();
+            foreach (var r in aiRules.Where(r => r.IsBot))
+            {
+                var hits = procs.Where(r.Hit).ToList();
+                foreach (var h in hits) taken.Add(h.Pid);
+                lines.Add(new AiLine { Kind = r.Kind ?? "Bot", Name = r.Label, Procs = hits, Rule = r });
+            }
+            var found = new Dictionary<string, AiLine>(StringComparer.OrdinalIgnoreCase);
+            foreach (var p in procs)
+            {
+                if (taken.Contains(p.Pid)) continue;
+                var id = AiOf(p);
+                if (id == null) continue;
+                AiLine l;
+                if (!found.TryGetValue(id[1], out l)) found[id[1]] = l = new AiLine { Kind = id[0], Name = id[1] };
+                l.Procs.Add(p);
+            }
+            // Your own AI lines: a name for something found, a "not running" line, or something found only by your match.
+            foreach (var r in aiRules.Where(r => !r.IsBot))
+            {
+                var hits = procs.Where(p => !taken.Contains(p.Pid) && r.Hit(p)).ToList();
+                var pids = new HashSet<int>(hits.Select(h => h.Pid));
+                var over = found.Values.Where(l => l.Procs.Any(p => pids.Contains(p.Pid))).ToList();
+                if (hits.Count == 0)
+                {
+                    var guess = Identify(new Proc { Exe = r.ByExe ? r.Match : "", Cmd = r.Match });
+                    lines.Add(new AiLine { Kind = r.Kind ?? (guess == null ? "Watching" : guess[0]), Name = r.Label, Rule = r });
+                }
+                else if (over.Count == 1 && over[0].Rule == null && over[0].Procs.Count == hits.Count)
+                {
+                    // "Claude Code" says more than "Claude", so a found name that already starts with yours stays.
+                    if (!over[0].Name.StartsWith(r.Label, StringComparison.OrdinalIgnoreCase)) over[0].Name = r.Label;
+                    over[0].Rule = r;
+                    if (r.Kind != null) over[0].Kind = r.Kind;
+                }
+                else if (over.Count == 0)
+                {
+                    lines.Add(new AiLine { Kind = r.Kind ?? "Watching", Name = r.Label, Procs = hits, Rule = r });
+                    foreach (int pid in pids) taken.Add(pid);
+                }
+            }
+            lines.AddRange(found.Values);
+            foreach (var l in lines)
+            {
+                string k;
+                if (l.Rule == null && kindOf.TryGetValue(l.Name, out k)) l.Kind = k;
+            }
+            return lines.OrderBy(l => l.Procs.Count == 0).ThenBy(l => KindOrder.IndexOf(l.Kind)).ThenBy(l => l.Name, StringComparer.OrdinalIgnoreCase).ToList();
+        }
+
+        void ShowAi(ProcRow row, AiLine l)
+        {
+            row.Pids = l.Procs.Select(p => p.Pid).ToArray();
+            row.Bot = l.Rule != null && l.Rule.IsBot ? l.Rule : null;
+            double cpu = l.Procs.Sum(h => h.Cpu);
+            long mem = l.Procs.Sum(h => h.Private);
+            if (row.Bot != null)
+            {
+                int state; string detail, right, btip;
+                BotView(l.Rule, l.Procs, out state, out detail, out right, out btip);
+                if (state != 0 && right.Length > 0)
+                {
+                    btip = detail + (btip == null ? "" : "\n\n" + btip);
+                    detail = right == "no sign" ? "no sign of work" : "worked " + right;
+                }
+                row.SetAi(l.Name, l.Kind, state, detail, state == 0 ? "" : Theme.Pct(cpu), state == 0 ? "not running" : Theme.Mem(mem), btip);
+                return;
+            }
+            if (l.Procs.Count == 0) { row.SetAi(l.Name, l.Kind, 0, "", "", "not running", null); return; }
+
+            TimeSpan up = DateTime.UtcNow - DateTime.FromFileTimeUtc(l.Procs.Min(h => h.CreateTime));
+            string text = "up " + Ago(up);
+            string tip;
+            // A command-line agent runs one process per session; say how many, and which folder each works in.
+            bool sessions = l.Kind == "Agent" && !Scripts.IsInterpreter(l.Procs[0].Exe) && l.Procs.All(p => p.Exe == l.Procs[0].Exe);
+            if (sessions)
+            {
+                if (l.Procs.Count > 1) text = l.Procs.Count + " sessions";
+                tip = string.Join("\n", l.Procs.Take(12).Select(h => h.Pid + "  " + (Procs.CurrentDirectory(h.Pid) ?? "folder unknown")));
+            }
+            else
+            {
+                if (l.Procs.Count > 1) text = "\u00D7" + l.Procs.Count + " \u00B7 " + text;
+                tip = string.Join("\n", l.Procs.Take(12).Select(h => h.Pid + "  " + Trim(h.Cmd.Length > 0 ? h.Cmd : h.Exe, 140)));
+            }
+            row.SetAi(l.Name, l.Kind, 1, text, Theme.Pct(cpu), Theme.Mem(mem), tip);
         }
 
         // Optional: "@temperature-file" points at a JSON file a sensor tool keeps writing, with "cpu_temp_c",
@@ -2035,6 +2318,246 @@ namespace DesktopVitals
             }
         }
 
+        // ---------- review: "here's what I found, is it right?" ----------
+
+        List<ReviewItem> ReviewItems()
+        {
+            var items = new List<ReviewItem>();
+            var seen = new HashSet<int>();
+            foreach (var l in lastAi)
+            {
+                items.Add(new ReviewItem { Section = "AI", Name = l.Name, Kind = l.Kind, Rule = l.Rule, On = !hidden.Contains(l.Name), Kinds = AiChoices, Detail = l.Procs.Count == 0 ? "not running" : "running" });
+                foreach (var p in l.Procs) seen.Add(p.Pid);
+            }
+            foreach (var r in botRules)
+            {
+                var hits = lastProcs.Where(r.Hit).ToList();
+                foreach (var p in hits) seen.Add(p.Pid);
+                items.Add(new ReviewItem { Section = "Bot", Name = r.Label, Kind = "Bot", Rule = r, Detail = hits.Count == 0 ? "not running" : "running" });
+            }
+            foreach (var kv in lastScripts)
+            {
+                string label = Scripts.Label(kv.Key);
+                string match = kv.Key.StartsWith("module:") ? "-m " + kv.Key.Substring(7).Split('|')[0] : kv.Key;
+                items.Add(new ReviewItem { Section = "Script", Name = label, Kind = "Script", Match = match, On = !hidden.Contains(label), Kinds = ScriptChoices, Detail = Scripts.Language(kv.Value[0].Exe) });
+                foreach (var p in kv.Value) seen.Add(p.Pid);
+            }
+            foreach (var t in TaskList.Items.OrderByDescending(t => t.Running).ThenByDescending(t => t.LastRun))
+                items.Add(new ReviewItem { Section = "Task", Name = t.Name, Kind = "Task", On = !hidden.Contains(t.Name), Detail = t.Running ? "running" : t.NeverRan ? "never ran" : t.Failed ? "failed" : "last ran " + Short(DateTime.Now - t.LastRun) + " ago" });
+            foreach (var r in rules)
+            {
+                var hits = lastProcs.Where(r.Hit).ToList();
+                foreach (var p in hits) seen.Add(p.Pid);
+                items.Add(new ReviewItem { Section = "Watching", Name = r.Label, Kind = r.Kind ?? "Watching", Rule = r, Kinds = WatchChoices, Detail = hits.Count == 0 ? "not running" : "running" });
+            }
+
+            // Did I miss anything: open apps with a window that nothing above covers, biggest first.
+            string win = Environment.GetFolderPath(Environment.SpecialFolder.Windows);
+            var skip = new[] { "DesktopVitals.exe", "explorer.exe", "ApplicationFrameHost.exe", "TextInputHost.exe", "SystemSettings.exe", "SearchHost.exe", "StartMenuExperienceHost.exe", "ShellExperienceHost.exe" };
+            var apps = lastProcs.Where(p => !seen.Contains(p.Pid) && !skip.Contains(p.Exe, StringComparer.OrdinalIgnoreCase))
+                .GroupBy(p => p.Exe, StringComparer.OrdinalIgnoreCase)
+                .Where(g => !items.Any(i => i.Rule != null && i.Rule.ByExe && i.Rule.Match.Equals(g.Key, StringComparison.OrdinalIgnoreCase)))
+                .OrderByDescending(g => g.Sum(p => p.Private)).ToList();
+            int added = 0;
+            foreach (var g in apps)
+            {
+                if (added >= 10) break;
+                int[] pids = g.Select(p => p.Pid).ToArray();
+                if (Native.AppWindows(pids).Count == 0) continue;
+                string path = Procs.ImagePath(pids[0]) ?? "";
+                if (path.StartsWith(win, StringComparison.OrdinalIgnoreCase)) continue;
+                var id = Identify(g.First());
+                items.Add(new ReviewItem { Section = "Missed", Name = AppIdentity.For(g.Key, pids).Title, Kind = id == null ? "Watching" : id[0], Match = g.Key, On = false, Missed = true, Kinds = WatchChoices, Detail = "open" });
+                added++;
+            }
+            foreach (var i in items) i.OrigKind = i.Kind;
+            return items;
+        }
+
+        void ShowReview()
+        {
+            if (reviewView != null || rootGrid == null) return;
+            var items = ReviewItems();
+            var origOn = items.ToDictionary(i => i, i => i.On);
+
+            var page = new Grid();
+            page.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+            page.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            var stack = new StackPanel { Margin = new Thickness(14, 2, 14, 6) };
+            var scroll = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Hidden, Content = stack };
+            page.Children.Add(scroll);
+
+            var title = Theme.Label("Here's what I found", 15, Theme.Text, FontWeights.SemiBold);
+            title.Margin = new Thickness(4, 0, 0, 2);
+            var hint = Theme.Label("Untick anything that shouldn't be shown. If a tag is wrong, click it to change it.", 12, Theme.Sub, FontWeights.Normal);
+            hint.TextWrapping = TextWrapping.Wrap;
+            hint.TextTrimming = TextTrimming.None;
+            hint.Margin = new Thickness(4, 0, 0, 10);
+            stack.Children.Add(title);
+            stack.Children.Add(hint);
+
+            foreach (var sec in new[] { "AI", "Bot", "Script", "Task", "Watching" })
+            {
+                var these = items.Where(i => i.Section == sec).ToList();
+                if (these.Count == 0) continue;
+                stack.Children.Add(Card(sec, null, these.Select(ReviewRow).ToArray()));
+            }
+            var missed = items.Where(i => i.Missed).Select(ReviewRow).ToList();
+            var missHint = Theme.Label(missed.Count == 0 ? "No other apps are open right now." : "Tick an open app to keep an eye on it.", 12, Theme.Faint, FontWeights.Normal);
+            missHint.Margin = new Thickness(0, 0, 0, 4);
+            missed.Insert(0, missHint);
+            stack.Children.Add(Card("Did I miss anything?", null, missed.ToArray()));
+
+            var foot = new Grid { Margin = new Thickness(18, 4, 14, 14) };
+            foot.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            foot.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            var edit = Theme.Label("Edit settings file", 12, Theme.Link, FontWeights.Normal);
+            edit.Cursor = Cursors.Hand;
+            edit.ToolTip = "For things that aren't open now, or a bot's health check";
+            edit.MouseLeftButtonUp += delegate { OpenSettingsFile(); };
+            foot.Children.Add(edit);
+            var ok = new Border { Background = Theme.Green, CornerRadius = new CornerRadius(8), Padding = new Thickness(16, 6, 16, 7), Cursor = Cursors.Hand };
+            ok.Child = Theme.Label("Looks good", 13, new SolidColorBrush(Color.FromRgb(0x06, 0x24, 0x12)), FontWeights.SemiBold);
+            ok.MouseLeftButtonUp += delegate { SaveReview(items, origOn); };
+            Grid.SetColumn(ok, 1);
+            foot.Children.Add(ok);
+            Grid.SetRow(foot, 1);
+            page.Children.Add(foot);
+
+            reviewView = page;
+            Grid.SetRow(page, 1);
+            rootGrid.Children.Add(page);
+            dashScroll.Visibility = Visibility.Collapsed;
+            if (WindowState == WindowState.Minimized) WindowState = WindowState.Normal;
+        }
+
+        UIElement ReviewRow(ReviewItem it)
+        {
+            var row = new Border { Padding = new Thickness(6, 4, 6, 4), Margin = new Thickness(-6, 0, -6, 0), CornerRadius = new CornerRadius(8), Background = Brushes.Transparent, Cursor = Cursors.Hand };
+            var g = new Grid();
+            g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(26) });
+            g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            var check = new TextBlock { Text = "\uE73E", FontFamily = new FontFamily("Segoe Fluent Icons, Segoe MDL2 Assets"), FontSize = 10, Foreground = Brushes.White, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
+            var box = new Border { Width = 16, Height = 16, CornerRadius = new CornerRadius(4), BorderThickness = new Thickness(1.5), HorizontalAlignment = HorizontalAlignment.Left, Child = check };
+            var line = new StackPanel { Orientation = Orientation.Horizontal };
+            var name = Theme.Label(it.Name, 13, Theme.Text, FontWeights.Normal);
+            var tag = Theme.Tag(it.Kind);
+            tag.Margin = new Thickness(7, 1, 0, 0);
+            var detail = Theme.Label(it.Detail ?? "", 12, Theme.Faint, FontWeights.Normal);
+            detail.Margin = new Thickness(7, 1, 0, 0);
+            line.Children.Add(name);
+            if (it.Kinds != null) line.Children.Add(tag);   // a card of one fixed kind already says what its lines are
+            line.Children.Add(detail);
+            Grid.SetColumn(line, 1);
+            g.Children.Add(box); g.Children.Add(line);
+            row.Child = g;
+
+            Action show = delegate
+            {
+                box.Background = it.On ? Theme.Link : Brushes.Transparent;
+                box.BorderBrush = it.On ? Theme.Link : Theme.Sub;
+                check.Visibility = it.On ? Visibility.Visible : Visibility.Hidden;
+                name.Foreground = it.On ? Theme.Text : Theme.Faint;
+                tag.Opacity = it.On ? 1 : 0.5;
+            };
+            show();
+            row.MouseEnter += delegate { row.Background = Theme.Hover; };
+            row.MouseLeave += delegate { row.Background = Brushes.Transparent; };
+            row.MouseLeftButtonUp += delegate { it.On = !it.On; show(); };
+            if (it.Kinds != null)
+            {
+                tag.Cursor = Cursors.Hand;
+                tag.ToolTip = "Wrong kind? Click to change: " + string.Join(", ", it.Kinds);
+                tag.MouseLeftButtonUp += (s, e) =>
+                {
+                    e.Handled = true;
+                    int at = Array.IndexOf(it.Kinds, it.Kind);
+                    it.Kind = it.Kinds[(at + 1) % it.Kinds.Length];
+                    Theme.Paint(tag, it.Kind);
+                    if (!it.On) { it.On = true; show(); }
+                };
+            }
+            return row;
+        }
+
+        // Writes the answers into watch.txt: unticked found items become "@hide", re-tagged ones "@kind",
+        // your own lines are commented out or get "| kind:", and ticked apps from "Did I miss anything" become new lines.
+        void SaveReview(List<ReviewItem> items, Dictionary<ReviewItem, bool> origOn)
+        {
+            try
+            {
+                string file = WatchRule.ConfigFile();
+                var lines = File.Exists(file) ? File.ReadAllLines(file).ToList()
+                    : new List<string> { "# Desktop Vitals settings for this PC. See watch.example.txt in the app folder for the format.", "" };
+                var names = new HashSet<string>(items.Where(i => (i.Rule == null && !i.Missed) || i.Section == "AI").Select(i => i.Name), StringComparer.OrdinalIgnoreCase);
+                Func<string, string, string> valueOf = (l, key) =>
+                {
+                    string t = l.Trim();
+                    int eq = t.IndexOf('=');
+                    if (!t.StartsWith("@") || eq < 2 || !t.Substring(1, eq - 1).Trim().Equals(key, StringComparison.OrdinalIgnoreCase)) return null;
+                    return t.Substring(eq + 1).Trim();
+                };
+                lines.RemoveAll(l =>
+                {
+                    if (valueOf(l, "reviewed") != null) return true;
+                    string h = valueOf(l, "hide");
+                    if (h != null) return names.Contains(h);
+                    string k = valueOf(l, "kind");
+                    return k != null && k.LastIndexOf('|') > 0 && names.Contains(k.Substring(0, k.LastIndexOf('|')).Trim());
+                });
+                var add = new List<string>();
+                foreach (var it in items)
+                {
+                    bool kindChanged = it.Kind != it.OrigKind;
+                    if (it.Rule != null)
+                    {
+                        int at = lines.IndexOf(it.Rule.Raw);
+                        if (at < 0) continue;
+                        if (!it.On) lines[at] = "# " + it.Rule.Raw;
+                        // An AI line can also be found on its own (Claude Code), so hide its name as well.
+                        if (!it.On && it.Section == "AI") add.Add("@hide = " + it.Name);
+                        else if (kindChanged) lines[at] = Regex.Replace(it.Rule.Raw, "\\s*\\|\\s*kind:[^|]*", "", RegexOptions.IgnoreCase).TrimEnd() + " | kind: " + it.Kind;
+                    }
+                    else if (it.Missed)
+                    {
+                        if (it.On) add.Add(it.Name + " = " + it.Match + (it.Kind == "Watching" ? "" : " | kind: " + it.Kind));
+                    }
+                    else if (!it.On) add.Add("@hide = " + it.Name);
+                    else if (kindChanged && it.Section == "Script") add.Add(it.Name + " = " + it.Match + " | kind: " + it.Kind);
+                    else if (kindChanged) add.Add("@kind = " + it.Name + " | " + it.Kind);
+                }
+                while (lines.Count > 0 && lines[lines.Count - 1].Trim().Length == 0) lines.RemoveAt(lines.Count - 1);
+                lines.Add("");
+                lines.AddRange(add);
+                lines.Add("@reviewed = " + DateTime.Now.ToString("yyyy-MM-dd"));
+                Directory.CreateDirectory(System.IO.Path.GetDirectoryName(file));
+                File.WriteAllLines(file, lines, new UTF8Encoding(false));
+            }
+            catch (Exception) { }
+
+            LoadConfig();
+            foreach (var l in new[] { aiRows, botRows, scriptRows, taskRows, watchRows, topRows }) l.Clear();
+            reviewView = null;
+            Content = Build();
+            SetLive(live);
+            if (live) Prime();
+        }
+
+        void OpenSettingsFile()
+        {
+            try
+            {
+                string file = WatchRule.ConfigFile();
+                if (!File.Exists(file))
+                {
+                    Directory.CreateDirectory(System.IO.Path.GetDirectoryName(file));
+                    File.WriteAllText(file, "# Desktop Vitals settings for this PC. See watch.example.txt in the app folder for the format.\r\n", new UTF8Encoding(false));
+                }
+                using (Process.Start(new ProcessStartInfo("notepad.exe", "\"" + file + "\"") { UseShellExecute = true })) { }
+            }
+            catch (Exception) { }
+        }
+
         // ---------- snapshot for other programs (scripts, AI agents) ----------
 
         void WriteSnapshot()
@@ -2049,7 +2572,7 @@ namespace DesktopVitals
                 if (vramLines.Count > 0) sb.AppendLine("Video memory by app: " + string.Join("  \u00B7  ", vramLines));
                 string busy = threadStrip.Busiest();
                 if (busy.Length > 0) sb.AppendLine("Busiest thread: " + busy);
-                Section(sb, "Models", modelRows, "");
+                Section(sb, "AI", aiRows, "");
                 Section(sb, "Bots", botRows, "");
                 Section(sb, "Scripts", scriptRows, "none running");
                 Section(sb, "Scheduled tasks", taskRows, "");
@@ -2138,10 +2661,12 @@ namespace DesktopVitals
             int at = Array.FindIndex(args, a => a.Equals("--snapshot", StringComparison.OrdinalIgnoreCase));
             if (at >= 0)
             {
-                string dir = at + 1 < args.Length ? args[at + 1] : System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "DesktopVitals", "snapshot");
+                string dir = at + 1 < args.Length && !args[at + 1].StartsWith("--") ? args[at + 1] : System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "DesktopVitals", "snapshot");
                 var snapApp = new Application { ShutdownMode = ShutdownMode.OnMainWindowClose };
                 snapApp.DispatcherUnhandledException += (s, e) => { e.Handled = true; };
-                snapApp.Run(new VitalsWindow(System.IO.Path.GetFullPath(dir)));
+                // "--review" pictures the review screen instead of the readings.
+                bool review = args.Any(a => a.Equals("--review", StringComparison.OrdinalIgnoreCase));
+                snapApp.Run(new VitalsWindow(System.IO.Path.GetFullPath(dir), review));
                 return;
             }
             bool created;
