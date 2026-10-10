@@ -1,0 +1,29 @@
+# Desktop Vitals settings. Copy this file to %APPDATA%\DesktopVitals\watch.txt and edit it there,
+# then close and reopen the app. Everything here is optional: scripts, scheduled tasks and system
+# stats show up on their own.
+
+# ---- Watching: keep an eye on an app or a command ----
+# Label = match
+# A match ending in .exe is a process name. Anything else is text found in the command line.
+#
+# Chrome = chrome.exe
+# My server = my-project\server.js
+
+# ---- Bots: things that should keep working, not just keep running ----
+# Add "| check:" to a line to put it in the Bots card. The check is the bot's last sign of work:
+#   a file it rewrites (a heartbeat or health file), a folder it writes into, or an http health address.
+#   A bot turns amber when its check goes quiet for 5 minutes.
+# "| log:"   a log file. Lines from the last day that start with a timestamp (2026-10-10 14:03:22)
+#            and contain "restart" count as crashes. Change the word with "| crash: <text>".
+# "| code:"  the bot's folder. Clicking the bot opens it in Cursor or VS Code, at its latest crash if any.
+#
+# Price bot = price_bot.py | check: C:\bots\price\heartbeat.json | log: C:\bots\price\bot.log | code: C:\bots\price
+# Local API = uvicorn | check: http://127.0.0.1:8000/health
+
+# ---- Processor temperature ----
+# Windows doesn't hand CPU temperature to normal apps. If a sensor tool keeps writing a JSON file like
+#   {"ts": "2026-10-10T14:03:22Z", "cpu_temp_c": 48.5, "cpu_pkg_power_w": 21.0}
+# point Desktop Vitals at it. The task line is optional: it restarts the sensor when the file goes stale.
+#
+# @temperature-file = C:\ProgramData\MySensor\last.json
+# @temperature-task = \MySensor\Read CPU
