@@ -2161,22 +2161,29 @@ namespace DesktopVitals
             for (int i = 0; i < rows.Count; i++) rows[i].Visibility = i < n ? Visibility.Visible : Visibility.Collapsed;
         }
 
-        // Clicking a line never ends anything. It opens a script or folder in the editor or Explorer.
-        // Full path to Cursor.exe or Code.exe when found on PATH (or parent of a bin folder).
+        // Only "| code:" paths open in the editor. Everything else opens File Explorer.
         static readonly string[] Editor = FindEditor();
         static string[] FindEditor()
         {
+            try
+            {
+                string local = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Programs", "cursor", "Cursor.exe");
+                if (File.Exists(local)) return new[] { local, "Cursor" };
+            }
+            catch (Exception) { }
             foreach (var e in new[] { new[] { "Cursor.exe", "Cursor" }, new[] { "Code.exe", "VS Code" } })
                 foreach (string raw in (Environment.GetEnvironmentVariable("PATH") ?? "").Split(';'))
                 {
-                    string d = raw.Trim();
+                    string d = raw.Trim().TrimEnd('\\');
                     if (d.Length == 0) continue;
                     try
                     {
-                        string exe = System.IO.Path.Combine(d, e[0]);
-                        if (File.Exists(exe)) return new[] { exe, e[1] };
-                        string parent = System.IO.Path.GetDirectoryName(d.TrimEnd('\\'));
-                        if (parent != null) { exe = System.IO.Path.Combine(parent, e[0]); if (File.Exists(exe)) return new[] { exe, e[1] }; }
+                        for (int up = 0; up < 4 && d != null; up++)
+                        {
+                            string exe = System.IO.Path.Combine(d, e[0]);
+                            if (File.Exists(exe)) return new[] { exe, e[1] };
+                            d = System.IO.Path.GetDirectoryName(d);
+                        }
                     }
                     catch (Exception) { }
                 }
@@ -2193,19 +2200,35 @@ namespace DesktopVitals
             catch (Exception) { return false; }
         }
 
-        static void OpenPath(string path)
+        static string QuotePath(string path)
+        {
+            return "\"" + path.TrimEnd('\\') + "\"";
+        }
+
+        // User-typed "| code:" folder or file: open in Cursor/VS Code when found.
+        static void OpenCode(string path)
         {
             if (!SafePath(path)) return;
             try
             {
                 if (Editor != null)
                 {
-                    var psi = new ProcessStartInfo(Editor[0], "\"" + path + "\"") { UseShellExecute = false };
-                    using (Process.Start(psi)) { }
+                    using (Process.Start(new ProcessStartInfo(Editor[0], QuotePath(path)) { UseShellExecute = false })) { }
                     return;
                 }
+                OpenExplorer(path);
+            }
+            catch (Exception) { }
+        }
+
+        // Process, task, or command-line paths: select the file in Explorer, or open the folder.
+        static void OpenExplorer(string path)
+        {
+            if (!SafePath(path)) return;
+            try
+            {
                 string explorer = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), "explorer.exe");
-                string args = (File.Exists(path) ? "/select," : "") + "\"" + path + "\"";
+                string args = (File.Exists(path) ? "/select," : "") + QuotePath(path);
                 using (Process.Start(new ProcessStartInfo(explorer, args) { UseShellExecute = false })) { }
             }
             catch (Exception) { }
@@ -2213,10 +2236,10 @@ namespace DesktopVitals
 
         string Hint(ProcRow row)
         {
-            if (row.Task != null) return row.Task.Script != null ? OpenInEditor : "";
+            if (row.Task != null) return row.Task.Script != null ? "Show in File Explorer" : "";
             if (row.Bot != null && row.Bot.Code != null) return OpenInEditor;
             if (row.Pids.Length == 0) return "";
-            if (row.Script != null || ScriptOf(row.Pids) != null) return OpenInEditor;
+            if (row.Script != null || ScriptOf(row.Pids) != null) return "Show in File Explorer";
             if (row.Pids.Select(Procs.ImagePath).Any(x => !string.IsNullOrEmpty(x))) return "Show in File Explorer";
             return "";
         }
@@ -2239,7 +2262,7 @@ namespace DesktopVitals
         {
             if (row.Task != null)
             {
-                if (row.Task.Script != null) OpenPath(row.Task.Script);
+                if (row.Task.Script != null) OpenExplorer(row.Task.Script);
                 return;
             }
             if (row.Bot != null && row.Bot.Code != null) { OpenBot(row.Bot); return; }
@@ -2247,15 +2270,15 @@ namespace DesktopVitals
             if (row.Script != null)
             {
                 bool module = row.Script.StartsWith("module:");
-                OpenPath(module ? Scripts.Folder(row.Script) : row.Script);
+                OpenExplorer(module ? Scripts.Folder(row.Script) : row.Script);
                 return;
             }
             string script = ScriptOf(row.Pids);
-            if (script != null) { OpenPath(script); return; }
-            OpenPath(row.Pids.Select(Procs.ImagePath).FirstOrDefault(x => !string.IsNullOrEmpty(x)));
+            if (script != null) { OpenExplorer(script); return; }
+            OpenExplorer(row.Pids.Select(Procs.ImagePath).FirstOrDefault(x => !string.IsNullOrEmpty(x)));
         }
 
-        void OpenBot(WatchRule bot) { OpenPath(bot.Code); }
+        void OpenBot(WatchRule bot) { OpenCode(bot.Code); }
 
         // ---------- review: "here's what I found, is it right?" ----------
 
