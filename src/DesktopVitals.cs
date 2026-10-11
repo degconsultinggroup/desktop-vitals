@@ -1625,11 +1625,6 @@ namespace DesktopVitals
             right.Children.Add(sw);
 
             right.Children.Add(CaptionButton("\uE713", "Review what's shown", delegate { ShowReview(); }));
-            right.Children.Add(CaptionButton("\uE9D9", "Open Task Manager", delegate
-            {
-                try { using (Process.Start(new ProcessStartInfo("taskmgr.exe") { UseShellExecute = true })) { } }
-                catch (Exception) { } // declined the admin prompt
-            }));
             right.Children.Add(CaptionButton("\uE921", "Minimize", delegate { WindowState = WindowState.Minimized; }));
             right.Children.Add(CaptionButton("\uE8BB", "Close", delegate { Close(); }));
             g.Children.Add(right);
