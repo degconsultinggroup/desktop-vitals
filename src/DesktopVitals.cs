@@ -1375,7 +1375,7 @@ namespace DesktopVitals
                 done.Tick += delegate
                 {
                     done.Stop();
-                    if (acceptReview) { acceptReview = false; TryWriteReview(ReviewItems()); }
+                    if (acceptReview) { acceptReview = false; WriteAcceptedReview(); }
                     WriteSnapshot();
                     Close();
                 };
@@ -2423,10 +2423,13 @@ namespace DesktopVitals
             {
                 string file = WatchRule.ReviewFile();
                 var lines = new List<string>();
-                foreach (var it in items)
+                if (items != null)
                 {
-                    if (!it.On) lines.Add("@hide = " + it.Name);
-                    else if (it.Kind != it.OrigKind) lines.Add("@kind = " + it.Name + " | " + it.Kind);
+                    foreach (var it in items)
+                    {
+                        if (!it.On) lines.Add("@hide = " + it.Name);
+                        else if (it.Kind != it.OrigKind) lines.Add("@kind = " + it.Name + " | " + it.Kind);
+                    }
                 }
                 lines.Add("@reviewed = " + DateTime.Now.ToString("yyyy-MM-dd"));
                 Directory.CreateDirectory(System.IO.Path.GetDirectoryName(file));
@@ -2434,6 +2437,21 @@ namespace DesktopVitals
                 return true;
             }
             catch (Exception) { return false; }
+        }
+
+        // Snapshot --accept-review: always leave a review.txt with at least @reviewed.
+        void WriteAcceptedReview()
+        {
+            List<ReviewItem> items = null;
+            try { items = ReviewItems(); } catch (Exception) { }
+            if (TryWriteReview(items)) return;
+            try
+            {
+                string file = WatchRule.ReviewFile();
+                Directory.CreateDirectory(System.IO.Path.GetDirectoryName(file));
+                File.WriteAllLines(file, new[] { "@reviewed = " + DateTime.Now.ToString("yyyy-MM-dd") }, new UTF8Encoding(false));
+            }
+            catch (Exception) { }
         }
 
         void SaveReview(List<ReviewItem> items)

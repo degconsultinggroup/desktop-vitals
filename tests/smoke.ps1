@@ -79,6 +79,22 @@ function Stop-Children {
     Get-Process -Name 'calc', 'CalculatorApp' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 }
 
+function Wait-ReviewFile {
+    param([int]$TimeoutSeconds = 15)
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    while ((Get-Date) -lt $deadline) {
+        if (Test-Path -LiteralPath $ReviewFile) {
+            try {
+                $text = [System.IO.File]::ReadAllText($ReviewFile)
+                if ($text -match '@reviewed\s*=') { return $text }
+            }
+            catch { }
+        }
+        Start-Sleep -Milliseconds 250
+    }
+    throw 'review.txt not written'
+}
+
 function Invoke-Snapshot {
     param(
         [string]$Dir,
@@ -88,10 +104,12 @@ function Invoke-Snapshot {
     New-Item -ItemType Directory -Force -Path $Dir | Out-Null
     $exe = Join-Path $Root 'bin\DesktopVitals.exe'
     if (-not (Test-Path -LiteralPath $exe)) { throw "missing $exe" }
-    $args = @('--snapshot', $Dir)
-    if ($Review) { $args += '--review' }
-    if ($AcceptReview) { $args += '--accept-review' }
-    $p = Start-Process -FilePath $exe -ArgumentList $args -PassThru -WindowStyle Hidden
+    $argList = [System.Collections.Generic.List[string]]::new()
+    [void]$argList.Add('--snapshot')
+    [void]$argList.Add($Dir)
+    if ($Review) { [void]$argList.Add('--review') }
+    if ($AcceptReview) { [void]$argList.Add('--accept-review') }
+    $p = Start-Process -FilePath $exe -ArgumentList $argList.ToArray() -PassThru -WindowStyle Hidden
     if (-not $p.WaitForExit(20000)) {
         try { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue } catch { }
         throw 'snapshot exceeded 20 seconds'
@@ -101,6 +119,7 @@ function Invoke-Snapshot {
     $png = Join-Path $Dir 'vitals.png'
     if (-not (Test-Path -LiteralPath $txt)) { throw 'missing vitals.txt' }
     if (-not (Test-Path -LiteralPath $png)) { throw 'missing vitals.png' }
+    if ($AcceptReview) { $null = Wait-ReviewFile -TimeoutSeconds 15 }
     return @{ Txt = $txt; Png = $png; Text = [System.IO.File]::ReadAllText($txt) }
 }
 
@@ -329,13 +348,12 @@ try {
         [System.IO.File]::WriteAllLines($ConfigFile, $lines, $utf8Bom)
         $before = [System.IO.File]::ReadAllBytes($ConfigFile)
         $null = Invoke-Snapshot -Dir (Join-Path $Work 'snap-watch-intact') -AcceptReview
+        $reviewText = Wait-ReviewFile -TimeoutSeconds 15
         $after = [System.IO.File]::ReadAllBytes($ConfigFile)
         if ($before.Length -ne $after.Length) { throw "length $($before.Length) -> $($after.Length)" }
         for ($i = 0; $i -lt $before.Length; $i++) {
             if ($before[$i] -ne $after[$i]) { throw "byte $i changed" }
         }
-        if (-not (Test-Path -LiteralPath $ReviewFile)) { throw 'review.txt not written' }
-        $reviewText = [System.IO.File]::ReadAllText($ReviewFile)
         if ($reviewText -notmatch '@reviewed\s*=') { throw 'review.txt missing @reviewed' }
         $watchOk = $true
     }
