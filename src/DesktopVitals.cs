@@ -1610,7 +1610,6 @@ namespace DesktopVitals
             var k = new Ellipse { Width = 18, Height = 18, Fill = Brushes.White, HorizontalAlignment = HorizontalAlignment.Left };
             knob = new TranslateTransform(20, 0);
             k.RenderTransform = knob;
-            k.Effect = new System.Windows.Media.Effects.DropShadowEffect { BlurRadius = 4, ShadowDepth = 1, Opacity = 0.3 };
             switchTrack.Child = new Grid { Margin = new Thickness(0), Children = { k }, VerticalAlignment = VerticalAlignment.Center };
             k.Margin = new Thickness(0, 0, 0, 0);
             sw.Children.Add(stateLabel);
