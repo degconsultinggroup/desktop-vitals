@@ -379,15 +379,10 @@ namespace DesktopVitals
 
         public string Crash = "restart";   // text in a log line that marks a crash restart
 
-        // Your settings live in %APPDATA%\DesktopVitals\watch.txt, outside the app folder. A watch.txt next to the app works too.
+        // Your settings live in %APPDATA%\DesktopVitals\watch.txt, outside the app folder.
         public static string ConfigFile()
         {
-            string mine = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "DesktopVitals", "watch.txt");
-            if (File.Exists(mine)) return mine;
-            string dir = AppDomain.CurrentDomain.BaseDirectory;
-            string file = System.IO.Path.Combine(dir, "watch.txt");
-            if (!File.Exists(file)) file = System.IO.Path.Combine(System.IO.Path.GetDirectoryName(dir.TrimEnd('\\')), "watch.txt");
-            return File.Exists(file) ? file : mine;
+            return System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "DesktopVitals", "watch.txt");
         }
 
         public static bool LinesSkipped;
