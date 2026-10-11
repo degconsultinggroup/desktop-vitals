@@ -102,7 +102,7 @@ Commit: [x] ca1d42e
 ### 19. Make install shortcuts independent
 Refs: `install.ps1:18-19` (robustness R36)
 Done when: Start menu and desktop shortcut creation each use try/catch; a shortcut failure does not abort after a successful build; non-zero exit remains for build failure only.
-Commit: [x]
+Commit: [x] 60cd799
 
 ## Lean
 
