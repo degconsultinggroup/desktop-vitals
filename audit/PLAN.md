@@ -134,7 +134,7 @@ Commit: [x] bf97bb7
 ### 25. Remove focus switching and Task Scheduler MMC launch
 Refs: `src/DesktopVitals.cs:2214`, `2231-2237` (lean D2; hard rule 1)
 Done when: row clicks no longer call `SetForegroundWindow` / `ShowWindow` on other windows and no longer start `taskschd.msc`; editor/Explorer open paths stay only after item 1 is safe.
-Commit: [x]
+Commit: [x] 40ce263
 
 ### 26. Remove Live switch DropShadow
 Refs: `src/DesktopVitals.cs:1488` (lean D3)
