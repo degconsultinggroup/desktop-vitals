@@ -109,7 +109,7 @@ Commit: [x] 60cd799
 ### 20. Deduplicate SplitArgs
 Refs: `src/DesktopVitals.cs:486-499`, `2087`, `2116-2129` (lean B1)
 Done when: `VitalsWindow.SplitArgs` is removed; `ModelLabel` calls `Scripts.SplitArgs`.
-Commit: [x]
+Commit: [x] 31f8b19
 
 ### 21. Remove unused origOn
 Refs: `src/DesktopVitals.cs:2381`, `2421`, `2485` (lean B2)
