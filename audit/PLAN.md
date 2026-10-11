@@ -92,7 +92,7 @@ Commit: [x] 9e4c716
 ### 17. Fix bad UI dash and mojibake strings
 Refs: `src/DesktopVitals.cs:1824`, `2051` (robustness R31, R32)
 Done when: temperature starting text uses ASCII `...` or `\u2026` (not mojibake); never-ran or similar task text uses ASCII `-` or `n/a` (no en dash `\u2013`).
-Commit: [x]
+Commit: [x] 06d4108
 
 ### 18. Format theme numbers with invariant culture
 Refs: `src/DesktopVitals.cs:906-923` (robustness R33)
