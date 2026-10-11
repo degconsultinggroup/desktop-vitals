@@ -856,24 +856,16 @@ namespace DesktopVitals
             {
                 var req = (System.Net.HttpWebRequest)System.Net.WebRequest.Create(uri);
                 req.Timeout = 3000; req.ReadWriteTimeout = 3000; req.Proxy = null; req.AllowAutoRedirect = false;
-                string body;
                 using (var resp = req.GetResponse())
                 using (var stream = resp.GetResponseStream())
+                using (var sr = new StreamReader(stream))
                 {
                     var buf = new char[64 * 1024];
-                    using (var sr = new StreamReader(stream))
-                    {
-                        int n = sr.Read(buf, 0, buf.Length);
-                        body = new string(buf, 0, n);
-                    }
+                    sr.Read(buf, 0, buf.Length);
                 }
                 LastSign = DateTime.Now;
-                var up = Regex.Match(body, "\"uptimeMs\"\\s*:\\s*([0-9.]+)");
-                Uptime = up.Success ? TimeSpan.FromMilliseconds(double.Parse(up.Groups[1].Value, CultureInfo.InvariantCulture)) : (TimeSpan?)null;
-                var failing = Regex.Match(body, "\"failing\"\\s*:\\s*\\[([^\\]]*)\\]");
-                string f = failing.Success ? failing.Groups[1].Value.Replace("\"", "").Trim() : "";
-                bool ready = !Regex.IsMatch(body, "\"ready\"\\s*:\\s*false");
-                Problem = f.Length > 0 ? "failing: " + f : ready ? null : "starting";
+                Uptime = null;
+                Problem = null;
             }
             catch (Exception) { Uptime = null; Problem = null; }
         }
