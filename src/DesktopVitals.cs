@@ -2768,7 +2768,12 @@ namespace DesktopVitals
 
                 var root = (FrameworkElement)Content;
                 double scale = 2;
-                var bmp = new RenderTargetBitmap((int)Math.Ceiling(root.ActualWidth * scale), (int)Math.Ceiling(root.ActualHeight * scale), 96 * scale, 96 * scale, PixelFormats.Pbgra32);
+                double maxPx = 4000;
+                if (root.ActualWidth * scale > maxPx) scale = maxPx / Math.Max(1, root.ActualWidth);
+                if (root.ActualHeight * scale > maxPx) scale = Math.Min(scale, maxPx / Math.Max(1, root.ActualHeight));
+                int bw = Math.Max(1, (int)Math.Ceiling(root.ActualWidth * scale));
+                int bh = Math.Max(1, (int)Math.Ceiling(root.ActualHeight * scale));
+                var bmp = new RenderTargetBitmap(bw, bh, 96 * scale, 96 * scale, PixelFormats.Pbgra32);
                 bmp.Render(root);
                 var enc = new PngBitmapEncoder();
                 enc.Frames.Add(BitmapFrame.Create(bmp));

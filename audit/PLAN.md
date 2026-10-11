@@ -87,7 +87,7 @@ Commit: [x] 6ec761d
 ### 16. Cap snapshot bitmap size
 Refs: `src/DesktopVitals.cs:2584-2590` (robustness R27)
 Done when: `RenderTargetBitmap` dimensions are capped (about 4000 px) or the scale factor is reduced so huge windows do not OOM; still only `vitals.png`.
-Commit: [ ]
+Commit: [x]
 
 ### 17. Fix bad UI dash and mojibake strings
 Refs: `src/DesktopVitals.cs:1824`, `2051` (robustness R31, R32)
