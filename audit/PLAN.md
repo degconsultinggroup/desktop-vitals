@@ -35,7 +35,7 @@ Commit: [x] 51dc146
 ### 6. Harden snapshot directory writes
 Refs: `src/DesktopVitals.cs:2563-2597`, `2661-2669` (known 7; robustness R37)
 Done when: `<dir>` is created only if its parent already exists; only `vitals.txt` and `vitals.png` are written under that dir; writes do not follow a path outside `<dir>`.
-Commit: [x]
+Commit: [x] f634ded
 
 ### 7. Cap watch.txt parsing
 Refs: `src/DesktopVitals.cs:376-439`, `2490` (known 8; robustness R17)
