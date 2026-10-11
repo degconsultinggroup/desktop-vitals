@@ -163,7 +163,7 @@ Commit: [x] edf8ae8
 ### 31. Remove "Did I miss anything?"
 Refs: lean E1; phase2-gate shrink list
 Done when: missed-app discovery, Missed review card, and `Native.AppWindows` (plus PInvoke used only by it) are gone; the rest of first-run review stays.
-Commit: [x]
+Commit: [x] 008d657
 
 ### 32. Remove bar animations (if still over budget)
 Refs: lean E3; phase2-gate shrink list
