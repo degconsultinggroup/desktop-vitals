@@ -1,3 +1,4 @@
 bin/
 watch.txt
 tests/results/vitals.png
+tests/results/vitals.txt

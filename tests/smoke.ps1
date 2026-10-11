@@ -137,6 +137,7 @@ try {
         $reviewDir = Join-Path $Work 'snap-review'
         $null = Invoke-Snapshot -Dir $reviewDir -Review
         Copy-Item -LiteralPath $basic.Png -Destination (Join-Path $ResultsDir 'vitals.png') -Force
+        Copy-Item -LiteralPath $basic.Txt -Destination (Join-Path $ResultsDir 'vitals.txt') -Force
         $snapOk = $true
     }
     catch {

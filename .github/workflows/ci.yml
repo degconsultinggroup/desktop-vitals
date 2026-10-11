@@ -28,3 +28,68 @@ jobs:
           name: vitals-png
           path: tests/results/vitals.png
           if-no-files-found: warn
+
+  # x64 build/smoke under Windows 11 Arm64 (Prism / x64 emulation).
+  windows-arm:
+    runs-on: windows-11-arm
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Environment
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Continue'
+          Write-Host ("PROCESSOR_ARCHITECTURE={0}" -f $env:PROCESSOR_ARCHITECTURE)
+          Write-Host ("PROCESSOR_ARCHITEW6432={0}" -f $env:PROCESSOR_ARCHITEW6432)
+          Write-Host ("OS={0}" -f [Environment]::OSVersion.VersionString)
+          $fw = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
+          Write-Host ("Framework64_csc={0} exists={1}" -f $fw, (Test-Path -LiteralPath $fw))
+          Get-CimInstance Win32_Processor |
+            Select-Object Name, NumberOfCores, NumberOfLogicalProcessors, MaxClockSpeed |
+            Format-List |
+            Out-String |
+            Write-Host
+
+      - name: Build and smoke
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          .\tests\smoke.ps1
+          if ($LASTEXITCODE -ne 0) { throw "smoke.ps1 failed with exit $LASTEXITCODE" }
+
+      - name: Core layout from vitals.txt
+        if: always()
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Continue'
+          $txt = Join-Path $PWD 'tests\results\vitals.txt'
+          if (-not (Test-Path -LiteralPath $txt)) {
+            Write-Host 'cores-split: vitals.txt missing'
+            exit 0
+          }
+          # Redact machine name before logging (first token after product name).
+          $raw = [System.IO.File]::ReadAllText($txt)
+          $safe = [regex]::Replace($raw, '(?m)^(Desktop Vitals)\s+\S+', '$1 <redacted>')
+          Write-Host '----- vitals.txt (redacted) -----'
+          Write-Host $safe
+          Write-Host '----- end vitals.txt -----'
+          if ($safe -match '(?i)performance core|efficiency core') {
+            Write-Host 'cores-split: hybrid (performance/efficiency labels present)'
+          }
+          elseif ($safe -match '(?i)Busiest thread:.*\bcore\b') {
+            Write-Host 'cores-split: flat (single efficiency class / core N labels)'
+          }
+          else {
+            Write-Host 'cores-split: inconclusive (no Busiest thread core labels)'
+          }
+
+      - name: Upload ARM vitals artifacts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: vitals-arm
+          path: |
+            tests/results/vitals.png
+            tests/results/vitals.txt
+          if-no-files-found: warn
