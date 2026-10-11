@@ -699,11 +699,40 @@ namespace DesktopVitals
     {
         public static string Name;
         public static double Util, UsedGb, TotalGb;
-        public static bool Have;
+        public static bool Have, Failed;
         static Dictionary<string, long> prevRaw = new Dictionary<string, long>();
         static long prevTs;
         static bool busy, tried;
         static DateTime read = DateTime.MinValue;
+        static readonly Dictionary<string, string> perfNames = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        // English Perflib\009 name to the local counter name (or the English name if lookup fails).
+        public static string PerfName(string english)
+        {
+            string have;
+            if (perfNames.TryGetValue(english, out have)) return have;
+            string local = english;
+            try
+            {
+                using (var en = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Perflib\009"))
+                using (var cur = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Perflib\CurrentLanguage"))
+                {
+                    string[] enList = en != null ? en.GetValue("Counter") as string[] : null;
+                    string[] curList = cur != null ? cur.GetValue("Counter") as string[] : null;
+                    if (enList != null && curList != null)
+                    {
+                        string index = null;
+                        for (int i = 0; i + 1 < enList.Length; i += 2)
+                            if (string.Equals(enList[i + 1], english, StringComparison.OrdinalIgnoreCase)) { index = enList[i]; break; }
+                        if (index != null)
+                            for (int i = 0; i + 1 < curList.Length; i += 2)
+                                if (curList[i] == index) { local = curList[i + 1]; break; }
+                    }
+                }
+            }
+            catch (Exception) { }
+            return perfNames[english] = local;
+        }
 
         public static void Refresh()
         {
@@ -714,7 +743,7 @@ namespace DesktopVitals
                 try
                 {
                     if (!tried) { tried = true; ReadAdapter(); }
-                    var eng = new PerformanceCounterCategory("GPU Engine").ReadCategory()["Utilization Percentage"];
+                    var eng = new PerformanceCounterCategory(PerfName("GPU Engine")).ReadCategory()[PerfName("Utilization Percentage")];
                     var raw = new Dictionary<string, long>();
                     long ts = 0;
                     foreach (InstanceData d in eng.Values)
@@ -740,13 +769,14 @@ namespace DesktopVitals
                         Util = byType.Count == 0 ? 0 : Math.Min(100, byType.Values.Max());
                     }
                     prevRaw = raw; prevTs = ts;
-                    var mem = new PerformanceCounterCategory("GPU Adapter Memory").ReadCategory()["Dedicated Usage"];
+                    var mem = new PerformanceCounterCategory(PerfName("GPU Adapter Memory")).ReadCategory()[PerfName("Dedicated Usage")];
                     long used = 0;
                     foreach (InstanceData d in mem.Values) used = Math.Max(used, d.RawValue);
                     UsedGb = used / 1073741824.0;
                     Have = Name != null || used > 0;
+                    Failed = false;
                 }
-                catch (Exception) { Have = false; }
+                catch (Exception) { Have = false; Failed = true; }
                 read = DateTime.Now;
                 busy = false;
             });
@@ -1802,8 +1832,9 @@ namespace DesktopVitals
                 }
                 else
                 {
-                    gpuRow.Set("not available", "", 0);
-                    vramRow.Set("not available", "", 0);
+                    string msg = GpuCounters.Failed ? "GPU readings not available on this system" : "not available";
+                    gpuRow.Set(msg, "", 0);
+                    vramRow.Set(msg, "", 0);
                 }
             }
 
@@ -2348,8 +2379,8 @@ namespace DesktopVitals
                     var next = new Dictionary<int, long>();
                     try
                     {
-                        var data = new PerformanceCounterCategory("GPU Process Memory").ReadCategory();
-                        var usage = data["Local Usage"];
+                        var data = new PerformanceCounterCategory(GpuCounters.PerfName("GPU Process Memory")).ReadCategory();
+                        var usage = data[GpuCounters.PerfName("Local Usage")];
                         if (usage != null)
                             foreach (InstanceData d in usage.Values)
                             {
