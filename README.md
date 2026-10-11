@@ -40,6 +40,8 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1
 
 `install.ps1` builds `bin\DesktopVitals.exe` and adds two shortcuts: one on the desktop, and one in the Start menu that opens with **Ctrl+Alt+P**. `build.ps1` builds without adding shortcuts.
 
+TODO: The GitHub Release exe is unsigned. Windows SmartScreen may warn. Click **More info**, then **Run anyway**.
+
 ## First run
 
 The first time it opens, Desktop Vitals shows **Here's what I found**: everything it detected and everything in your settings, grouped by kind. Untick anything that shouldn't be shown, and click a tag if something is the wrong kind (a script that is really a bot, say). **Looks good** saves your answers to your settings file. The gear button at the top brings this screen back any time.
