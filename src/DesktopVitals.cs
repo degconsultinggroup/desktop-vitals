@@ -2228,7 +2228,7 @@ namespace DesktopVitals
             bool pyServer = exe.StartsWith("python", StringComparison.OrdinalIgnoreCase)
                 && (p.Cmd.IndexOf("vllm", StringComparison.OrdinalIgnoreCase) >= 0 || p.Cmd.IndexOf("llama_cpp.server", StringComparison.OrdinalIgnoreCase) >= 0);
             if (!known && !pyServer) return null;
-            var args = SplitArgs(p.Cmd);
+            var args = Scripts.SplitArgs(p.Cmd);
             string model = ArgAfter(args, "-m", "--model", "-hf", "--hf-repo");
             string port = ArgAfter(args, "--port");
             if (exe.StartsWith("ollama", StringComparison.OrdinalIgnoreCase))
@@ -2255,21 +2255,6 @@ namespace DesktopVitals
                 }
             }
             return null;
-        }
-
-        static List<string> SplitArgs(string cmd)
-        {
-            var list = new List<string>();
-            var sb = new StringBuilder();
-            bool quoted = false;
-            foreach (char c in cmd)
-            {
-                if (c == '"') { quoted = !quoted; continue; }
-                if (c == ' ' && !quoted) { if (sb.Length > 0) { list.Add(sb.ToString()); sb.Clear(); } continue; }
-                sb.Append(c);
-            }
-            if (sb.Length > 0) list.Add(sb.ToString());
-            return list;
         }
 
         void EnsureRows(StackPanel host, List<ProcRow> rows, int n)
