@@ -45,7 +45,7 @@ Commit: [x] d78e237
 ### 8. Bound remaining file reads and handle cleanup
 Refs: `src/DesktopVitals.cs:788-804`, `808-831`, `2044-2047` and every `Process` / stream / native handle path (known 9; security N3; robustness R18-R20)
 Done when: temperature JSON, crash-log scans (if still present), and `NewestWrite` walks are size or count capped; every handle, stream, and `Process` uses `using` or `try/finally`; oversized reads skip safely.
-Commit: [ ]
+Commit: [x]
 
 ## Robustness
 

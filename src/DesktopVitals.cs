@@ -838,14 +838,25 @@ namespace DesktopVitals
             if (!Directory.Exists(path)) return null;
             DateTime? newest = null;
             string dir = path;
+            int seen = 0;
             for (int depth = 0; depth < 4 && dir != null; depth++)
             {
-                foreach (var f in Directory.GetFiles(dir))
+                string[] files;
+                try { files = Directory.GetFiles(dir); }
+                catch (Exception) { break; }
+                foreach (var f in files)
                 {
-                    var t = File.GetLastWriteTime(f);
-                    if (newest == null || t > newest) newest = t;
+                    if (++seen > 500) return newest;
+                    try
+                    {
+                        var t = File.GetLastWriteTime(f);
+                        if (newest == null || t > newest) newest = t;
+                    }
+                    catch (Exception) { }
                 }
-                var subs = Directory.GetDirectories(dir);
+                string[] subs;
+                try { subs = Directory.GetDirectories(dir); }
+                catch (Exception) { break; }
                 dir = subs.Length == 0 ? null : subs.OrderBy(d => d, StringComparer.OrdinalIgnoreCase).Last();
             }
             return newest;
@@ -858,24 +869,31 @@ namespace DesktopVitals
             var since = DateTime.Now.AddHours(-24);
             int n = 0, lineNo = 0, crashLine = 0;
             DateTime crashTime = DateTime.MinValue;
-            using (var fs = new FileStream(log, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
-            using (var sr = new StreamReader(fs))
+            try
             {
-                string line;
-                while ((line = sr.ReadLine()) != null)
+                using (var fs = new FileStream(log, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
                 {
-                    lineNo++;
-                    if (line.Length < 19 || line.IndexOf(crashText, StringComparison.OrdinalIgnoreCase) < 0) continue;
-                    DateTime t;
-                    string stamp = line.Substring(0, 19).Replace('T', ' ');
-                    if (DateTime.TryParseExact(stamp, "yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture, DateTimeStyles.None, out t) && t >= since)
+                    if (fs.Length > 1024 * 1024) fs.Seek(-1024 * 1024, SeekOrigin.End);
+                    using (var sr = new StreamReader(fs))
                     {
-                        n++;
-                        crashLine = lineNo;
-                        crashTime = t;
+                        string line;
+                        while ((line = sr.ReadLine()) != null)
+                        {
+                            if (++lineNo > 10000) break;
+                            if (line.Length < 19 || line.IndexOf(crashText, StringComparison.OrdinalIgnoreCase) < 0) continue;
+                            DateTime t;
+                            string stamp = line.Substring(0, 19).Replace('T', ' ');
+                            if (DateTime.TryParseExact(stamp, "yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture, DateTimeStyles.None, out t) && t >= since)
+                            {
+                                n++;
+                                crashLine = lineNo;
+                                crashTime = t;
+                            }
+                        }
                     }
                 }
             }
+            catch (Exception) { Crashes = -1; return; }
             CrashLine = crashLine; CrashTime = crashTime; Crashes = n;
         }
     }
@@ -2094,7 +2112,15 @@ namespace DesktopVitals
                 if (!File.Exists(file)) return "temperature sensor off";
                 string json;
                 using (var fs = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
-                using (var sr = new StreamReader(fs)) json = sr.ReadToEnd();
+                {
+                    if (fs.Length > 64 * 1024) return "";
+                    var buf = new char[64 * 1024];
+                    using (var sr = new StreamReader(fs))
+                    {
+                        int n = sr.Read(buf, 0, buf.Length);
+                        json = new string(buf, 0, n);
+                    }
+                }
                 var ts = Regex.Match(json, "\"ts\"\\s*:\\s*\"([^\"]+)\"");
                 DateTimeOffset when;
                 if (!ts.Success || !DateTimeOffset.TryParse(ts.Groups[1].Value, CultureInfo.InvariantCulture, DateTimeStyles.None, out when)) return "";
