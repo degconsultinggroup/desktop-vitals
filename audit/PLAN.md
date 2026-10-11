@@ -62,7 +62,7 @@ Commit: [x] 160b818
 ### 11. GPU counters on non-English Windows
 Refs: `src/DesktopVitals.cs:670`, `696`, `2265-2266` (known 5; robustness R5, R6)
 Done when: counter names resolve via `Perflib\009` index lookup when needed; on total failure Graphics and Video memory show `GPU readings not available on this system` (not a blank detail).
-Commit: [x]
+Commit: [x] 109b1d6
 
 ### 12. Honest GPU samples
 Refs: `src/DesktopVitals.cs:128-171`, `164-168`, `661-705`, `1705-1723` (robustness R7, R9)
