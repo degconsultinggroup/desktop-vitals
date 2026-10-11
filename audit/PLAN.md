@@ -20,12 +20,12 @@ Commit: [x] b83a92a
 ### 3. Restrict and bound HTTP checks
 Refs: `src/DesktopVitals.cs:758`, `767-785` (known 3; security N5; robustness R21)
 Done when: only `http://` to `127.0.0.1`, `::1`, or `localhost` is accepted; `AllowAutoRedirect` is false; body read max is 64 KB; other URLs show `check must be a local address`.
-Commit: [x] 974cc6f
+Commit: [x] 4298c1c
 
 ### 4. Log unhandled errors
 Refs: `src/DesktopVitals.cs:2666`, `2678` (known 4; robustness R30)
 Done when: dispatcher and `AppDomain` unhandled errors append to `%APPDATA%\DesktopVitals\errors.log` with timestamp, version, type, message, and stack; log caps at 256 KB by truncating the oldest half; no foreign process command lines or paths in the log; dispatcher errors stay handled so the app keeps running.
-Commit: [ ]
+Commit: [x]
 
 ### 5. Keep PEB cwd reads read-only and bounded
 Refs: `src/DesktopVitals.cs:233-256`, `261-282` (known 6; robustness R23)

@@ -2663,17 +2663,57 @@ namespace DesktopVitals
         }
     }
 
+    static class ErrorLog
+    {
+        const string Ver = "1.0";
+        const int Cap = 256 * 1024;
+
+        public static void Write(Exception ex)
+        {
+            if (ex == null) return;
+            try
+            {
+                string dir = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "DesktopVitals");
+                Directory.CreateDirectory(dir);
+                string file = System.IO.Path.Combine(dir, "errors.log");
+                var sb = new StringBuilder();
+                sb.Append(DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture)).Append(" ver=").Append(Ver);
+                sb.Append(" type=").Append(ex.GetType().FullName);
+                sb.Append(" msg=").Append(ex.Message).Append('\n');
+                if (ex.StackTrace != null) sb.Append(ex.StackTrace).Append('\n');
+                sb.Append('\n');
+                byte[] add = Encoding.UTF8.GetBytes(sb.ToString());
+                byte[] prior = File.Exists(file) ? File.ReadAllBytes(file) : new byte[0];
+                if (prior.Length + add.Length > Cap)
+                {
+                    int keep = Math.Max(0, prior.Length / 2);
+                    var trimmed = new byte[keep + add.Length];
+                    Buffer.BlockCopy(prior, prior.Length - keep, trimmed, 0, keep);
+                    Buffer.BlockCopy(add, 0, trimmed, keep, add.Length);
+                    File.WriteAllBytes(file, trimmed);
+                }
+                else
+                {
+                    using (var fs = new FileStream(file, FileMode.Append, FileAccess.Write, FileShare.Read))
+                        fs.Write(add, 0, add.Length);
+                }
+            }
+            catch (Exception) { }
+        }
+    }
+
     static class Program
     {
         [STAThread]
         static void Main(string[] args)
         {
+            AppDomain.CurrentDomain.UnhandledException += (s, e) => { ErrorLog.Write(e.ExceptionObject as Exception); };
             int at = Array.FindIndex(args, a => a.Equals("--snapshot", StringComparison.OrdinalIgnoreCase));
             if (at >= 0)
             {
                 string dir = at + 1 < args.Length && !args[at + 1].StartsWith("--") ? args[at + 1] : System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "DesktopVitals", "snapshot");
                 var snapApp = new Application { ShutdownMode = ShutdownMode.OnMainWindowClose };
-                snapApp.DispatcherUnhandledException += (s, e) => { e.Handled = true; };
+                snapApp.DispatcherUnhandledException += (s, e) => { ErrorLog.Write(e.Exception); e.Handled = true; };
                 // "--review" pictures the review screen instead of the readings.
                 bool review = args.Any(a => a.Equals("--review", StringComparison.OrdinalIgnoreCase));
                 snapApp.Run(new VitalsWindow(System.IO.Path.GetFullPath(dir), review));
@@ -2685,7 +2725,7 @@ namespace DesktopVitals
                 if (!created) { signal.Set(); return; }
                 var app = new Application { ShutdownMode = ShutdownMode.OnMainWindowClose };
                 // One bad reading (an odd process, a driver hiccup) should skip a refresh, not close the window.
-                app.DispatcherUnhandledException += (s, e) => { e.Handled = true; };
+                app.DispatcherUnhandledException += (s, e) => { ErrorLog.Write(e.Exception); e.Handled = true; };
                 var win = new VitalsWindow();
                 ThreadPool.RegisterWaitForSingleObject(signal, delegate { win.Dispatcher.BeginInvoke(new Action(win.Toggle)); }, null, -1, false);
                 app.Run(win);
