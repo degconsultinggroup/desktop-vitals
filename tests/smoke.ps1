@@ -347,7 +347,73 @@ try {
     }
     Write-Check 'watch-txt-intact' $watchOk $watchDetail
 
-    # 8. errors.log bounds and no foreign command lines
+    # 8. Default --snapshot folder creates vitals.txt and vitals.png on a fresh path
+    $freshOk = $false
+    $freshDetail = ''
+    try {
+        $defaultSnap = Join-Path $env:LOCALAPPDATA 'DesktopVitals\snapshot'
+        if (Test-Path -LiteralPath $defaultSnap) { Remove-Item -LiteralPath $defaultSnap -Recurse -Force }
+        $exe = Join-Path $Root 'bin\DesktopVitals.exe'
+        $p = Start-Process -FilePath $exe -ArgumentList @('--snapshot') -PassThru -WindowStyle Hidden
+        if (-not $p.WaitForExit(20000)) {
+            try { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue } catch { }
+            throw 'default snapshot exceeded 20 seconds'
+        }
+        if ($p.ExitCode -ne 0) { throw "default snapshot exit $($p.ExitCode)" }
+        if (-not (Test-Path -LiteralPath (Join-Path $defaultSnap 'vitals.txt'))) { throw 'missing default vitals.txt' }
+        if (-not (Test-Path -LiteralPath (Join-Path $defaultSnap 'vitals.png'))) { throw 'missing default vitals.png' }
+        $freshOk = $true
+    }
+    catch {
+        $freshDetail = $_.Exception.Message
+    }
+    Write-Check 'snapshot-fresh-profile' $freshOk $freshDetail
+
+    # 9. check: http://[::1]:... is accepted as loopback (not "must be a local address")
+    $v6Ok = $false
+    $v6Detail = ''
+    try {
+        $v6Script = Join-Path $Work 'dv_smoke_v6.ps1'
+        Set-Content -LiteralPath $v6Script -Value 'Start-Sleep -Seconds 60' -Encoding UTF8
+        $null = Start-Child -FilePath 'powershell.exe' -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $v6Script)
+        Set-ConfigText "SmokeV6 = dv_smoke_v6.ps1 | check: http://[::1]:18765/health`n"
+        Start-Sleep -Seconds 1
+        $v6Snap = Invoke-Snapshot -Dir (Join-Path $Work 'snap-v6')
+        if ($v6Snap.Text -match 'check must be a local address') { throw 'IPv6 loopback rejected' }
+        if ($v6Snap.Text -notmatch 'SmokeV6') { throw 'SmokeV6 bot row missing' }
+        $v6Ok = $true
+    }
+    catch {
+        $v6Detail = $_.Exception.Message
+    }
+    finally {
+        Stop-Children
+        Restore-Config
+    }
+    Write-Check 'http-ipv6-loopback' $v6Ok $v6Detail
+
+    # 10. Long command lines (about 20k chars) are still visible to Watching
+    $cmdOk = $false
+    $cmdDetail = ''
+    try {
+        $marker = 'dvsmokeLongCmd' + ('Z' * 20000)
+        $null = Start-Child -FilePath 'powershell.exe' -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', "Start-Sleep -Seconds 60 # $marker")
+        Set-ConfigText "LongCmd = dvsmokeLongCmd`n"
+        Start-Sleep -Seconds 2
+        $cmdSnap = Invoke-Snapshot -Dir (Join-Path $Work 'snap-longcmd')
+        if ($cmdSnap.Text -notmatch 'LongCmd') { throw 'LongCmd watching row missing' }
+        $cmdOk = $true
+    }
+    catch {
+        $cmdDetail = $_.Exception.Message
+    }
+    finally {
+        Stop-Children
+        Restore-Config
+    }
+    Write-Check 'long-command-line' $cmdOk $cmdDetail
+
+    # 11. errors.log bounds and no foreign command lines
     $logOk = $false
     $logDetail = ''
     try {

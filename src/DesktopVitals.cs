@@ -229,7 +229,7 @@ namespace DesktopVitals
             {
                 int ret;
                 int st = Native.NtQueryInformationProcess(h, 60, b, len, out ret);
-                if ((st == Native.StatusLengthMismatch || st == Native.StatusBufferTooSmall) && ret > len && ret <= 32 * 1024)
+                if ((st == Native.StatusLengthMismatch || st == Native.StatusBufferTooSmall) && ret > len && ret <= 1024 * 1024)
                 {
                     Marshal.FreeHGlobal(b);
                     len = ret;
@@ -793,7 +793,7 @@ namespace DesktopVitals
             Uri uri;
             if (!Uri.TryCreate(url, UriKind.Absolute, out uri)
                 || !string.Equals(uri.Scheme, "http", StringComparison.OrdinalIgnoreCase)
-                || (uri.Host != "127.0.0.1" && uri.Host != "::1" && !string.Equals(uri.Host, "localhost", StringComparison.OrdinalIgnoreCase)))
+                || !uri.IsLoopback)
             {
                 Uptime = null; LastSign = null; Problem = "check must be a local address";
                 return;
@@ -1731,6 +1731,7 @@ namespace DesktopVitals
                 gpuRow.Set(string.Join(" \u00B7 ", bits), gu >= 0 ? Theme.Pct(gu) : "", gu >= 0 ? gu / 100 : 0);
                 if (vt > 0) vramRow.Set(vu.ToString("0.0") + " of " + vt.ToString("0") + " GB", Theme.Pct(100 * vu / vt), vu / vt);
                 else if (vu >= 0) vramRow.Set(vu.ToString("0.0") + " GB", "", 0);
+                else vramRow.Set("not available", "", 0);
             }
             else
             {
@@ -2463,30 +2464,14 @@ namespace DesktopVitals
 
         // ---------- snapshot for other programs (scripts, AI agents) ----------
 
-        static bool UnderDir(string root, string path)
-        {
-            try
-            {
-                string r = System.IO.Path.GetFullPath(root).TrimEnd('\\') + "\\";
-                string p = System.IO.Path.GetFullPath(path);
-                return p.StartsWith(r, StringComparison.OrdinalIgnoreCase);
-            }
-            catch (Exception) { return false; }
-        }
-
         void WriteSnapshot()
         {
-            string dir;
-            try { dir = System.IO.Path.GetFullPath(snapshotDir); }
-            catch (Exception) { return; }
-            string parent = System.IO.Path.GetDirectoryName(dir.TrimEnd('\\'));
-            if (parent == null || !Directory.Exists(parent)) return;
             try
             {
-                if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
+                string dir = System.IO.Path.GetFullPath(snapshotDir);
+                Directory.CreateDirectory(dir);
                 string txtPath = System.IO.Path.Combine(dir, "vitals.txt");
                 string pngPath = System.IO.Path.Combine(dir, "vitals.png");
-                if (!UnderDir(dir, txtPath) || !UnderDir(dir, pngPath)) return;
 
                 var sb = new StringBuilder();
                 sb.AppendLine("Desktop Vitals  " + Environment.MachineName + "  " + DateTime.Now.ToString("yyyy-MM-dd HH:mm") + "  \u00B7  " + subtitle.Text);
@@ -2520,12 +2505,8 @@ namespace DesktopVitals
             }
             catch (Exception ex)
             {
-                try
-                {
-                    string fail = System.IO.Path.Combine(dir, "vitals.txt");
-                    if (UnderDir(dir, fail)) File.WriteAllText(fail, "Snapshot failed: " + ex.Message);
-                }
-                catch (Exception) { }
+                try { Console.Error.WriteLine("Snapshot failed: " + ex.Message); } catch (Exception) { }
+                Environment.Exit(1);
             }
         }
 
