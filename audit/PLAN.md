@@ -40,7 +40,7 @@ Commit: [x] f634ded
 ### 7. Cap watch.txt parsing
 Refs: `src/DesktopVitals.cs:376-439`, `2490` (known 8; robustness R17)
 Done when: load and review reads cap at 64 KB, 200 lines, and 500 chars per line; over-limit content is ignored and the UI shows `some settings lines were skipped`.
-Commit: [ ]
+Commit: [x]
 
 ### 8. Bound remaining file reads and handle cleanup
 Refs: `src/DesktopVitals.cs:788-804`, `808-831`, `2044-2047` and every `Process` / stream / native handle path (known 9; security N3; robustness R18-R20)

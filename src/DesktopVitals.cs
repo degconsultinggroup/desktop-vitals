@@ -373,13 +373,45 @@ namespace DesktopVitals
             return File.Exists(file) ? file : mine;
         }
 
+        public static bool LinesSkipped;
+
+        // Cap hostile or huge watch.txt: 64 KB, 200 lines, 500 chars per line.
+        public static List<string> ReadConfigLines()
+        {
+            LinesSkipped = false;
+            var list = new List<string>();
+            string file = ConfigFile();
+            if (!File.Exists(file)) return list;
+            try
+            {
+                using (var fs = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+                {
+                    if (fs.Length > 64 * 1024) LinesSkipped = true;
+                    int take = (int)Math.Min(fs.Length, 64 * 1024);
+                    var buf = new byte[take];
+                    int n = fs.Read(buf, 0, take);
+                    using (var sr = new StringReader(Encoding.UTF8.GetString(buf, 0, n)))
+                    {
+                        string line;
+                        while ((line = sr.ReadLine()) != null)
+                        {
+                            if (list.Count >= 200) { LinesSkipped = true; break; }
+                            if (line.Length > 500) { LinesSkipped = true; continue; }
+                            list.Add(line);
+                        }
+                    }
+                }
+            }
+            catch (Exception) { }
+            return list;
+        }
+
         // Lines that start with @ are settings: "@temperature-file = <json>", "@hide = <name>", and similar.
-        public static Dictionary<string, string> Settings()
+        public static Dictionary<string, string> Settings() { return ParseSettings(ReadConfigLines()); }
+        public static Dictionary<string, string> ParseSettings(List<string> lines)
         {
             var d = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            string file = ConfigFile();
-            if (!File.Exists(file)) return d;
-            foreach (string raw in File.ReadAllLines(file))
+            foreach (string raw in lines)
             {
                 string line = raw.Trim();
                 int eq = line.IndexOf('=');
@@ -390,12 +422,11 @@ namespace DesktopVitals
         }
 
         // Every value of a setting that can repeat, such as "@hide = <name>".
-        public static List<string> Many(string key)
+        public static List<string> Many(string key) { return ParseMany(ReadConfigLines(), key); }
+        public static List<string> ParseMany(List<string> lines, string key)
         {
             var list = new List<string>();
-            string file = ConfigFile();
-            if (!File.Exists(file)) return list;
-            foreach (string raw in File.ReadAllLines(file))
+            foreach (string raw in lines)
             {
                 string line = raw.Trim();
                 int eq = line.IndexOf('=');
@@ -406,12 +437,11 @@ namespace DesktopVitals
         }
 
         // "Label = something.exe" matches a process name; anything else matches text in the command line.
-        public static List<WatchRule> Load()
+        public static List<WatchRule> Load() { return ParseRules(ReadConfigLines()); }
+        public static List<WatchRule> ParseRules(List<string> lines)
         {
             var rules = new List<WatchRule>();
-            string file = ConfigFile();
-            if (!File.Exists(file)) return rules;
-            foreach (string raw in File.ReadAllLines(file))
+            foreach (string raw in lines)
             {
                 string line = raw.Trim();
                 if (line.Length == 0 || line.StartsWith("#") || line.StartsWith("@")) continue;
@@ -1324,6 +1354,7 @@ namespace DesktopVitals
         ScrollViewer dashScroll;
         UIElement reviewView;
         bool needReview;
+        bool configSkipped;
         static readonly string[] AiChoices = { "Agent", "App", "Model", "Bot", "Watching" };
         static readonly string[] ScriptChoices = { "Script", "Agent", "Bot" };
         static readonly string[] WatchChoices = { "Watching", "App", "Agent", "Bot", "Model" };
@@ -1388,14 +1419,16 @@ namespace DesktopVitals
 
         void LoadConfig()
         {
-            var all = WatchRule.Load();
+            var lines = WatchRule.ReadConfigLines();
+            configSkipped = WatchRule.LinesSkipped;
+            var all = WatchRule.ParseRules(lines);
             rules = all.Where(r => !r.IsBot && !r.Ai).ToList();
             botRules = all.Where(r => r.IsBot && !r.Ai).ToList();
             aiRules = all.Where(r => r.Ai).ToList();
-            settings = WatchRule.Settings();
-            hidden = new HashSet<string>(WatchRule.Many("hide"), StringComparer.OrdinalIgnoreCase);
+            settings = WatchRule.ParseSettings(lines);
+            hidden = new HashSet<string>(WatchRule.ParseMany(lines, "hide"), StringComparer.OrdinalIgnoreCase);
             kindOf = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            foreach (string v in WatchRule.Many("kind"))
+            foreach (string v in WatchRule.ParseMany(lines, "kind"))
             {
                 int bar = v.LastIndexOf('|');
                 if (bar <= 0) continue;
@@ -1640,7 +1673,7 @@ namespace DesktopVitals
                 prev.Clear();
                 cmdCache.Clear();
                 prevKernel = 0;
-                if (!live) subtitle.Text = "Off \u00B7 not collecting";
+                if (!live) subtitle.Text = "Off \u00B7 not collecting" + (configSkipped ? " \u00B7 some settings lines were skipped" : "");
                 Native.SetProcessWorkingSetSize(Native.GetCurrentProcess(), (IntPtr)(-1), (IntPtr)(-1));
             }
         }
@@ -1756,7 +1789,7 @@ namespace DesktopVitals
 
             TimeSpan up = TimeSpan.FromMilliseconds(Native.GetTickCount64());
             string upText = up.TotalDays >= 1 ? string.Format("{0}d {1}h", (int)up.TotalDays, up.Hours) : string.Format("{0}h {1}m", up.Hours, up.Minutes);
-            subtitle.Text = "Up " + upText + " \u00B7 " + procs.Count + " processes";
+            subtitle.Text = "Up " + upText + " \u00B7 " + procs.Count + " processes" + (configSkipped ? " \u00B7 some settings lines were skipped" : "");
 
             // AI: local models, coding agents, AI apps, and the bots and watched lines that are AI.
             lastProcs = procs;
@@ -2498,8 +2531,9 @@ namespace DesktopVitals
             try
             {
                 string file = WatchRule.ConfigFile();
-                var lines = File.Exists(file) ? File.ReadAllLines(file).ToList()
+                var lines = File.Exists(file) ? WatchRule.ReadConfigLines()
                     : new List<string> { "# Desktop Vitals settings for this PC. See watch.example.txt in the app folder for the format.", "" };
+                if (WatchRule.LinesSkipped) configSkipped = true;
                 var names = new HashSet<string>(items.Where(i => (i.Rule == null && !i.Missed) || i.Section == "AI").Select(i => i.Name), StringComparer.OrdinalIgnoreCase);
                 Func<string, string, string> valueOf = (l, key) =>
                 {
