@@ -1,6 +1,10 @@
 # Desktop Vitals
 
-A small glass window for Windows 11 that shows what your PC is doing: the scripts and bots you have running, your scheduled tasks, and the machine's load. It is meant for people who leave Python bots, Node servers, PowerShell jobs or local AI models running and want to see at a glance that they are still alive.
+Task Manager is not enough in the age of AI. Desktop Vitals is a small glass window for Windows that shows what your PC is doing: scripts, bots, scheduled tasks, local AI, and system load.
+
+It only reads and shows. It never starts, stops, or kills other programs.
+
+When you want to open something, it links out to your IDE or File Explorer.
 
 It needs no setup. Open it and it finds what is running on your machine.
 
