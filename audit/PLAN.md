@@ -158,7 +158,7 @@ Net `src/DesktopVitals.cs` must be flat or down vs main (2685). Added after item
 ### 30. Remove per-app VRAM list
 Refs: lean E4; phase2-gate shrink list
 Done when: `ShowVram`, `vramList`, `vramByPid`, `vramBusy`, `vramRead`, and `vramLines` are gone; System card keeps total video memory only.
-Commit: [x]
+Commit: [x] edf8ae8
 
 ### 31. Remove "Did I miss anything?"
 Refs: lean E1; phase2-gate shrink list
