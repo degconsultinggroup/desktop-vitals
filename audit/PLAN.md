@@ -77,7 +77,7 @@ Commit: [x] d895914
 ### 14. Task Scheduler hang must not block review
 Refs: `src/DesktopVitals.cs:597-615`, `1852` (robustness R13, R14)
 Done when: Connect/Walk cannot block review forever (timeout or failed flag sets Ready); first-run review can open without a successful Connect; failed read shows a short not-available empty state rather than hanging Busy.
-Commit: [ ]
+Commit: [x]
 
 ### 15. Surface review save failures
 Refs: `src/DesktopVitals.cs:365-372`, `2533-2534` (robustness R16)

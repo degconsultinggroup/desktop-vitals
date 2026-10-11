@@ -638,29 +638,46 @@ namespace DesktopVitals
     {
         public static List<TaskInfo> Items = new List<TaskInfo>();
         public static bool Ready { get { return read != DateTime.MinValue; } }
+        public static bool Failed;
         static bool busy;
         static DateTime read = DateTime.MinValue;
+        static int finishGate;
 
-        // Reads Task Scheduler off the UI thread, at most every 30 s.
+        // Reads Task Scheduler off the UI thread, at most every 30 s. A 5 s watchdog marks Ready on hang.
         public static void Refresh(Action done)
         {
             if (busy || (DateTime.Now - read).TotalSeconds < 30) return;
             busy = true;
+            finishGate = 0;
             ThreadPool.QueueUserWorkItem(delegate
             {
                 var found = new List<TaskInfo>();
+                bool ok = false;
                 try
                 {
                     dynamic svc = Activator.CreateInstance(Type.GetTypeFromProgID("Schedule.Service"));
                     svc.Connect();
                     Walk(svc.GetFolder("\\"), found);
+                    ok = true;
                 }
                 catch (Exception) { }
-                Items = found;
-                read = DateTime.Now;
-                busy = false;
-                if (done != null) done();
+                Finish(found, !ok, done);
             });
+            ThreadPool.QueueUserWorkItem(delegate
+            {
+                Thread.Sleep(5000);
+                Finish(null, true, done);
+            });
+        }
+
+        static void Finish(List<TaskInfo> found, bool failed, Action done)
+        {
+            if (Interlocked.Exchange(ref finishGate, 1) != 0) return;
+            if (found != null) Items = found;
+            Failed = failed;
+            read = DateTime.Now;
+            busy = false;
+            if (done != null) done();
         }
 
         static void Walk(dynamic folder, List<TaskInfo> found)
@@ -1940,17 +1957,28 @@ namespace DesktopVitals
             // Scheduled tasks: running first, then failures, then the most recent runs.
             TaskList.Refresh(null);
             var tasks = TaskList.Items.Where(t => !hidden.Contains(t.Name)).OrderByDescending(t => t.Running).ThenByDescending(t => t.Failed).ThenByDescending(t => t.LastRun).Take(8).ToList();
-            tasksCard.Visibility = tasks.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
-            EnsureRows(taskList, taskRows, tasks.Count);
-            for (int i = 0; i < tasks.Count; i++)
+            if (TaskList.Failed && tasks.Count == 0)
             {
-                var t = tasks[i];
-                string result = t.Running ? "running" : t.NeverRan ? "\u2013" : t.Result == 0x41306 ? "stopped" : t.Failed ? "failed" : "OK";
-                string last = t.NeverRan ? "never" : Short(DateTime.Now - t.LastRun) + " ago";
-                string next = t.NextRun > DateTime.Now ? "next in " + Ago(t.NextRun - DateTime.Now) : "";
-                string tip = t.Path + "\n" + Trim(t.Action ?? "", 160) + (t.Failed ? "\nLast result: 0x" + t.Result.ToString("X") : "");
-                taskRows[i].Task = t;
-                taskRows[i].SetPlain(t.Name, t.Running ? Theme.Green : t.Failed ? Theme.AmberDot : Theme.Off, next, result, last, tip);
+                tasksCard.Visibility = Visibility.Visible;
+                EnsureRows(taskList, taskRows, 1);
+                taskRows[0].Task = null;
+                taskRows[0].Pids = new int[0];
+                taskRows[0].SetPlain("Task Scheduler not available", Theme.Off, "", "", "", "");
+            }
+            else
+            {
+                tasksCard.Visibility = tasks.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
+                EnsureRows(taskList, taskRows, tasks.Count);
+                for (int i = 0; i < tasks.Count; i++)
+                {
+                    var t = tasks[i];
+                    string result = t.Running ? "running" : t.NeverRan ? "\u2013" : t.Result == 0x41306 ? "stopped" : t.Failed ? "failed" : "OK";
+                    string last = t.NeverRan ? "never" : Short(DateTime.Now - t.LastRun) + " ago";
+                    string next = t.NextRun > DateTime.Now ? "next in " + Ago(t.NextRun - DateTime.Now) : "";
+                    string tip = t.Path + "\n" + Trim(t.Action ?? "", 160) + (t.Failed ? "\nLast result: 0x" + t.Result.ToString("X") : "");
+                    taskRows[i].Task = t;
+                    taskRows[i].SetPlain(t.Name, t.Running ? Theme.Green : t.Failed ? Theme.AmberDot : Theme.Off, next, result, last, tip);
+                }
             }
 
             // Top apps, grouped by exe
@@ -1973,7 +2001,7 @@ namespace DesktopVitals
                 topRows[i].Pids = g.Pids;
             }
 
-            if (needReview && tickCount >= 2 && TaskList.Ready) { needReview = false; ShowReview(); }
+            if (needReview && tickCount >= 2 && (TaskList.Ready || tickCount >= 8)) { needReview = false; ShowReview(); }
         }
 
         static string Trim(string s, int n) { return s.Length <= n ? s : s.Substring(0, n) + "\u2026"; }
