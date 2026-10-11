@@ -10,7 +10,7 @@ It needs no setup. Open it and it finds what is running on your machine.
 
 ## What it shows
 
-- **System:** processor load, with a bar for every thread, grouped into performance and efficiency cores; memory; graphics load and video memory, with the apps using the most; free space on the system drive. NVIDIA cards also show temperature and power.
+- **System:** processor load, with a bar for every thread, grouped into performance and efficiency cores; memory; graphics load and video memory; free space on the system drive. NVIDIA cards also show temperature and power.
 - **Scripts:** every script an interpreter is running from your own files, one line per script, with how long it has been up, its CPU and its memory. This covers Python (including `python -m`), Node, Bun, Deno, PowerShell, batch files, Windows Script, Ruby, PHP, Perl and Java. Scripts that belong to installed apps or to Windows are left out.
 - **Scheduled tasks:** the tasks you or your tools created, not Windows' own or app updaters. It shows which are running now, which failed their last run, when each last ran, and when each runs next.
 - **AI:** everything AI on the machine in one card, each line tagged with what it is:

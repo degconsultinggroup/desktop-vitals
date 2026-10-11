@@ -151,6 +151,25 @@ Refs: `src/DesktopVitals.cs:767-784` (lean C2)
 Done when: loopback GET still sets last-sign / working; parsing of `uptimeMs`, `failing`, and `ready` into Problem/Uptime is removed.
 Commit: [x] e52e52f
 
+## Line budget (Phase 2 gate)
+
+Net `src/DesktopVitals.cs` must be flat or down vs main (2685). Added after items 1-28 left the file at 2802.
+
+### 30. Remove per-app VRAM list
+Refs: lean E4; phase2-gate shrink list
+Done when: `ShowVram`, `vramList`, `vramByPid`, `vramBusy`, `vramRead`, and `vramLines` are gone; System card keeps total video memory only.
+Commit: [x]
+
+### 31. Remove "Did I miss anything?"
+Refs: lean E1; phase2-gate shrink list
+Done when: missed-app discovery, Missed review card, and `Native.AppWindows` (plus PInvoke used only by it) are gone; the rest of first-run review stays.
+Commit: [ ]
+
+### 32. Remove bar animations (if still over budget)
+Refs: lean E3; phase2-gate shrink list
+Done when: thread strip and StatRow bars set scale directly with no `DoubleAnimation`; only if items 30-31 leave the file over 2685 lines.
+Commit: [ ]
+
 ## Packaging
 
 ### 29. Ship prebuilt exe and checksums
@@ -168,7 +187,4 @@ Commit: [ ]
 | Robustness R28: light theme | New feature. |
 | Robustness R4, R12, R24, R25, R26, R29, R35 | No code change required or already acceptable. |
 | Security optional `taskmgr` `UseShellExecute` polish | Replaced by lean item 24 (delete the button). |
-| Lean E1: remove "Did I miss anything?" | Optional larger cut; not required. |
 | Lean E2: remove whole first-run review | Large product cut; only if Danny asks. |
-| Lean E3: drop bar animations | Optional polish; low value. |
-| Lean E4: remove per-app VRAM list | Optional; keep unless line budget forces it after security fixes. |

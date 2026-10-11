@@ -1353,11 +1353,6 @@ namespace DesktopVitals
         StackPanel body, aiList, botList, watchList, topList;
         StatRow cpuRow, memRow, gpuRow, vramRow, diskRow;
         ThreadStrip threadStrip;
-        StackPanel vramList;
-        Dictionary<int, long> vramByPid = new Dictionary<int, long>();
-        bool vramBusy;
-        DateTime vramRead = DateTime.MinValue;
-        readonly List<string> vramLines = new List<string>();
         long[] threadBusy, threadTotal, prevThreadBusy, prevThreadTotal;
         readonly List<ProcRow> aiRows = new List<ProcRow>();
         readonly List<ProcRow> watchRows = new List<ProcRow>();
@@ -1486,8 +1481,7 @@ namespace DesktopVitals
             threadStrip = new ThreadStrip(Native.CoreLayout());
             threadBusy = new long[cores]; threadTotal = new long[cores];
             prevThreadBusy = new long[cores]; prevThreadTotal = new long[cores];
-            vramList = new StackPanel { Margin = new Thickness(0, -2, 0, 6) };
-            body.Children.Add(Card("System", null, cpuRow, threadStrip, memRow, gpuRow, vramRow, vramList, diskRow));
+            body.Children.Add(Card("System", null, cpuRow, threadStrip, memRow, gpuRow, vramRow, diskRow));
 
             aiList = new StackPanel();
             aiCard = Card("AI", Columns(Head("CPU"), Head("Memory")), aiList);
@@ -1760,8 +1754,6 @@ namespace DesktopVitals
                 var swap = prevThreadBusy; prevThreadBusy = threadBusy; threadBusy = swap;
                 swap = prevThreadTotal; prevThreadTotal = threadTotal; threadTotal = swap;
             }
-
-            ShowVram(procs);
 
             var ms = new Native.MEMSTAT { len = (uint)Marshal.SizeOf(typeof(Native.MEMSTAT)) };
             if (!Native.GlobalMemoryStatusEx(ref ms) || ms.total == 0) memRow.Set("not available", "", 0);
@@ -2289,73 +2281,6 @@ namespace DesktopVitals
 
         void OpenBot(WatchRule bot) { OpenPath(bot.Code); }
 
-        // Dedicated video memory per process, from Windows' "GPU Process Memory" counters. Read off the UI thread every 5 s.
-        void ShowVram(List<Proc> procs)
-        {
-            if (!vramBusy && (DateTime.Now - vramRead).TotalSeconds >= 5)
-            {
-                vramBusy = true;
-                ThreadPool.QueueUserWorkItem(delegate
-                {
-                    var next = new Dictionary<int, long>();
-                    try
-                    {
-                        var data = new PerformanceCounterCategory(GpuCounters.PerfName("GPU Process Memory")).ReadCategory();
-                        var usage = data[GpuCounters.PerfName("Local Usage")];
-                        if (usage != null)
-                            foreach (InstanceData d in usage.Values)
-                            {
-                                var m = Regex.Match(d.InstanceName, "^pid_(\\d+)_");
-                                if (!m.Success || d.RawValue <= 0) continue;
-                                int pid = int.Parse(m.Groups[1].Value);
-                                long have;
-                                next.TryGetValue(pid, out have);
-                                next[pid] = have + d.RawValue;
-                            }
-                    }
-                    catch (Exception) { }
-                    Dispatcher.BeginInvoke(new Action(delegate { vramByPid = next; vramRead = DateTime.Now; vramBusy = false; }));
-                });
-            }
-
-            var byExe = new Dictionary<string, List<Proc>>(StringComparer.OrdinalIgnoreCase);
-            foreach (var p in procs)
-            {
-                long b;
-                if (!vramByPid.TryGetValue(p.Pid, out b) || b <= 0) continue;
-                List<Proc> l;
-                if (!byExe.TryGetValue(p.Exe, out l)) byExe[p.Exe] = l = new List<Proc>();
-                l.Add(p);
-            }
-            var top = byExe.Select(kv => new { Exe = kv.Key, Pids = kv.Value.Select(x => x.Pid).ToArray(), Bytes = kv.Value.Sum(x => vramByPid[x.Pid]) })
-                .Where(x => x.Bytes >= 32L << 20).OrderByDescending(x => x.Bytes).Take(4).ToList();
-
-            while (vramList.Children.Count < top.Count)
-            {
-                var g = new Grid { Margin = new Thickness(0, 1, 0, 1) };
-                g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-                g.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-                var n = Theme.Label("", 12, Theme.Sub, FontWeights.Normal);
-                var v = Theme.Label("", 12, Theme.Sub, FontWeights.Normal);
-                Grid.SetColumn(v, 1);
-                g.Children.Add(n); g.Children.Add(v);
-                vramList.Children.Add(g);
-            }
-            vramLines.Clear();
-            for (int i = 0; i < vramList.Children.Count; i++)
-            {
-                var g = (Grid)vramList.Children[i];
-                g.Visibility = i < top.Count ? Visibility.Visible : Visibility.Collapsed;
-                if (i >= top.Count) continue;
-                string name = AppIdentity.For(top[i].Exe, top[i].Pids).Title;
-                string amount = Theme.Mem(top[i].Bytes);
-                var n = (TextBlock)g.Children[0]; var v = (TextBlock)g.Children[1];
-                if (n.Text != name) n.Text = name;
-                if (v.Text != amount) v.Text = amount;
-                vramLines.Add(name + "  " + amount);
-            }
-        }
-
         // ---------- review: "here's what I found, is it right?" ----------
 
         List<ReviewItem> ReviewItems()
@@ -2636,7 +2561,6 @@ namespace DesktopVitals
                 sb.AppendLine("Desktop Vitals  " + Environment.MachineName + "  " + DateTime.Now.ToString("yyyy-MM-dd HH:mm") + "  \u00B7  " + subtitle.Text);
                 sb.AppendLine();
                 foreach (var r in new[] { cpuRow, memRow, gpuRow, vramRow, diskRow }) sb.AppendLine(r.Summary);
-                if (vramLines.Count > 0) sb.AppendLine("Video memory by app: " + string.Join("  \u00B7  ", vramLines));
                 string busy = threadStrip.Busiest();
                 if (busy.Length > 0) sb.AppendLine("Busiest thread: " + busy);
                 Section(sb, "AI", aiRows, "");
