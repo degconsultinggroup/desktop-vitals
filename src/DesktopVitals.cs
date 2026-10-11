@@ -1036,21 +1036,21 @@ namespace DesktopVitals
         public static string Gb(double bytes)
         {
             double gb = bytes / 1073741824.0;
-            return gb >= 100 ? gb.ToString("0") : gb.ToString("0.0");
+            return gb >= 100 ? gb.ToString("0", CultureInfo.InvariantCulture) : gb.ToString("0.0", CultureInfo.InvariantCulture);
         }
 
         public static string Mem(long bytes)
         {
             double mb = bytes / 1048576.0;
-            if (mb >= 1024) return (mb / 1024).ToString("0.0") + " GB";
-            return mb.ToString("0") + " MB";
+            if (mb >= 1024) return (mb / 1024).ToString("0.0", CultureInfo.InvariantCulture) + " GB";
+            return mb.ToString("0", CultureInfo.InvariantCulture) + " MB";
         }
 
         public static string Pct(double v)
         {
             if (v < 0.05) return "0%";
-            if (v < 10) return v.ToString("0.0") + "%";
-            return v.ToString("0") + "%";
+            if (v < 10) return v.ToString("0.0", CultureInfo.InvariantCulture) + "%";
+            return v.ToString("0", CultureInfo.InvariantCulture) + "%";
         }
     }
 
