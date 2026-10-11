@@ -2571,11 +2571,31 @@ namespace DesktopVitals
 
         // ---------- snapshot for other programs (scripts, AI agents) ----------
 
-        void WriteSnapshot()
+        static bool UnderDir(string root, string path)
         {
             try
             {
-                Directory.CreateDirectory(snapshotDir);
+                string r = System.IO.Path.GetFullPath(root).TrimEnd('\\') + "\\";
+                string p = System.IO.Path.GetFullPath(path);
+                return p.StartsWith(r, StringComparison.OrdinalIgnoreCase);
+            }
+            catch (Exception) { return false; }
+        }
+
+        void WriteSnapshot()
+        {
+            string dir;
+            try { dir = System.IO.Path.GetFullPath(snapshotDir); }
+            catch (Exception) { return; }
+            string parent = System.IO.Path.GetDirectoryName(dir.TrimEnd('\\'));
+            if (parent == null || !Directory.Exists(parent)) return;
+            try
+            {
+                if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
+                string txtPath = System.IO.Path.Combine(dir, "vitals.txt");
+                string pngPath = System.IO.Path.Combine(dir, "vitals.png");
+                if (!UnderDir(dir, txtPath) || !UnderDir(dir, pngPath)) return;
+
                 var sb = new StringBuilder();
                 sb.AppendLine("Desktop Vitals  " + Environment.MachineName + "  " + DateTime.Now.ToString("yyyy-MM-dd HH:mm") + "  \u00B7  " + subtitle.Text);
                 sb.AppendLine();
@@ -2590,21 +2610,26 @@ namespace DesktopVitals
                 Section(sb, "Watching", watchRows, "");
                 Section(sb, "Top apps", topRows, "");
                 string text = sb.ToString();
-                File.WriteAllText(System.IO.Path.Combine(snapshotDir, "vitals.txt"), text, new UTF8Encoding(false));
+                File.WriteAllText(txtPath, text, new UTF8Encoding(false));
 
                 var root = (FrameworkElement)Content;
                 double scale = 2;
                 var bmp = new RenderTargetBitmap((int)Math.Ceiling(root.ActualWidth * scale), (int)Math.Ceiling(root.ActualHeight * scale), 96 * scale, 96 * scale, PixelFormats.Pbgra32);
                 bmp.Render(root);
-                var png = new PngBitmapEncoder();
-                png.Frames.Add(BitmapFrame.Create(bmp));
-                using (var fs = File.Create(System.IO.Path.Combine(snapshotDir, "vitals.png"))) png.Save(fs);
+                var enc = new PngBitmapEncoder();
+                enc.Frames.Add(BitmapFrame.Create(bmp));
+                using (var fs = File.Create(pngPath)) enc.Save(fs);
 
                 try { Console.Out.Write(text); Console.Out.Flush(); } catch (Exception) { }
             }
             catch (Exception ex)
             {
-                try { File.WriteAllText(System.IO.Path.Combine(snapshotDir, "vitals.txt"), "Snapshot failed: " + ex.Message); } catch (Exception) { }
+                try
+                {
+                    string fail = System.IO.Path.Combine(dir, "vitals.txt");
+                    if (UnderDir(dir, fail)) File.WriteAllText(fail, "Snapshot failed: " + ex.Message);
+                }
+                catch (Exception) { }
             }
         }
 
