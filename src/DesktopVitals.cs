@@ -45,42 +45,47 @@ namespace DesktopVitals
         public struct MARGINS { public int l, r, t, b; }
         [DllImport("dwmapi.dll")] public static extern int DwmExtendFrameIntoClientArea(IntPtr h, ref MARGINS m);
         [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
-        [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
-        [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int cmd);
-        [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr h);
-        [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr h);
-        [DllImport("user32.dll")] static extern IntPtr GetWindow(IntPtr h, int cmd);
-        [DllImport("user32.dll")] static extern int GetWindowTextLength(IntPtr h);
-        [DllImport("user32.dll")] static extern int GetWindowThreadProcessId(IntPtr h, out int pid);
-        delegate bool EnumProc(IntPtr h, IntPtr lp);
-        [DllImport("user32.dll")] static extern bool EnumWindows(EnumProc cb, IntPtr lp);
-        [DllImport("dwmapi.dll")] static extern int DwmGetWindowAttribute(IntPtr h, int attr, out int val, int size);
-        public const int SwRestore = 9;
         [DllImport("kernel32.dll")] static extern bool GetLogicalProcessorInformationEx(int rel, IntPtr buf, ref int len);
 
         // Logical processors grouped by physical core, fastest cores first. Each entry is (efficiency class, thread numbers).
+        static List<KeyValuePair<int, int[]>> FlatCores(int n)
+        {
+            var list = new List<KeyValuePair<int, int[]>>(n);
+            for (int i = 0; i < n; i++) list.Add(new KeyValuePair<int, int[]>(0, new[] { i }));
+            return list;
+        }
+
         public static List<KeyValuePair<int, int[]>> CoreLayout()
         {
+            int n = Math.Max(1, Environment.ProcessorCount);
+            // One 64-bit group mask only; beyond that, flat bars without hybrid labels.
+            if (n > 64) return FlatCores(n);
             var cores = new List<KeyValuePair<int, int[]>>();
+            bool multiGroup = false;
             int len = 0;
             GetLogicalProcessorInformationEx(0, IntPtr.Zero, ref len);
-            if (len <= 0) return cores;
+            if (len <= 0) return FlatCores(n);
             IntPtr b = Marshal.AllocHGlobal(len);
             try
             {
-                if (!GetLogicalProcessorInformationEx(0, b, ref len)) return cores;
+                if (!GetLogicalProcessorInformationEx(0, b, ref len)) return FlatCores(n);
                 for (int off = 0; off < len; )
                 {
                     int size = Marshal.ReadInt32(b, off + 4);
                     int eff = Marshal.ReadByte(b, off + 9);
+                    int groupCount = Marshal.ReadInt16(b, off + 30) & 0xffff;
+                    if (groupCount > 1) multiGroup = true;
                     long mask = Marshal.ReadInt64(b, off + 32);
+                    int group = Marshal.ReadInt16(b, off + 40) & 0xffff;
+                    if (group != 0) multiGroup = true;
                     var threads = new List<int>();
                     for (int i = 0; i < 64; i++) if ((mask & (1L << i)) != 0) threads.Add(i);
-                    cores.Add(new KeyValuePair<int, int[]>(eff, threads.ToArray()));
+                    if (threads.Count > 0) cores.Add(new KeyValuePair<int, int[]>(eff, threads.ToArray()));
                     off += size;
                 }
             }
             finally { Marshal.FreeHGlobal(b); }
+            if (multiGroup || cores.Count == 0) return FlatCores(n);
             return cores.OrderByDescending(c => c.Key).ThenBy(c => c.Value[0]).ToList();
         }
 
@@ -101,23 +106,6 @@ namespace DesktopVitals
                 return true;
             }
             finally { Marshal.FreeHGlobal(b); }
-        }
-
-        // The windows you would see in Alt+Tab for these processes: visible, titled, unowned, not cloaked.
-        public static List<IntPtr> AppWindows(int[] pids)
-        {
-            var want = new HashSet<int>(pids);
-            var found = new List<IntPtr>();
-            EnumWindows(delegate (IntPtr h, IntPtr lp)
-            {
-                int pid, cloaked;
-                GetWindowThreadProcessId(h, out pid);
-                if (want.Contains(pid) && IsWindowVisible(h) && GetWindow(h, 4) == IntPtr.Zero && GetWindowTextLength(h) > 0
-                    && !(DwmGetWindowAttribute(h, 14, out cloaked, 4) == 0 && cloaked != 0))
-                    found.Add(h);
-                return true;
-            }, IntPtr.Zero);
-            return found;
         }
 
         public const int QueryLimited = 0x1000;
@@ -142,9 +130,10 @@ namespace DesktopVitals
         static bool ready, tried;
         public static string Name;
 
+        // Out values stay negative when that sensor call failed so the UI does not invent zeros.
         public static bool Read(out double util, out double usedGb, out double totalGb, out int temp, out double watts)
         {
-            util = usedGb = totalGb = watts = 0; temp = 0;
+            util = usedGb = totalGb = watts = -1; temp = -1;
             try
             {
                 if (!tried)
@@ -165,7 +154,7 @@ namespace DesktopVitals
                 if (nvmlDeviceGetMemoryInfo(dev, out m) == 0) { usedGb = m.used / 1073741824.0; totalGb = m.total / 1073741824.0; }
                 if (nvmlDeviceGetTemperature(dev, 0, out t) == 0) temp = (int)t;
                 if (nvmlDeviceGetPowerUsage(dev, out mw) == 0) watts = mw / 1000.0;
-                return true;
+                return util >= 0 || totalGb >= 0;
             }
             catch (Exception) { ready = false; return false; }
         }
@@ -240,7 +229,7 @@ namespace DesktopVitals
             {
                 int ret;
                 int st = Native.NtQueryInformationProcess(h, 60, b, len, out ret);
-                if ((st == Native.StatusLengthMismatch || st == Native.StatusBufferTooSmall) && ret > len && ret < (1 << 20))
+                if ((st == Native.StatusLengthMismatch || st == Native.StatusBufferTooSmall) && ret > len && ret <= 1024 * 1024)
                 {
                     Marshal.FreeHGlobal(b);
                     len = ret;
@@ -255,7 +244,8 @@ namespace DesktopVitals
             finally { Marshal.FreeHGlobal(b); Native.CloseHandle(h); }
         }
 
-        // The process's working folder, read from its parameters block. Works for 64-bit processes you own.
+        // Working folder from the PEB: display-only, best-effort on 64-bit processes you own.
+        // PROCESS_VM_READ is the minimum needed; never execute what is read; skip on any failure.
         public static string CurrentDirectory(int pid)
         {
             IntPtr h = Native.OpenProcess(Native.QueryLimited | 0x0010, false, pid);   // PROCESS_VM_READ
@@ -273,7 +263,7 @@ namespace DesktopVitals
                 if (!Native.ReadProcessMemory(h, parms + 0x38, us, 16, out got)) return null;
                 int len = BitConverter.ToUInt16(us, 0);
                 long bufAddr = BitConverter.ToInt64(us, 8);
-                if (len == 0 || len > 4096 || bufAddr == 0) return null;
+                if (len == 0 || len > 32 * 1024 || bufAddr == 0) return null;
                 byte[] chars = new byte[len];
                 if (!Native.ReadProcessMemory(h, new IntPtr(bufAddr), chars, len, out got)) return null;
                 return Encoding.Unicode.GetString(chars).TrimEnd('\\');
@@ -349,7 +339,6 @@ namespace DesktopVitals
         public string Match;
         public bool ByExe;
         public string Check;      // a file, folder or http address that shows the bot is working
-        public string Log;        // the supervisor log, for counting crash restarts
         public string Code;       // the bot's folder, opened in your editor on click
         public bool Ai;           // shown in the AI card: "| ai", or the match names a known AI program
         public string Kind;       // "| kind: Agent" overrides what the line is called in the AI card
@@ -359,26 +348,37 @@ namespace DesktopVitals
         static readonly string[] AiWords = { "claude", "openclaw", "codex", "gemini", "chatgpt", "openai", "anthropic", "grok", "cursor", "windsurf", "copilot", "aider", "ollama", "llama", "lm studio", "koboldcpp", "vllm", "perplexity" };
         public static bool SoundsLikeAi(string s) { return AiWords.Any(w => s.IndexOf(w, StringComparison.OrdinalIgnoreCase) >= 0); }
 
-        public string Crash = "restart";   // text in a log line that marks a crash restart
-
-        // Your settings live in %APPDATA%\DesktopVitals\watch.txt, outside the app folder. A watch.txt next to the app works too.
+        // watch.txt is yours; review answers go in review.txt. Both live under %APPDATA%\DesktopVitals.
         public static string ConfigFile()
         {
-            string mine = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "DesktopVitals", "watch.txt");
-            if (File.Exists(mine)) return mine;
-            string dir = AppDomain.CurrentDomain.BaseDirectory;
-            string file = System.IO.Path.Combine(dir, "watch.txt");
-            if (!File.Exists(file)) file = System.IO.Path.Combine(System.IO.Path.GetDirectoryName(dir.TrimEnd('\\')), "watch.txt");
-            return File.Exists(file) ? file : mine;
+            return System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "DesktopVitals", "watch.txt");
+        }
+        public static string ReviewFile()
+        {
+            return System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "DesktopVitals", "review.txt");
         }
 
-        // Lines that start with @ are settings: "@temperature-file = <json>", "@temperature-task = <task path>".
-        public static Dictionary<string, string> Settings()
+        public static bool ConfigTooLarge;
+
+        // File.ReadAllLines keeps BOM and UTF-16. Skip files over 1 MB.
+        public static List<string> ReadLines(string file)
+        {
+            var list = new List<string>();
+            if (!File.Exists(file)) return list;
+            try
+            {
+                if (new FileInfo(file).Length > 1024 * 1024) { ConfigTooLarge = true; return list; }
+                list.AddRange(File.ReadAllLines(file));
+            }
+            catch (Exception) { }
+            return list;
+        }
+
+        // Lines that start with @ are settings: "@temperature-file = <json>", "@hide = <name>", and similar.
+        public static Dictionary<string, string> ParseSettings(List<string> lines)
         {
             var d = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            string file = ConfigFile();
-            if (!File.Exists(file)) return d;
-            foreach (string raw in File.ReadAllLines(file))
+            foreach (string raw in lines)
             {
                 string line = raw.Trim();
                 int eq = line.IndexOf('=');
@@ -389,12 +389,10 @@ namespace DesktopVitals
         }
 
         // Every value of a setting that can repeat, such as "@hide = <name>".
-        public static List<string> Many(string key)
+        public static List<string> ParseMany(List<string> lines, string key)
         {
             var list = new List<string>();
-            string file = ConfigFile();
-            if (!File.Exists(file)) return list;
-            foreach (string raw in File.ReadAllLines(file))
+            foreach (string raw in lines)
             {
                 string line = raw.Trim();
                 int eq = line.IndexOf('=');
@@ -405,12 +403,10 @@ namespace DesktopVitals
         }
 
         // "Label = something.exe" matches a process name; anything else matches text in the command line.
-        public static List<WatchRule> Load()
+        public static List<WatchRule> ParseRules(List<string> lines)
         {
             var rules = new List<WatchRule>();
-            string file = ConfigFile();
-            if (!File.Exists(file)) return rules;
-            foreach (string raw in File.ReadAllLines(file))
+            foreach (string raw in lines)
             {
                 string line = raw.Trim();
                 if (line.Length == 0 || line.StartsWith("#") || line.StartsWith("@")) continue;
@@ -424,9 +420,7 @@ namespace DesktopVitals
                 {
                     string x = part.Trim();
                     if (x.StartsWith("check:", StringComparison.OrdinalIgnoreCase)) r.Check = x.Substring(6).Trim();
-                    else if (x.StartsWith("log:", StringComparison.OrdinalIgnoreCase)) r.Log = x.Substring(4).Trim();
                     else if (x.StartsWith("code:", StringComparison.OrdinalIgnoreCase)) r.Code = x.Substring(5).Trim();
-                    else if (x.StartsWith("crash:", StringComparison.OrdinalIgnoreCase)) r.Crash = x.Substring(6).Trim();
                     else if (x.Equals("ai", StringComparison.OrdinalIgnoreCase)) r.Ai = true;
                     else if (x.StartsWith("kind:", StringComparison.OrdinalIgnoreCase)) r.Kind = Theme.Kinds.Keys.FirstOrDefault(k => k.Equals(x.Substring(5).Trim(), StringComparison.OrdinalIgnoreCase));
                 }
@@ -590,25 +584,28 @@ namespace DesktopVitals
     {
         public static List<TaskInfo> Items = new List<TaskInfo>();
         public static bool Ready { get { return read != DateTime.MinValue; } }
+        public static bool Failed;
         static bool busy;
         static DateTime read = DateTime.MinValue;
 
-        // Reads Task Scheduler off the UI thread, at most every 30 s.
+        // Reads Task Scheduler off the UI thread, at most every 30 s. One reader at a time; no watchdog.
         public static void Refresh(Action done)
         {
-            if (busy || (DateTime.Now - read).TotalSeconds < 30) return;
+            if (busy || (Ready && (DateTime.Now - read).TotalSeconds < 30)) return;
             busy = true;
             ThreadPool.QueueUserWorkItem(delegate
             {
                 var found = new List<TaskInfo>();
+                bool failed = false;
                 try
                 {
                     dynamic svc = Activator.CreateInstance(Type.GetTypeFromProgID("Schedule.Service"));
                     svc.Connect();
                     Walk(svc.GetFolder("\\"), found);
                 }
-                catch (Exception) { }
+                catch (Exception) { failed = true; }
                 Items = found;
+                Failed = failed;
                 read = DateTime.Now;
                 busy = false;
                 if (done != null) done();
@@ -652,11 +649,40 @@ namespace DesktopVitals
     {
         public static string Name;
         public static double Util, UsedGb, TotalGb;
-        public static bool Have;
+        public static bool Have, Failed, UtilReady;
         static Dictionary<string, long> prevRaw = new Dictionary<string, long>();
         static long prevTs;
         static bool busy, tried;
         static DateTime read = DateTime.MinValue;
+        static readonly Dictionary<string, string> perfNames = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        // English Perflib\009 name to the local counter name (or the English name if lookup fails).
+        public static string PerfName(string english)
+        {
+            string have;
+            if (perfNames.TryGetValue(english, out have)) return have;
+            string local = english;
+            try
+            {
+                using (var en = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Perflib\009"))
+                using (var cur = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Perflib\CurrentLanguage"))
+                {
+                    string[] enList = en != null ? en.GetValue("Counter") as string[] : null;
+                    string[] curList = cur != null ? cur.GetValue("Counter") as string[] : null;
+                    if (enList != null && curList != null)
+                    {
+                        string index = null;
+                        for (int i = 0; i + 1 < enList.Length; i += 2)
+                            if (string.Equals(enList[i + 1], english, StringComparison.OrdinalIgnoreCase)) { index = enList[i]; break; }
+                        if (index != null)
+                            for (int i = 0; i + 1 < curList.Length; i += 2)
+                                if (curList[i] == index) { local = curList[i + 1]; break; }
+                    }
+                }
+            }
+            catch (Exception) { }
+            return perfNames[english] = local;
+        }
 
         public static void Refresh()
         {
@@ -667,7 +693,7 @@ namespace DesktopVitals
                 try
                 {
                     if (!tried) { tried = true; ReadAdapter(); }
-                    var eng = new PerformanceCounterCategory("GPU Engine").ReadCategory()["Utilization Percentage"];
+                    var eng = new PerformanceCounterCategory(PerfName("GPU Engine")).ReadCategory()[PerfName("Utilization Percentage")];
                     var raw = new Dictionary<string, long>();
                     long ts = 0;
                     foreach (InstanceData d in eng.Values)
@@ -691,15 +717,17 @@ namespace DesktopVitals
                             byType[k] = have + (kv.Value - before) * 100.0 / (ts - prevTs);
                         }
                         Util = byType.Count == 0 ? 0 : Math.Min(100, byType.Values.Max());
+                        UtilReady = true;
                     }
                     prevRaw = raw; prevTs = ts;
-                    var mem = new PerformanceCounterCategory("GPU Adapter Memory").ReadCategory()["Dedicated Usage"];
+                    var mem = new PerformanceCounterCategory(PerfName("GPU Adapter Memory")).ReadCategory()[PerfName("Dedicated Usage")];
                     long used = 0;
                     foreach (InstanceData d in mem.Values) used = Math.Max(used, d.RawValue);
                     UsedGb = used / 1073741824.0;
-                    Have = Name != null || used > 0;
+                    Have = Name != null || used > 0 || UtilReady;
+                    Failed = false;
                 }
-                catch (Exception) { Have = false; }
+                catch (Exception) { Have = false; Failed = true; }
                 read = DateTime.Now;
                 busy = false;
             });
@@ -735,15 +763,12 @@ namespace DesktopVitals
         }
     }
 
-    // What a bot's check says: when it last showed signs of work, how long it has been up, crashes in the last day.
+    // What a bot's check says: when it last showed signs of work, and how long it has been up.
     class BotStatus
     {
         public DateTime? LastSign;     // newest heartbeat file write, or the time the http check answered
         public TimeSpan? Uptime;       // from the http check, when it reports one
         public string Problem;         // set when the http check answers but reports something failing
-        public int Crashes = -1;
-        public int CrashLine;          // line in the supervisor log where the latest crash in the last day is recorded
-        public DateTime CrashTime;
         public bool Busy;
         public DateTime Read = DateTime.MinValue;
 
@@ -757,7 +782,6 @@ namespace DesktopVitals
                 {
                     if (r.Check.StartsWith("http", StringComparison.OrdinalIgnoreCase)) ReadHttp(r.Check);
                     else LastSign = NewestWrite(r.Check);
-                    if (r.Log != null) CountCrashes(r.Log, r.Crash);
                 }
                 catch (Exception) { }
                 finally { Read = DateTime.Now; Busy = false; }
@@ -766,20 +790,28 @@ namespace DesktopVitals
 
         void ReadHttp(string url)
         {
+            Uri uri;
+            if (!Uri.TryCreate(url, UriKind.Absolute, out uri)
+                || !string.Equals(uri.Scheme, "http", StringComparison.OrdinalIgnoreCase)
+                || !uri.IsLoopback)
+            {
+                Uptime = null; LastSign = null; Problem = "check must be a local address";
+                return;
+            }
             try
             {
-                var req = (System.Net.HttpWebRequest)System.Net.WebRequest.Create(url);
-                req.Timeout = 3000; req.ReadWriteTimeout = 3000; req.Proxy = null;
-                string body;
+                var req = (System.Net.HttpWebRequest)System.Net.WebRequest.Create(uri);
+                req.Timeout = 3000; req.ReadWriteTimeout = 3000; req.Proxy = null; req.AllowAutoRedirect = false;
                 using (var resp = req.GetResponse())
-                using (var sr = new StreamReader(resp.GetResponseStream())) body = sr.ReadToEnd();
+                using (var stream = resp.GetResponseStream())
+                using (var sr = new StreamReader(stream))
+                {
+                    var buf = new char[64 * 1024];
+                    sr.Read(buf, 0, buf.Length);
+                }
                 LastSign = DateTime.Now;
-                var up = Regex.Match(body, "\"uptimeMs\"\\s*:\\s*([0-9.]+)");
-                Uptime = up.Success ? TimeSpan.FromMilliseconds(double.Parse(up.Groups[1].Value, CultureInfo.InvariantCulture)) : (TimeSpan?)null;
-                var failing = Regex.Match(body, "\"failing\"\\s*:\\s*\\[([^\\]]*)\\]");
-                string f = failing.Success ? failing.Groups[1].Value.Replace("\"", "").Trim() : "";
-                bool ready = !Regex.IsMatch(body, "\"ready\"\\s*:\\s*false");
-                Problem = f.Length > 0 ? "failing: " + f : ready ? null : "starting";
+                Uptime = null;
+                Problem = null;
             }
             catch (Exception) { Uptime = null; Problem = null; }
         }
@@ -791,45 +823,28 @@ namespace DesktopVitals
             if (!Directory.Exists(path)) return null;
             DateTime? newest = null;
             string dir = path;
+            int seen = 0;
             for (int depth = 0; depth < 4 && dir != null; depth++)
             {
-                foreach (var f in Directory.GetFiles(dir))
+                string[] files;
+                try { files = Directory.GetFiles(dir); }
+                catch (Exception) { break; }
+                foreach (var f in files)
                 {
-                    var t = File.GetLastWriteTime(f);
-                    if (newest == null || t > newest) newest = t;
+                    if (++seen > 500) return newest;
+                    try
+                    {
+                        var t = File.GetLastWriteTime(f);
+                        if (newest == null || t > newest) newest = t;
+                    }
+                    catch (Exception) { }
                 }
-                var subs = Directory.GetDirectories(dir);
+                string[] subs;
+                try { subs = Directory.GetDirectories(dir); }
+                catch (Exception) { break; }
                 dir = subs.Length == 0 ? null : subs.OrderBy(d => d, StringComparer.OrdinalIgnoreCase).Last();
             }
             return newest;
-        }
-
-        // A crash is a log line from the last day that starts with a timestamp and contains the crash text ("restart" by default).
-        void CountCrashes(string log, string crashText)
-        {
-            if (!File.Exists(log)) { Crashes = -1; return; }
-            var since = DateTime.Now.AddHours(-24);
-            int n = 0, lineNo = 0, crashLine = 0;
-            DateTime crashTime = DateTime.MinValue;
-            using (var fs = new FileStream(log, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
-            using (var sr = new StreamReader(fs))
-            {
-                string line;
-                while ((line = sr.ReadLine()) != null)
-                {
-                    lineNo++;
-                    if (line.Length < 19 || line.IndexOf(crashText, StringComparison.OrdinalIgnoreCase) < 0) continue;
-                    DateTime t;
-                    string stamp = line.Substring(0, 19).Replace('T', ' ');
-                    if (DateTime.TryParseExact(stamp, "yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture, DateTimeStyles.None, out t) && t >= since)
-                    {
-                        n++;
-                        crashLine = lineNo;
-                        crashTime = t;
-                    }
-                }
-            }
-            CrashLine = crashLine; CrashTime = crashTime; Crashes = n;
         }
     }
 
@@ -906,21 +921,21 @@ namespace DesktopVitals
         public static string Gb(double bytes)
         {
             double gb = bytes / 1073741824.0;
-            return gb >= 100 ? gb.ToString("0") : gb.ToString("0.0");
+            return gb >= 100 ? gb.ToString("0", CultureInfo.InvariantCulture) : gb.ToString("0.0", CultureInfo.InvariantCulture);
         }
 
         public static string Mem(long bytes)
         {
             double mb = bytes / 1048576.0;
-            if (mb >= 1024) return (mb / 1024).ToString("0.0") + " GB";
-            return mb.ToString("0") + " MB";
+            if (mb >= 1024) return (mb / 1024).ToString("0.0", CultureInfo.InvariantCulture) + " GB";
+            return mb.ToString("0", CultureInfo.InvariantCulture) + " MB";
         }
 
         public static string Pct(double v)
         {
             if (v < 0.05) return "0%";
-            if (v < 10) return v.ToString("0.0") + "%";
-            return v.ToString("0") + "%";
+            if (v < 10) return v.ToString("0.0", CultureInfo.InvariantCulture) + "%";
+            return v.ToString("0", CultureInfo.InvariantCulture) + "%";
         }
     }
 
@@ -1241,7 +1256,7 @@ namespace DesktopVitals
     class ReviewItem
     {
         public string Name, Kind, OrigKind, Detail, Match, Section;
-        public bool On = true, Missed;
+        public bool On = true;
         public WatchRule Rule;
         public string[] Kinds;      // what clicking the tag cycles through; null when the kind is fixed
     }
@@ -1284,11 +1299,6 @@ namespace DesktopVitals
         StackPanel body, aiList, botList, watchList, topList;
         StatRow cpuRow, memRow, gpuRow, vramRow, diskRow;
         ThreadStrip threadStrip;
-        StackPanel vramList;
-        Dictionary<int, long> vramByPid = new Dictionary<int, long>();
-        bool vramBusy;
-        DateTime vramRead = DateTime.MinValue;
-        readonly List<string> vramLines = new List<string>();
         long[] threadBusy, threadTotal, prevThreadBusy, prevThreadTotal;
         readonly List<ProcRow> aiRows = new List<ProcRow>();
         readonly List<ProcRow> watchRows = new List<ProcRow>();
@@ -1306,7 +1316,10 @@ namespace DesktopVitals
         Grid rootGrid;
         ScrollViewer dashScroll;
         UIElement reviewView;
+        TextBlock reviewError;
         bool needReview;
+        bool acceptReview;
+        bool configSkipped;
         static readonly string[] AiChoices = { "Agent", "App", "Model", "Bot", "Watching" };
         static readonly string[] ScriptChoices = { "Script", "Agent", "Bot" };
         static readonly string[] WatchChoices = { "Watching", "App", "Agent", "Bot", "Model" };
@@ -1316,12 +1329,15 @@ namespace DesktopVitals
 
         readonly string snapshotDir;
 
-        public VitalsWindow() : this(null, false) { }
+        public VitalsWindow() : this(null, false, false) { }
 
         // With a folder, the window renders off screen, writes vitals.txt and vitals.png there, and closes.
-        public VitalsWindow(string snapshotDir, bool review)
+        public VitalsWindow(string snapshotDir, bool review) : this(snapshotDir, review, false) { }
+
+        public VitalsWindow(string snapshotDir, bool review, bool acceptReview)
         {
             this.snapshotDir = snapshotDir;
+            this.acceptReview = acceptReview;
             LoadConfig();
             // First run: once the first readings are in, show what was found and ask if it's right.
             needReview = review || (snapshotDir == null && !settings.ContainsKey("reviewed"));
@@ -1356,7 +1372,13 @@ namespace DesktopVitals
                 ShowActivated = false;
                 ShowInTaskbar = false;
                 var done = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(4500) };
-                done.Tick += delegate { done.Stop(); WriteSnapshot(); Close(); };
+                done.Tick += delegate
+                {
+                    done.Stop();
+                    if (acceptReview) { acceptReview = false; WriteAcceptedReview(); }
+                    WriteSnapshot();
+                    Close();
+                };
                 Loaded += delegate { done.Start(); };
             }
 
@@ -1371,20 +1393,31 @@ namespace DesktopVitals
 
         void LoadConfig()
         {
-            var all = WatchRule.Load();
+            WatchRule.ConfigTooLarge = false;
+            var watch = WatchRule.ReadLines(WatchRule.ConfigFile());
+            var review = WatchRule.ReadLines(WatchRule.ReviewFile());
+            configSkipped = WatchRule.ConfigTooLarge;
+            var all = WatchRule.ParseRules(watch);
             rules = all.Where(r => !r.IsBot && !r.Ai).ToList();
             botRules = all.Where(r => r.IsBot && !r.Ai).ToList();
             aiRules = all.Where(r => r.Ai).ToList();
-            settings = WatchRule.Settings();
-            hidden = new HashSet<string>(WatchRule.Many("hide"), StringComparer.OrdinalIgnoreCase);
+            settings = WatchRule.ParseSettings(watch);
+            foreach (var kv in WatchRule.ParseSettings(review)) settings[kv.Key] = kv.Value;
+            hidden = new HashSet<string>(WatchRule.ParseMany(watch, "hide"), StringComparer.OrdinalIgnoreCase);
+            foreach (string h in WatchRule.ParseMany(review, "hide")) hidden.Add(h);
             kindOf = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            foreach (string v in WatchRule.Many("kind"))
+            Action<List<string>> takeKinds = delegate(List<string> lines)
             {
-                int bar = v.LastIndexOf('|');
-                if (bar <= 0) continue;
-                string k = Theme.Kinds.Keys.FirstOrDefault(x => x.Equals(v.Substring(bar + 1).Trim(), StringComparison.OrdinalIgnoreCase));
-                if (k != null) kindOf[v.Substring(0, bar).Trim()] = k;
-            }
+                foreach (string v in WatchRule.ParseMany(lines, "kind"))
+                {
+                    int bar = v.LastIndexOf('|');
+                    if (bar <= 0) continue;
+                    string k = Theme.Kinds.Keys.FirstOrDefault(x => x.Equals(v.Substring(bar + 1).Trim(), StringComparison.OrdinalIgnoreCase));
+                    if (k != null) kindOf[v.Substring(0, bar).Trim()] = k;
+                }
+            };
+            takeKinds(watch);
+            takeKinds(review);
         }
 
         // ---------- layout ----------
@@ -1413,8 +1446,7 @@ namespace DesktopVitals
             threadStrip = new ThreadStrip(Native.CoreLayout());
             threadBusy = new long[cores]; threadTotal = new long[cores];
             prevThreadBusy = new long[cores]; prevThreadTotal = new long[cores];
-            vramList = new StackPanel { Margin = new Thickness(0, -2, 0, 6) };
-            body.Children.Add(Card("System", null, cpuRow, threadStrip, memRow, gpuRow, vramRow, vramList, diskRow));
+            body.Children.Add(Card("System", null, cpuRow, threadStrip, memRow, gpuRow, vramRow, diskRow));
 
             aiList = new StackPanel();
             aiCard = Card("AI", Columns(Head("CPU"), Head("Memory")), aiList);
@@ -1485,7 +1517,6 @@ namespace DesktopVitals
             var k = new Ellipse { Width = 18, Height = 18, Fill = Brushes.White, HorizontalAlignment = HorizontalAlignment.Left };
             knob = new TranslateTransform(20, 0);
             k.RenderTransform = knob;
-            k.Effect = new System.Windows.Media.Effects.DropShadowEffect { BlurRadius = 4, ShadowDepth = 1, Opacity = 0.3 };
             switchTrack.Child = new Grid { Margin = new Thickness(0), Children = { k }, VerticalAlignment = VerticalAlignment.Center };
             k.Margin = new Thickness(0, 0, 0, 0);
             sw.Children.Add(stateLabel);
@@ -1496,11 +1527,6 @@ namespace DesktopVitals
             right.Children.Add(sw);
 
             right.Children.Add(CaptionButton("\uE713", "Review what's shown", delegate { ShowReview(); }));
-            right.Children.Add(CaptionButton("\uE9D9", "Open Task Manager", delegate
-            {
-                try { using (Process.Start(new ProcessStartInfo("taskmgr.exe") { UseShellExecute = true })) { } }
-                catch (Exception) { } // declined the admin prompt
-            }));
             right.Children.Add(CaptionButton("\uE921", "Minimize", delegate { WindowState = WindowState.Minimized; }));
             right.Children.Add(CaptionButton("\uE8BB", "Close", delegate { Close(); }));
             g.Children.Add(right);
@@ -1623,7 +1649,7 @@ namespace DesktopVitals
                 prev.Clear();
                 cmdCache.Clear();
                 prevKernel = 0;
-                if (!live) subtitle.Text = "Off \u00B7 not collecting";
+                if (!live) subtitle.Text = "Off \u00B7 not collecting" + (configSkipped ? " \u00B7 settings file too large" : "");
                 Native.SetProcessWorkingSetSize(Native.GetCurrentProcess(), (IntPtr)(-1), (IntPtr)(-1));
             }
         }
@@ -1694,32 +1720,39 @@ namespace DesktopVitals
                 swap = prevThreadTotal; prevThreadTotal = threadTotal; threadTotal = swap;
             }
 
-            ShowVram(procs);
-
             var ms = new Native.MEMSTAT { len = (uint)Marshal.SizeOf(typeof(Native.MEMSTAT)) };
-            Native.GlobalMemoryStatusEx(ref ms);
-            double used = ms.total - ms.avail;
-            memRow.Set(Theme.Gb(used) + " of " + Theme.Gb(ms.total) + " GB", Theme.Pct(100 * used / ms.total), used / ms.total);
+            if (!Native.GlobalMemoryStatusEx(ref ms) || ms.total == 0) memRow.Set("not available", "", 0);
+            else
+            {
+                double used = ms.total - ms.avail;
+                memRow.Set(Theme.Gb(used) + " of " + Theme.Gb(ms.total) + " GB", Theme.Pct(100 * used / ms.total), used / ms.total);
+            }
 
             double gu, vu, vt, gw; int gt;
             if (Nvml.Read(out gu, out vu, out vt, out gt, out gw))
             {
-                gpuRow.Set((Nvml.Name ?? "GPU") + " \u00B7 " + gt + "\u00B0C \u00B7 " + gw.ToString("0") + " W", Theme.Pct(gu), gu / 100);
-                vramRow.Set(vu.ToString("0.0") + " of " + vt.ToString("0") + " GB", Theme.Pct(100 * vu / vt), vu / vt);
+                var bits = new List<string> { Nvml.Name ?? "GPU" };
+                if (gt >= 0) bits.Add(gt + "\u00B0C");
+                if (gw >= 0) bits.Add(gw.ToString("0") + " W");
+                gpuRow.Set(string.Join(" \u00B7 ", bits), gu >= 0 ? Theme.Pct(gu) : "", gu >= 0 ? gu / 100 : 0);
+                if (vt > 0) vramRow.Set(vu.ToString("0.0") + " of " + vt.ToString("0") + " GB", Theme.Pct(100 * vu / vt), vu / vt);
+                else if (vu >= 0) vramRow.Set(vu.ToString("0.0") + " GB", "", 0);
+                else vramRow.Set("not available", "", 0);
             }
             else
             {
                 GpuCounters.Refresh();
                 if (GpuCounters.Have)
                 {
-                    gpuRow.Set(GpuCounters.Name ?? "GPU", Theme.Pct(GpuCounters.Util), GpuCounters.Util / 100);
+                    gpuRow.Set(GpuCounters.Name ?? "GPU", GpuCounters.UtilReady ? Theme.Pct(GpuCounters.Util) : "", GpuCounters.UtilReady ? GpuCounters.Util / 100 : 0);
                     double t = GpuCounters.TotalGb, u = GpuCounters.UsedGb;
                     vramRow.Set(t > 0 ? u.ToString("0.0") + " of " + t.ToString("0") + " GB" : u.ToString("0.0") + " GB", t > 0 ? Theme.Pct(100 * u / t) : "", t > 0 ? u / t : 0);
                 }
                 else
                 {
-                    gpuRow.Set("not available", "", 0);
-                    vramRow.Set("not available", "", 0);
+                    string msg = GpuCounters.Failed ? "GPU readings not available on this system" : "not available";
+                    gpuRow.Set(msg, "", 0);
+                    vramRow.Set(msg, "", 0);
                 }
             }
 
@@ -1739,7 +1772,7 @@ namespace DesktopVitals
 
             TimeSpan up = TimeSpan.FromMilliseconds(Native.GetTickCount64());
             string upText = up.TotalDays >= 1 ? string.Format("{0}d {1}h", (int)up.TotalDays, up.Hours) : string.Format("{0}h {1}m", up.Hours, up.Minutes);
-            subtitle.Text = "Up " + upText + " \u00B7 " + procs.Count + " processes";
+            subtitle.Text = "Up " + upText + " \u00B7 " + procs.Count + " processes" + (configSkipped ? " \u00B7 settings file too large" : "");
 
             // AI: local models, coding agents, AI apps, and the bots and watched lines that are AI.
             lastProcs = procs;
@@ -1750,20 +1783,22 @@ namespace DesktopVitals
             for (int i = 0; i < ai.Count; i++) ShowAi(aiRows[i], ai[i]);
 
             // Watching
-            EnsureRows(watchList, watchRows, rules.Count);
-            for (int i = 0; i < rules.Count; i++)
+            var shownWatch = rules.Where(r => !hidden.Contains(r.Label)).ToList();
+            EnsureRows(watchList, watchRows, shownWatch.Count);
+            for (int i = 0; i < shownWatch.Count; i++)
             {
-                var hits = procs.Where(rules[i].Hit).ToList();
+                var hits = procs.Where(shownWatch[i].Hit).ToList();
                 var tip = hits.Count == 0 ? null : string.Join("\n", hits.Select(h => h.Pid + "  " + Trim(h.Cmd.Length > 0 ? h.Cmd : h.Exe, 140)));
-                watchRows[i].SetWatched(rules[i].Label, hits.Count > 0, hits.Count, hits.Sum(h => h.Cpu), hits.Sum(h => h.Private), tip);
+                watchRows[i].SetWatched(shownWatch[i].Label, hits.Count > 0, hits.Count, hits.Sum(h => h.Cpu), hits.Sum(h => h.Private), tip);
                 watchRows[i].Pids = hits.Select(h => h.Pid).ToArray();
             }
 
             // Bots
-            EnsureRows(botList, botRows, botRules.Count);
-            for (int i = 0; i < botRules.Count; i++)
+            var shownBots = botRules.Where(r => !hidden.Contains(r.Label)).ToList();
+            EnsureRows(botList, botRows, shownBots.Count);
+            for (int i = 0; i < shownBots.Count; i++)
             {
-                var r = botRules[i];
+                var r = shownBots[i];
                 var hits = procs.Where(r.Hit).ToList();
                 botRows[i].Pids = hits.Select(h => h.Pid).ToArray();
                 botRows[i].Bot = r;
@@ -1816,17 +1851,36 @@ namespace DesktopVitals
             // Scheduled tasks: running first, then failures, then the most recent runs.
             TaskList.Refresh(null);
             var tasks = TaskList.Items.Where(t => !hidden.Contains(t.Name)).OrderByDescending(t => t.Running).ThenByDescending(t => t.Failed).ThenByDescending(t => t.LastRun).Take(8).ToList();
-            tasksCard.Visibility = tasks.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
-            EnsureRows(taskList, taskRows, tasks.Count);
-            for (int i = 0; i < tasks.Count; i++)
+            if (!TaskList.Ready)
             {
-                var t = tasks[i];
-                string result = t.Running ? "running" : t.NeverRan ? "\u2013" : t.Result == 0x41306 ? "stopped" : t.Failed ? "failed" : "OK";
-                string last = t.NeverRan ? "never" : Short(DateTime.Now - t.LastRun) + " ago";
-                string next = t.NextRun > DateTime.Now ? "next in " + Ago(t.NextRun - DateTime.Now) : "";
-                string tip = t.Path + "\n" + Trim(t.Action ?? "", 160) + (t.Failed ? "\nLast result: 0x" + t.Result.ToString("X") : "");
-                taskRows[i].Task = t;
-                taskRows[i].SetPlain(t.Name, t.Running ? Theme.Green : t.Failed ? Theme.AmberDot : Theme.Off, next, result, last, tip);
+                tasksCard.Visibility = Visibility.Visible;
+                EnsureRows(taskList, taskRows, 1);
+                taskRows[0].Task = null;
+                taskRows[0].Pids = new int[0];
+                taskRows[0].SetPlain("loading", Theme.Off, "", "", "", "");
+            }
+            else if (TaskList.Failed && tasks.Count == 0)
+            {
+                tasksCard.Visibility = Visibility.Visible;
+                EnsureRows(taskList, taskRows, 1);
+                taskRows[0].Task = null;
+                taskRows[0].Pids = new int[0];
+                taskRows[0].SetPlain("Task Scheduler not available", Theme.Off, "", "", "", "");
+            }
+            else
+            {
+                tasksCard.Visibility = tasks.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
+                EnsureRows(taskList, taskRows, tasks.Count);
+                for (int i = 0; i < tasks.Count; i++)
+                {
+                    var t = tasks[i];
+                    string result = t.Running ? "running" : t.NeverRan ? "n/a" : t.Result == 0x41306 ? "stopped" : t.Failed ? "failed" : "OK";
+                    string last = t.NeverRan ? "never" : Short(DateTime.Now - t.LastRun) + " ago";
+                    string next = t.NextRun > DateTime.Now ? "next in " + Ago(t.NextRun - DateTime.Now) : "";
+                    string tip = t.Path + "\n" + Trim(t.Action ?? "", 160) + (t.Failed ? "\nLast result: 0x" + t.Result.ToString("X") : "");
+                    taskRows[i].Task = t;
+                    taskRows[i].SetPlain(t.Name, t.Running ? Theme.Green : t.Failed ? Theme.AmberDot : Theme.Off, next, result, last, tip);
+                }
             }
 
             // Top apps, grouped by exe
@@ -1849,26 +1903,20 @@ namespace DesktopVitals
                 topRows[i].Pids = g.Pids;
             }
 
-            if (needReview && tickCount >= 2 && TaskList.Ready) { needReview = false; ShowReview(); }
+            if (needReview && tickCount >= 2) { needReview = false; ShowReview(); }
         }
 
         static string Trim(string s, int n) { return s.Length <= n ? s : s.Substring(0, n) + "\u2026"; }
 
-        // One unit, for narrow columns: 45s, 12m, 13h, 2d.
-        static string Short(TimeSpan t)
+        // compact: 45s, 12m, 13h, 2d. otherwise: 13h 05m, 2d 3h.
+        static string Short(TimeSpan t) { return SpanText(t, true); }
+        static string Ago(TimeSpan t) { return SpanText(t, false); }
+        static string SpanText(TimeSpan t, bool compact)
         {
             if (t.TotalSeconds < 60) return Math.Max(0, (int)t.TotalSeconds) + "s";
             if (t.TotalMinutes < 60) return (int)t.TotalMinutes + "m";
-            if (t.TotalHours < 24) return (int)t.TotalHours + "h";
-            return (int)t.TotalDays + "d";
-        }
-
-        static string Ago(TimeSpan t)
-        {
-            if (t.TotalSeconds < 60) return Math.Max(0, (int)t.TotalSeconds) + "s";
-            if (t.TotalMinutes < 60) return (int)t.TotalMinutes + "m";
-            if (t.TotalHours < 24) return (int)t.TotalHours + "h " + t.Minutes.ToString("00") + "m";
-            return (int)t.TotalDays + "d " + t.Hours + "h";
+            if (t.TotalHours < 24) return compact ? (int)t.TotalHours + "h" : (int)t.TotalHours + "h " + t.Minutes.ToString("00") + "m";
+            return compact ? (int)t.TotalDays + "d" : (int)t.TotalDays + "d " + t.Hours + "h";
         }
 
         // A bot's state from its check: 0 not running, 1 working, 2 quiet or failing. right is when it last showed work.
@@ -1878,19 +1926,13 @@ namespace DesktopVitals
             if (!botStatus.TryGetValue(r.Label, out st)) botStatus[r.Label] = st = new BotStatus();
             st.Refresh(r);
             tip = hits.Count == 0 ? null : string.Join("\n", hits.Select(h => h.Pid + "  " + Trim(h.Cmd.Length > 0 ? h.Cmd : h.Exe, 140)));
-            if (r.Code != null)
-            {
-                string how = st.Crashes > 0 && r.Log != null ? OpenInEditor + " at the crash from " + st.CrashTime.ToString("ddd h:mm tt") : OpenInEditor;
-                tip = tip == null ? how : how + "\n\n" + tip;
-            }
+            if (r.Code != null) tip = tip == null ? OpenInEditor : OpenInEditor + "\n\n" + tip;
             state = 0; detail = ""; right = "not running";
             if (hits.Count == 0) return;
 
             TimeSpan botUp = st.Uptime ?? (DateTime.UtcNow - DateTime.FromFileTimeUtc(hits.Max(h => h.CreateTime)));
             var bits = new List<string> { "up " + Ago(botUp) };
             if (st.Problem != null) bits.Add(st.Problem);
-            else if (st.Crashes == 0) bits.Add("no crashes");
-            else if (st.Crashes > 0) bits.Add(st.Crashes + (st.Crashes == 1 ? " crash" : " crashes") + " in 24h");
             double quiet = st.LastSign.HasValue ? (DateTime.Now - st.LastSign.Value).TotalSeconds : -1;
             bool stale = st.Read != DateTime.MinValue && (quiet < 0 || quiet > 300);
             right = st.Read == DateTime.MinValue ? "" : quiet < 0 ? "no sign" : quiet < 60 ? "just now" : Short(TimeSpan.FromSeconds(quiet)) + " ago";
@@ -1990,7 +2032,7 @@ namespace DesktopVitals
             foreach (var l in lines)
             {
                 string k;
-                if (l.Rule == null && kindOf.TryGetValue(l.Name, out k)) l.Kind = k;
+                if (kindOf.TryGetValue(l.Name, out k)) l.Kind = k;
             }
             return lines.OrderBy(l => l.Procs.Count == 0).ThenBy(l => KindOrder.IndexOf(l.Kind)).ThenBy(l => l.Name, StringComparer.OrdinalIgnoreCase).ToList();
         }
@@ -2034,7 +2076,7 @@ namespace DesktopVitals
         }
 
         // Optional: "@temperature-file" points at a JSON file a sensor tool keeps writing, with "cpu_temp_c",
-        // "cpu_pkg_power_w" and "ts". "@temperature-task" is a scheduled task to start when the file goes stale.
+        // "cpu_pkg_power_w" and "ts". Read only; nothing is started when the file goes stale.
         string SensorDetail()
         {
             string file;
@@ -2044,11 +2086,19 @@ namespace DesktopVitals
                 if (!File.Exists(file)) return "temperature sensor off";
                 string json;
                 using (var fs = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
-                using (var sr = new StreamReader(fs)) json = sr.ReadToEnd();
+                {
+                    if (fs.Length > 64 * 1024) return "";
+                    var buf = new char[64 * 1024];
+                    using (var sr = new StreamReader(fs))
+                    {
+                        int n = sr.Read(buf, 0, buf.Length);
+                        json = new string(buf, 0, n);
+                    }
+                }
                 var ts = Regex.Match(json, "\"ts\"\\s*:\\s*\"([^\"]+)\"");
                 DateTimeOffset when;
                 if (!ts.Success || !DateTimeOffset.TryParse(ts.Groups[1].Value, CultureInfo.InvariantCulture, DateTimeStyles.None, out when)) return "";
-                if ((DateTimeOffset.Now - when).TotalSeconds > 60) { WakeSensor(); return "temperature startingâ€¦"; }
+                if ((DateTimeOffset.Now - when).TotalSeconds > 60) return "temperature stale";
                 var t = Regex.Match(json, "\"cpu_temp_c\"\\s*:\\s*([0-9.]+)");
                 var w = Regex.Match(json, "\"cpu_pkg_power_w\"\\s*:\\s*([0-9.]+)");
                 var parts = new List<string>();
@@ -2059,23 +2109,6 @@ namespace DesktopVitals
             catch (Exception) { return ""; }
         }
 
-        // While this window is live, start the sensor task again when its file goes quiet.
-        DateTime lastWake = DateTime.MinValue;
-        void WakeSensor()
-        {
-            string task;
-            if (!settings.TryGetValue("temperature-task", out task) || (DateTime.Now - lastWake).TotalMinutes < 2) return;
-            lastWake = DateTime.Now;
-            try
-            {
-                var psi = new ProcessStartInfo("schtasks.exe", "/run /tn \"" + task + "\"");
-                psi.CreateNoWindow = true;
-                psi.UseShellExecute = false;
-                using (Process.Start(psi)) { }
-            }
-            catch (Exception) { }
-        }
-
         // Local model servers: llama.cpp, Ollama, LM Studio, koboldcpp, vLLM.
         static string ModelLabel(Proc p)
         {
@@ -2084,7 +2117,7 @@ namespace DesktopVitals
             bool pyServer = exe.StartsWith("python", StringComparison.OrdinalIgnoreCase)
                 && (p.Cmd.IndexOf("vllm", StringComparison.OrdinalIgnoreCase) >= 0 || p.Cmd.IndexOf("llama_cpp.server", StringComparison.OrdinalIgnoreCase) >= 0);
             if (!known && !pyServer) return null;
-            var args = SplitArgs(p.Cmd);
+            var args = Scripts.SplitArgs(p.Cmd);
             string model = ArgAfter(args, "-m", "--model", "-hf", "--hf-repo");
             string port = ArgAfter(args, "--port");
             if (exe.StartsWith("ollama", StringComparison.OrdinalIgnoreCase))
@@ -2113,21 +2146,6 @@ namespace DesktopVitals
             return null;
         }
 
-        static List<string> SplitArgs(string cmd)
-        {
-            var list = new List<string>();
-            var sb = new StringBuilder();
-            bool quoted = false;
-            foreach (char c in cmd)
-            {
-                if (c == '"') { quoted = !quoted; continue; }
-                if (c == ' ' && !quoted) { if (sb.Length > 0) { list.Add(sb.ToString()); sb.Clear(); } continue; }
-                sb.Append(c);
-            }
-            if (sb.Length > 0) list.Add(sb.ToString());
-            return list;
-        }
-
         void EnsureRows(StackPanel host, List<ProcRow> rows, int n)
         {
             while (rows.Count < n)
@@ -2143,27 +2161,85 @@ namespace DesktopVitals
             for (int i = 0; i < rows.Count; i++) rows[i].Visibility = i < n ? Visibility.Visible : Visibility.Collapsed;
         }
 
-        // Clicking a line never ends anything. It brings that app's window to the front,
-        // cycling through its windows on repeat clicks, or shows its file in Explorer when it has none.
-        IntPtr lastJump = IntPtr.Zero;
-        // Cursor or VS Code, whichever is on PATH.
+        // Only "| code:" paths open in the editor. Everything else opens File Explorer.
         static readonly string[] Editor = FindEditor();
         static string[] FindEditor()
         {
-            var dirs = (Environment.GetEnvironmentVariable("PATH") ?? "").Split(';');
-            foreach (var e in new[] { new[] { "cursor", "Cursor" }, new[] { "code", "VS Code" } })
-                if (dirs.Any(d => { try { return File.Exists(System.IO.Path.Combine(d.Trim(), e[0] + ".cmd")); } catch (Exception) { return false; } })) return e;
+            try
+            {
+                string local = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Programs", "cursor", "Cursor.exe");
+                if (File.Exists(local)) return new[] { local, "Cursor" };
+            }
+            catch (Exception) { }
+            foreach (var e in new[] { new[] { "Cursor.exe", "Cursor" }, new[] { "Code.exe", "VS Code" } })
+                foreach (string raw in (Environment.GetEnvironmentVariable("PATH") ?? "").Split(';'))
+                {
+                    string d = raw.Trim().TrimEnd('\\');
+                    if (d.Length == 0) continue;
+                    try
+                    {
+                        for (int up = 0; up < 4 && d != null; up++)
+                        {
+                            string exe = System.IO.Path.Combine(d, e[0]);
+                            if (File.Exists(exe)) return new[] { exe, e[1] };
+                            d = System.IO.Path.GetDirectoryName(d);
+                        }
+                    }
+                    catch (Exception) { }
+                }
             return null;
         }
         static string OpenInEditor { get { return Editor == null ? "Show in File Explorer" : "Open in " + Editor[1]; } }
 
+        // Paths from other processes or settings: show or open only when they look like real files/folders.
+        static bool SafePath(string path)
+        {
+            if (string.IsNullOrEmpty(path)) return false;
+            if (path.IndexOf('"') >= 0 || path.IndexOf('\n') >= 0 || path.IndexOf('\r') >= 0 || path.IndexOf('%') >= 0) return false;
+            try { return File.Exists(path) || Directory.Exists(path); }
+            catch (Exception) { return false; }
+        }
+
+        static string QuotePath(string path)
+        {
+            return "\"" + path.TrimEnd('\\') + "\"";
+        }
+
+        // User-typed "| code:" folder or file: open in Cursor/VS Code when found.
+        static void OpenCode(string path)
+        {
+            if (!SafePath(path)) return;
+            try
+            {
+                if (Editor != null)
+                {
+                    using (Process.Start(new ProcessStartInfo(Editor[0], QuotePath(path)) { UseShellExecute = false })) { }
+                    return;
+                }
+                OpenExplorer(path);
+            }
+            catch (Exception) { }
+        }
+
+        // Process, task, or command-line paths: select the file in Explorer, or open the folder.
+        static void OpenExplorer(string path)
+        {
+            if (!SafePath(path)) return;
+            try
+            {
+                string explorer = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), "explorer.exe");
+                string args = (File.Exists(path) ? "/select," : "") + QuotePath(path);
+                using (Process.Start(new ProcessStartInfo(explorer, args) { UseShellExecute = false })) { }
+            }
+            catch (Exception) { }
+        }
+
         string Hint(ProcRow row)
         {
-            if (row.Task != null) return row.Task.Script != null ? OpenInEditor : "Open Task Scheduler";
+            if (row.Task != null) return row.Task.Script != null ? "Show in File Explorer" : "";
             if (row.Bot != null && row.Bot.Code != null) return OpenInEditor;
             if (row.Pids.Length == 0) return "";
-            if (Native.AppWindows(row.Pids).Count > 0) return "Switch to window";
-            if (row.Script != null || ScriptOf(row.Pids) != null) return OpenInEditor;
+            if (row.Script != null || ScriptOf(row.Pids) != null) return "Show in File Explorer";
             if (row.Pids.Select(Procs.ImagePath).Any(x => !string.IsNullOrEmpty(x))) return "Show in File Explorer";
             return "";
         }
@@ -2182,193 +2258,55 @@ namespace DesktopVitals
             return found;
         }
 
-        // Opens a folder (and a file in it) in the editor, or in File Explorer when there is no editor.
-        static void OpenCode(string folder, string file, int line)
-        {
-            if (Editor == null)
-            {
-                string target = file ?? folder;
-                try { using (Process.Start("explorer.exe", (file != null ? "/select,\"" : "\"") + target + "\"")) { } } catch (Exception) { }
-                return;
-            }
-            string args = "\"" + folder + "\"";
-            if (file != null) args += line > 0 ? " -g \"" + file + ":" + line + "\"" : " \"" + file + "\"";
-            RunEditor(args);
-        }
-
-        static void RunEditor(string args)
-        {
-            try
-            {
-                var psi = new ProcessStartInfo("cmd.exe", "/c " + Editor[0] + " " + args) { CreateNoWindow = true, UseShellExecute = false };
-                using (Process.Start(psi)) { }
-            }
-            catch (Exception) { }
-        }
-
         void GoTo(ProcRow row)
         {
             if (row.Task != null)
             {
-                if (row.Task.Script != null) OpenCode(System.IO.Path.GetDirectoryName(row.Task.Script), row.Task.Script, 0);
-                else try { using (Process.Start(new ProcessStartInfo("taskschd.msc") { UseShellExecute = true })) { } } catch (Exception) { }
+                if (row.Task.Script != null) OpenExplorer(row.Task.Script);
                 return;
             }
             if (row.Bot != null && row.Bot.Code != null) { OpenBot(row.Bot); return; }
             if (row.Pids.Length == 0) return;
-            var wins = Native.AppWindows(row.Pids);
-            if (wins.Count == 0)
+            if (row.Script != null)
             {
-                if (row.Script != null)
-                {
-                    bool module = row.Script.StartsWith("module:");
-                    OpenCode(Scripts.Folder(row.Script), module ? null : row.Script, 0);
-                    return;
-                }
-                string script = ScriptOf(row.Pids);
-                if (script != null) { OpenCode(System.IO.Path.GetDirectoryName(script), script, 0); return; }
-            }
-            if (wins.Count > 0)
-            {
-                IntPtr h = wins[(wins.IndexOf(lastJump) + 1) % wins.Count];
-                lastJump = h;
-                if (Native.IsIconic(h)) Native.ShowWindow(h, Native.SwRestore);
-                Native.SetForegroundWindow(h);
+                bool module = row.Script.StartsWith("module:");
+                OpenExplorer(module ? Scripts.Folder(row.Script) : row.Script);
                 return;
             }
-            string path = row.Pids.Select(Procs.ImagePath).FirstOrDefault(x => !string.IsNullOrEmpty(x));
-            if (path == null) return;
-            try { using (Process.Start("explorer.exe", "/select,\"" + path + "\"")) { } }
-            catch (Exception) { }
+            string script = ScriptOf(row.Pids);
+            if (script != null) { OpenExplorer(script); return; }
+            OpenExplorer(row.Pids.Select(Procs.ImagePath).FirstOrDefault(x => !string.IsNullOrEmpty(x)));
         }
 
-        // The bot's folder in the editor, with its log open at the latest crash when there was one in the last day.
-        void OpenBot(WatchRule bot)
-        {
-            BotStatus st;
-            botStatus.TryGetValue(bot.Label, out st);
-            bool crash = st != null && st.Crashes > 0 && bot.Log != null && st.CrashLine > 0;
-            OpenCode(bot.Code, crash ? bot.Log : null, crash ? st.CrashLine : 0);
-        }
-
-        // Dedicated video memory per process, from Windows' "GPU Process Memory" counters. Read off the UI thread every 5 s.
-        void ShowVram(List<Proc> procs)
-        {
-            if (!vramBusy && (DateTime.Now - vramRead).TotalSeconds >= 5)
-            {
-                vramBusy = true;
-                ThreadPool.QueueUserWorkItem(delegate
-                {
-                    var next = new Dictionary<int, long>();
-                    try
-                    {
-                        var data = new PerformanceCounterCategory("GPU Process Memory").ReadCategory();
-                        var usage = data["Local Usage"];
-                        if (usage != null)
-                            foreach (InstanceData d in usage.Values)
-                            {
-                                var m = Regex.Match(d.InstanceName, "^pid_(\\d+)_");
-                                if (!m.Success || d.RawValue <= 0) continue;
-                                int pid = int.Parse(m.Groups[1].Value);
-                                long have;
-                                next.TryGetValue(pid, out have);
-                                next[pid] = have + d.RawValue;
-                            }
-                    }
-                    catch (Exception) { }
-                    Dispatcher.BeginInvoke(new Action(delegate { vramByPid = next; vramRead = DateTime.Now; vramBusy = false; }));
-                });
-            }
-
-            var byExe = new Dictionary<string, List<Proc>>(StringComparer.OrdinalIgnoreCase);
-            foreach (var p in procs)
-            {
-                long b;
-                if (!vramByPid.TryGetValue(p.Pid, out b) || b <= 0) continue;
-                List<Proc> l;
-                if (!byExe.TryGetValue(p.Exe, out l)) byExe[p.Exe] = l = new List<Proc>();
-                l.Add(p);
-            }
-            var top = byExe.Select(kv => new { Exe = kv.Key, Pids = kv.Value.Select(x => x.Pid).ToArray(), Bytes = kv.Value.Sum(x => vramByPid[x.Pid]) })
-                .Where(x => x.Bytes >= 32L << 20).OrderByDescending(x => x.Bytes).Take(4).ToList();
-
-            while (vramList.Children.Count < top.Count)
-            {
-                var g = new Grid { Margin = new Thickness(0, 1, 0, 1) };
-                g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-                g.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-                var n = Theme.Label("", 12, Theme.Sub, FontWeights.Normal);
-                var v = Theme.Label("", 12, Theme.Sub, FontWeights.Normal);
-                Grid.SetColumn(v, 1);
-                g.Children.Add(n); g.Children.Add(v);
-                vramList.Children.Add(g);
-            }
-            vramLines.Clear();
-            for (int i = 0; i < vramList.Children.Count; i++)
-            {
-                var g = (Grid)vramList.Children[i];
-                g.Visibility = i < top.Count ? Visibility.Visible : Visibility.Collapsed;
-                if (i >= top.Count) continue;
-                string name = AppIdentity.For(top[i].Exe, top[i].Pids).Title;
-                string amount = Theme.Mem(top[i].Bytes);
-                var n = (TextBlock)g.Children[0]; var v = (TextBlock)g.Children[1];
-                if (n.Text != name) n.Text = name;
-                if (v.Text != amount) v.Text = amount;
-                vramLines.Add(name + "  " + amount);
-            }
-        }
+        void OpenBot(WatchRule bot) { OpenCode(bot.Code); }
 
         // ---------- review: "here's what I found, is it right?" ----------
 
         List<ReviewItem> ReviewItems()
         {
             var items = new List<ReviewItem>();
-            var seen = new HashSet<int>();
             foreach (var l in lastAi)
-            {
                 items.Add(new ReviewItem { Section = "AI", Name = l.Name, Kind = l.Kind, Rule = l.Rule, On = !hidden.Contains(l.Name), Kinds = AiChoices, Detail = l.Procs.Count == 0 ? "not running" : "running" });
-                foreach (var p in l.Procs) seen.Add(p.Pid);
-            }
             foreach (var r in botRules)
             {
                 var hits = lastProcs.Where(r.Hit).ToList();
-                foreach (var p in hits) seen.Add(p.Pid);
-                items.Add(new ReviewItem { Section = "Bot", Name = r.Label, Kind = "Bot", Rule = r, Detail = hits.Count == 0 ? "not running" : "running" });
+                items.Add(new ReviewItem { Section = "Bot", Name = r.Label, Kind = "Bot", Rule = r, On = !hidden.Contains(r.Label), Detail = hits.Count == 0 ? "not running" : "running" });
             }
             foreach (var kv in lastScripts)
             {
                 string label = Scripts.Label(kv.Key);
                 string match = kv.Key.StartsWith("module:") ? "-m " + kv.Key.Substring(7).Split('|')[0] : kv.Key;
                 items.Add(new ReviewItem { Section = "Script", Name = label, Kind = "Script", Match = match, On = !hidden.Contains(label), Kinds = ScriptChoices, Detail = Scripts.Language(kv.Value[0].Exe) });
-                foreach (var p in kv.Value) seen.Add(p.Pid);
             }
             foreach (var t in TaskList.Items.OrderByDescending(t => t.Running).ThenByDescending(t => t.LastRun))
                 items.Add(new ReviewItem { Section = "Task", Name = t.Name, Kind = "Task", On = !hidden.Contains(t.Name), Detail = t.Running ? "running" : t.NeverRan ? "never ran" : t.Failed ? "failed" : "last ran " + Short(DateTime.Now - t.LastRun) + " ago" });
             foreach (var r in rules)
             {
                 var hits = lastProcs.Where(r.Hit).ToList();
-                foreach (var p in hits) seen.Add(p.Pid);
-                items.Add(new ReviewItem { Section = "Watching", Name = r.Label, Kind = r.Kind ?? "Watching", Rule = r, Kinds = WatchChoices, Detail = hits.Count == 0 ? "not running" : "running" });
-            }
-
-            // Did I miss anything: open apps with a window that nothing above covers, biggest first.
-            string win = Environment.GetFolderPath(Environment.SpecialFolder.Windows);
-            var skip = new[] { "DesktopVitals.exe", "explorer.exe", "ApplicationFrameHost.exe", "TextInputHost.exe", "SystemSettings.exe", "SearchHost.exe", "StartMenuExperienceHost.exe", "ShellExperienceHost.exe" };
-            var apps = lastProcs.Where(p => !seen.Contains(p.Pid) && !skip.Contains(p.Exe, StringComparer.OrdinalIgnoreCase))
-                .GroupBy(p => p.Exe, StringComparer.OrdinalIgnoreCase)
-                .Where(g => !items.Any(i => i.Rule != null && i.Rule.ByExe && i.Rule.Match.Equals(g.Key, StringComparison.OrdinalIgnoreCase)))
-                .OrderByDescending(g => g.Sum(p => p.Private)).ToList();
-            int added = 0;
-            foreach (var g in apps)
-            {
-                if (added >= 10) break;
-                int[] pids = g.Select(p => p.Pid).ToArray();
-                if (Native.AppWindows(pids).Count == 0) continue;
-                string path = Procs.ImagePath(pids[0]) ?? "";
-                if (path.StartsWith(win, StringComparison.OrdinalIgnoreCase)) continue;
-                var id = Identify(g.First());
-                items.Add(new ReviewItem { Section = "Missed", Name = AppIdentity.For(g.Key, pids).Title, Kind = id == null ? "Watching" : id[0], Match = g.Key, On = false, Missed = true, Kinds = WatchChoices, Detail = "open" });
-                added++;
+                string kind = r.Kind ?? "Watching";
+                string k;
+                if (kindOf.TryGetValue(r.Label, out k)) kind = k;
+                items.Add(new ReviewItem { Section = "Watching", Name = r.Label, Kind = kind, Rule = r, On = !hidden.Contains(r.Label), Kinds = WatchChoices, Detail = hits.Count == 0 ? "not running" : "running" });
             }
             foreach (var i in items) i.OrigKind = i.Kind;
             return items;
@@ -2378,7 +2316,6 @@ namespace DesktopVitals
         {
             if (reviewView != null || rootGrid == null) return;
             var items = ReviewItems();
-            var origOn = items.ToDictionary(i => i, i => i.On);
 
             var page = new Grid();
             page.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
@@ -2402,23 +2339,22 @@ namespace DesktopVitals
                 if (these.Count == 0) continue;
                 stack.Children.Add(Card(sec, null, these.Select(ReviewRow).ToArray()));
             }
-            var missed = items.Where(i => i.Missed).Select(ReviewRow).ToList();
-            var missHint = Theme.Label(missed.Count == 0 ? "No other apps are open right now." : "Tick an open app to keep an eye on it.", 12, Theme.Faint, FontWeights.Normal);
-            missHint.Margin = new Thickness(0, 0, 0, 4);
-            missed.Insert(0, missHint);
-            stack.Children.Add(Card("Did I miss anything?", null, missed.ToArray()));
 
             var foot = new Grid { Margin = new Thickness(18, 4, 14, 14) };
             foot.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             foot.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            var left = new StackPanel();
             var edit = Theme.Label("Edit settings file", 12, Theme.Link, FontWeights.Normal);
             edit.Cursor = Cursors.Hand;
             edit.ToolTip = "For things that aren't open now, or a bot's health check";
             edit.MouseLeftButtonUp += delegate { OpenSettingsFile(); };
-            foot.Children.Add(edit);
+            left.Children.Add(edit);
+            reviewError = Theme.Label("", 12, Theme.AmberDot, FontWeights.Normal);
+            left.Children.Add(reviewError);
+            foot.Children.Add(left);
             var ok = new Border { Background = Theme.Green, CornerRadius = new CornerRadius(8), Padding = new Thickness(16, 6, 16, 7), Cursor = Cursors.Hand };
             ok.Child = Theme.Label("Looks good", 13, new SolidColorBrush(Color.FromRgb(0x06, 0x24, 0x12)), FontWeights.SemiBold);
-            ok.MouseLeftButtonUp += delegate { SaveReview(items, origOn); };
+            ok.MouseLeftButtonUp += delegate { SaveReview(items); };
             Grid.SetColumn(ok, 1);
             foot.Children.Add(ok);
             Grid.SetRow(foot, 1);
@@ -2480,64 +2416,55 @@ namespace DesktopVitals
             return row;
         }
 
-        // Writes the answers into watch.txt: unticked found items become "@hide", re-tagged ones "@kind",
-        // your own lines are commented out or get "| kind:", and ticked apps from "Did I miss anything" become new lines.
-        void SaveReview(List<ReviewItem> items, Dictionary<ReviewItem, bool> origOn)
+        // Writes "@hide", "@kind", and "@reviewed" to review.txt only. Never rewrites watch.txt.
+        bool TryWriteReview(List<ReviewItem> items)
         {
             try
             {
-                string file = WatchRule.ConfigFile();
-                var lines = File.Exists(file) ? File.ReadAllLines(file).ToList()
-                    : new List<string> { "# Desktop Vitals settings for this PC. See watch.example.txt in the app folder for the format.", "" };
-                var names = new HashSet<string>(items.Where(i => (i.Rule == null && !i.Missed) || i.Section == "AI").Select(i => i.Name), StringComparer.OrdinalIgnoreCase);
-                Func<string, string, string> valueOf = (l, key) =>
+                string file = WatchRule.ReviewFile();
+                var lines = new List<string>();
+                if (items != null)
                 {
-                    string t = l.Trim();
-                    int eq = t.IndexOf('=');
-                    if (!t.StartsWith("@") || eq < 2 || !t.Substring(1, eq - 1).Trim().Equals(key, StringComparison.OrdinalIgnoreCase)) return null;
-                    return t.Substring(eq + 1).Trim();
-                };
-                lines.RemoveAll(l =>
-                {
-                    if (valueOf(l, "reviewed") != null) return true;
-                    string h = valueOf(l, "hide");
-                    if (h != null) return names.Contains(h);
-                    string k = valueOf(l, "kind");
-                    return k != null && k.LastIndexOf('|') > 0 && names.Contains(k.Substring(0, k.LastIndexOf('|')).Trim());
-                });
-                var add = new List<string>();
-                foreach (var it in items)
-                {
-                    bool kindChanged = it.Kind != it.OrigKind;
-                    if (it.Rule != null)
+                    foreach (var it in items)
                     {
-                        int at = lines.IndexOf(it.Rule.Raw);
-                        if (at < 0) continue;
-                        if (!it.On) lines[at] = "# " + it.Rule.Raw;
-                        // An AI line can also be found on its own (Claude Code), so hide its name as well.
-                        if (!it.On && it.Section == "AI") add.Add("@hide = " + it.Name);
-                        else if (kindChanged) lines[at] = Regex.Replace(it.Rule.Raw, "\\s*\\|\\s*kind:[^|]*", "", RegexOptions.IgnoreCase).TrimEnd() + " | kind: " + it.Kind;
+                        if (!it.On) lines.Add("@hide = " + it.Name);
+                        else if (it.Kind != it.OrigKind) lines.Add("@kind = " + it.Name + " | " + it.Kind);
                     }
-                    else if (it.Missed)
-                    {
-                        if (it.On) add.Add(it.Name + " = " + it.Match + (it.Kind == "Watching" ? "" : " | kind: " + it.Kind));
-                    }
-                    else if (!it.On) add.Add("@hide = " + it.Name);
-                    else if (kindChanged && it.Section == "Script") add.Add(it.Name + " = " + it.Match + " | kind: " + it.Kind);
-                    else if (kindChanged) add.Add("@kind = " + it.Name + " | " + it.Kind);
                 }
-                while (lines.Count > 0 && lines[lines.Count - 1].Trim().Length == 0) lines.RemoveAt(lines.Count - 1);
-                lines.Add("");
-                lines.AddRange(add);
                 lines.Add("@reviewed = " + DateTime.Now.ToString("yyyy-MM-dd"));
                 Directory.CreateDirectory(System.IO.Path.GetDirectoryName(file));
                 File.WriteAllLines(file, lines, new UTF8Encoding(false));
+                return true;
+            }
+            catch (Exception) { return false; }
+        }
+
+        // Snapshot --accept-review: always leave a review.txt with at least @reviewed.
+        void WriteAcceptedReview()
+        {
+            List<ReviewItem> items = null;
+            try { items = ReviewItems(); } catch (Exception) { }
+            if (TryWriteReview(items)) return;
+            try
+            {
+                string file = WatchRule.ReviewFile();
+                Directory.CreateDirectory(System.IO.Path.GetDirectoryName(file));
+                File.WriteAllLines(file, new[] { "@reviewed = " + DateTime.Now.ToString("yyyy-MM-dd") }, new UTF8Encoding(false));
             }
             catch (Exception) { }
+        }
 
+        void SaveReview(List<ReviewItem> items)
+        {
+            if (!TryWriteReview(items))
+            {
+                if (reviewError != null) reviewError.Text = "Could not save settings";
+                return;
+            }
             LoadConfig();
             foreach (var l in new[] { aiRows, botRows, scriptRows, taskRows, watchRows, topRows }) l.Clear();
             reviewView = null;
+            reviewError = null;
             Content = Build();
             SetLive(live);
             if (live) Prime();
@@ -2564,12 +2491,15 @@ namespace DesktopVitals
         {
             try
             {
-                Directory.CreateDirectory(snapshotDir);
+                string dir = System.IO.Path.GetFullPath(snapshotDir);
+                Directory.CreateDirectory(dir);
+                string txtPath = System.IO.Path.Combine(dir, "vitals.txt");
+                string pngPath = System.IO.Path.Combine(dir, "vitals.png");
+
                 var sb = new StringBuilder();
                 sb.AppendLine("Desktop Vitals  " + Environment.MachineName + "  " + DateTime.Now.ToString("yyyy-MM-dd HH:mm") + "  \u00B7  " + subtitle.Text);
                 sb.AppendLine();
                 foreach (var r in new[] { cpuRow, memRow, gpuRow, vramRow, diskRow }) sb.AppendLine(r.Summary);
-                if (vramLines.Count > 0) sb.AppendLine("Video memory by app: " + string.Join("  \u00B7  ", vramLines));
                 string busy = threadStrip.Busiest();
                 if (busy.Length > 0) sb.AppendLine("Busiest thread: " + busy);
                 Section(sb, "AI", aiRows, "");
@@ -2579,21 +2509,27 @@ namespace DesktopVitals
                 Section(sb, "Watching", watchRows, "");
                 Section(sb, "Top apps", topRows, "");
                 string text = sb.ToString();
-                File.WriteAllText(System.IO.Path.Combine(snapshotDir, "vitals.txt"), text, new UTF8Encoding(false));
+                File.WriteAllText(txtPath, text, new UTF8Encoding(false));
 
                 var root = (FrameworkElement)Content;
                 double scale = 2;
-                var bmp = new RenderTargetBitmap((int)Math.Ceiling(root.ActualWidth * scale), (int)Math.Ceiling(root.ActualHeight * scale), 96 * scale, 96 * scale, PixelFormats.Pbgra32);
+                double maxPx = 4000;
+                if (root.ActualWidth * scale > maxPx) scale = maxPx / Math.Max(1, root.ActualWidth);
+                if (root.ActualHeight * scale > maxPx) scale = Math.Min(scale, maxPx / Math.Max(1, root.ActualHeight));
+                int bw = Math.Max(1, (int)Math.Ceiling(root.ActualWidth * scale));
+                int bh = Math.Max(1, (int)Math.Ceiling(root.ActualHeight * scale));
+                var bmp = new RenderTargetBitmap(bw, bh, 96 * scale, 96 * scale, PixelFormats.Pbgra32);
                 bmp.Render(root);
-                var png = new PngBitmapEncoder();
-                png.Frames.Add(BitmapFrame.Create(bmp));
-                using (var fs = File.Create(System.IO.Path.Combine(snapshotDir, "vitals.png"))) png.Save(fs);
+                var enc = new PngBitmapEncoder();
+                enc.Frames.Add(BitmapFrame.Create(bmp));
+                using (var fs = File.Create(pngPath)) enc.Save(fs);
 
                 try { Console.Out.Write(text); Console.Out.Flush(); } catch (Exception) { }
             }
             catch (Exception ex)
             {
-                try { File.WriteAllText(System.IO.Path.Combine(snapshotDir, "vitals.txt"), "Snapshot failed: " + ex.Message); } catch (Exception) { }
+                try { Console.Error.WriteLine("Snapshot failed: " + ex.Message); } catch (Exception) { }
+                Environment.Exit(1);
             }
         }
 
@@ -2653,20 +2589,61 @@ namespace DesktopVitals
         }
     }
 
+    static class ErrorLog
+    {
+        const string Ver = "1.0";
+        const int Cap = 256 * 1024;
+
+        public static void Write(Exception ex)
+        {
+            if (ex == null) return;
+            try
+            {
+                string dir = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "DesktopVitals");
+                Directory.CreateDirectory(dir);
+                string file = System.IO.Path.Combine(dir, "errors.log");
+                var sb = new StringBuilder();
+                sb.Append(DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture)).Append(" ver=").Append(Ver);
+                sb.Append(" type=").Append(ex.GetType().FullName);
+                sb.Append(" msg=").Append(ex.Message).Append('\n');
+                if (ex.StackTrace != null) sb.Append(ex.StackTrace).Append('\n');
+                sb.Append('\n');
+                byte[] add = Encoding.UTF8.GetBytes(sb.ToString());
+                byte[] prior = File.Exists(file) ? File.ReadAllBytes(file) : new byte[0];
+                if (prior.Length + add.Length > Cap)
+                {
+                    int keep = Math.Max(0, prior.Length / 2);
+                    var trimmed = new byte[keep + add.Length];
+                    Buffer.BlockCopy(prior, prior.Length - keep, trimmed, 0, keep);
+                    Buffer.BlockCopy(add, 0, trimmed, keep, add.Length);
+                    File.WriteAllBytes(file, trimmed);
+                }
+                else
+                {
+                    using (var fs = new FileStream(file, FileMode.Append, FileAccess.Write, FileShare.Read))
+                        fs.Write(add, 0, add.Length);
+                }
+            }
+            catch (Exception) { }
+        }
+    }
+
     static class Program
     {
         [STAThread]
         static void Main(string[] args)
         {
+            AppDomain.CurrentDomain.UnhandledException += (s, e) => { ErrorLog.Write(e.ExceptionObject as Exception); };
             int at = Array.FindIndex(args, a => a.Equals("--snapshot", StringComparison.OrdinalIgnoreCase));
             if (at >= 0)
             {
                 string dir = at + 1 < args.Length && !args[at + 1].StartsWith("--") ? args[at + 1] : System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "DesktopVitals", "snapshot");
                 var snapApp = new Application { ShutdownMode = ShutdownMode.OnMainWindowClose };
-                snapApp.DispatcherUnhandledException += (s, e) => { e.Handled = true; };
-                // "--review" pictures the review screen instead of the readings.
+                snapApp.DispatcherUnhandledException += (s, e) => { ErrorLog.Write(e.Exception); e.Handled = true; };
+                // "--review" pictures the review screen; "--accept-review" writes review.txt without touching watch.txt.
                 bool review = args.Any(a => a.Equals("--review", StringComparison.OrdinalIgnoreCase));
-                snapApp.Run(new VitalsWindow(System.IO.Path.GetFullPath(dir), review));
+                bool accept = args.Any(a => a.Equals("--accept-review", StringComparison.OrdinalIgnoreCase));
+                snapApp.Run(new VitalsWindow(System.IO.Path.GetFullPath(dir), review, accept));
                 return;
             }
             bool created;
@@ -2675,7 +2652,7 @@ namespace DesktopVitals
                 if (!created) { signal.Set(); return; }
                 var app = new Application { ShutdownMode = ShutdownMode.OnMainWindowClose };
                 // One bad reading (an odd process, a driver hiccup) should skip a refresh, not close the window.
-                app.DispatcherUnhandledException += (s, e) => { e.Handled = true; };
+                app.DispatcherUnhandledException += (s, e) => { ErrorLog.Write(e.Exception); e.Handled = true; };
                 var win = new VitalsWindow();
                 ThreadPool.RegisterWaitForSingleObject(signal, delegate { win.Dispatcher.BeginInvoke(new Action(win.Toggle)); }, null, -1, false);
                 app.Run(win);

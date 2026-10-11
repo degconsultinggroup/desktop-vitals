@@ -15,5 +15,7 @@ function Make-Shortcut([string]$path, [string]$hotkey) {
     $s.Save()
     Write-Host 'Shortcut:' $path
 }
-Make-Shortcut (Join-Path ([Environment]::GetFolderPath('Programs')) 'Desktop Vitals.lnk') 'CTRL+ALT+P'
-Make-Shortcut (Join-Path ([Environment]::GetFolderPath('Desktop')) 'Desktop Vitals.lnk') $null
+try { Make-Shortcut (Join-Path ([Environment]::GetFolderPath('Programs')) 'Desktop Vitals.lnk') 'CTRL+ALT+P' }
+catch { Write-Warning "Start menu shortcut failed: $_" }
+try { Make-Shortcut (Join-Path ([Environment]::GetFolderPath('Desktop')) 'Desktop Vitals.lnk') $null }
+catch { Write-Warning "Desktop shortcut failed: $_" }

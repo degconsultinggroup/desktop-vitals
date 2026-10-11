@@ -10,7 +10,7 @@ $refs = @(
     "$wpf\PresentationFramework.dll", "$wpf\PresentationCore.dll", "$wpf\WindowsBase.dll",
     "$fw\System.Xaml.dll", "$fw\System.Drawing.dll", "$fw\System.dll", "$fw\System.Core.dll", "$fw\Microsoft.CSharp.dll"
 ) | ForEach-Object { "/r:$_" }
-& "$fw\csc.exe" /nologo /target:winexe /optimize+ /platform:x64 `
+& "$fw\csc.exe" /nologo /target:winexe /optimize+ /warnaserror+ /platform:x64 `
     "/out:$bin\DesktopVitals.exe" "/win32icon:$d\assets\vitals.ico" "/win32manifest:$d\src\app.manifest" `
     @refs "$d\src\DesktopVitals.cs"
 if ($LASTEXITCODE -ne 0) { throw 'Build failed.' }

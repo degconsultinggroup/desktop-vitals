@@ -11,13 +11,12 @@
 
 # ---- Bots: things that should keep working, not just keep running ----
 # Add "| check:" to a line to put it in the Bots card. The check is the bot's last sign of work:
-#   a file it rewrites (a heartbeat or health file), a folder it writes into, or an http health address.
-#   A bot turns amber when its check goes quiet for 5 minutes.
-# "| log:"   a log file. Lines from the last day that start with a timestamp (2026-10-10 14:03:22)
-#            and contain "restart" count as crashes. Change the word with "| crash: <text>".
-# "| code:"  the bot's folder. Clicking the bot opens it in Cursor or VS Code, at its latest crash if any.
+#   a file it rewrites (a heartbeat or health file), a folder it writes into, or a local http
+#   health address (127.0.0.1, ::1, or localhost only). A bot turns amber when its check goes
+#   quiet for 5 minutes.
+# "| code:"  the bot's folder. Clicking the bot opens it in Cursor or VS Code.
 #
-# Price bot = price_bot.py | check: C:\bots\price\heartbeat.json | log: C:\bots\price\bot.log | code: C:\bots\price
+# Price bot = price_bot.py | check: C:\bots\price\heartbeat.json | code: C:\bots\price
 # Local API = uvicorn | check: http://127.0.0.1:8000/health
 
 # ---- AI ----
@@ -26,15 +25,16 @@
 #
 # Research agent = agent_loop.py | ai | kind: Agent
 #
-# The review screen (the gear button) writes these for you:
+# The review screen writes these into %APPDATA%\DesktopVitals\review.txt (never into this file):
 # @hide = <name>             don't show something Desktop Vitals found on its own
 # @kind = <name> | Agent     change the tag of something it found
 # @reviewed = <date>         the first-run review is done
+# The same @ lines still work here if you prefer to keep everything in one file.
 
-# ---- Processor temperature ----
-# Windows doesn't hand CPU temperature to normal apps. If a sensor tool keeps writing a JSON file like
+# ---- Processor temperature (read only) ----
+# Windows doesn't hand CPU temperature to normal apps. If a sensor tool already keeps writing a
+# JSON file like
 #   {"ts": "2026-10-10T14:03:22Z", "cpu_temp_c": 48.5, "cpu_pkg_power_w": 21.0}
-# point Desktop Vitals at it. The task line is optional: it restarts the sensor when the file goes stale.
+# point Desktop Vitals at it. When the file is missing or stale, the UI says so. Nothing is started.
 #
 # @temperature-file = C:\ProgramData\MySensor\last.json
-# @temperature-task = \MySensor\Read CPU
