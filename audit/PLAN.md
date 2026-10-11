@@ -129,7 +129,7 @@ Commit: [x] c9cdf3f
 ### 24. Remove Task Manager caption button
 Refs: `src/DesktopVitals.cs:1499-1503` (lean D1)
 Done when: the caption control that starts `taskmgr.exe` is gone; gear, Live, minimize, and close remain.
-Commit: [x]
+Commit: [x] bf97bb7
 
 ### 25. Remove focus switching and Task Scheduler MMC launch
 Refs: `src/DesktopVitals.cs:2214`, `2231-2237` (lean D2; hard rule 1)
