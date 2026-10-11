@@ -11,8 +11,9 @@
 
 # ---- Bots: things that should keep working, not just keep running ----
 # Add "| check:" to a line to put it in the Bots card. The check is the bot's last sign of work:
-#   a file it rewrites (a heartbeat or health file), a folder it writes into, or an http health address.
-#   A bot turns amber when its check goes quiet for 5 minutes.
+#   a file it rewrites (a heartbeat or health file), a folder it writes into, or a local http
+#   health address (127.0.0.1, ::1, or localhost only). A bot turns amber when its check goes
+#   quiet for 5 minutes.
 # "| code:"  the bot's folder. Clicking the bot opens it in Cursor or VS Code.
 #
 # Price bot = price_bot.py | check: C:\bots\price\heartbeat.json | code: C:\bots\price
@@ -29,9 +30,10 @@
 # @kind = <name> | Agent     change the tag of something it found
 # @reviewed = <date>         the first-run review is done
 
-# ---- Processor temperature ----
-# Windows doesn't hand CPU temperature to normal apps. If a sensor tool keeps writing a JSON file like
+# ---- Processor temperature (read only) ----
+# Windows doesn't hand CPU temperature to normal apps. If a sensor tool already keeps writing a
+# JSON file like
 #   {"ts": "2026-10-10T14:03:22Z", "cpu_temp_c": 48.5, "cpu_pkg_power_w": 21.0}
-# point Desktop Vitals at it. When the file is missing or stale, the UI says so; nothing is started.
+# point Desktop Vitals at it. When the file is missing or stale, the UI says so. Nothing is started.
 #
 # @temperature-file = C:\ProgramData\MySensor\last.json
