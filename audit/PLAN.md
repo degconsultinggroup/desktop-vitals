@@ -168,7 +168,7 @@ Commit: [x] 008d657
 ### 32. Remove bar animations (if still over budget)
 Refs: lean E3; phase2-gate shrink list
 Done when: thread strip and StatRow bars set scale directly with no `DoubleAnimation`; only if items 30-31 leave the file over 2685 lines.
-Commit: [ ]
+Commit: [ ] skipped (2666 lines after items 30-31; under 2685)
 
 ## Packaging
 
