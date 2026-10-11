@@ -119,7 +119,7 @@ Commit: [x] 3ec2f10
 ### 22. Merge Short and Ago
 Refs: `src/DesktopVitals.cs:1858-1872` (lean B3)
 Done when: one helper covers both; call sites keep the same display text with fewer lines.
-Commit: [ ]
+Commit: [x]
 
 ### 23. ConfigFile always APPDATA
 Refs: `src/DesktopVitals.cs:364-373` (lean B4)

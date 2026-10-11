@@ -2007,21 +2007,15 @@ namespace DesktopVitals
 
         static string Trim(string s, int n) { return s.Length <= n ? s : s.Substring(0, n) + "\u2026"; }
 
-        // One unit, for narrow columns: 45s, 12m, 13h, 2d.
-        static string Short(TimeSpan t)
+        // compact: 45s, 12m, 13h, 2d. otherwise: 13h 05m, 2d 3h.
+        static string Short(TimeSpan t) { return SpanText(t, true); }
+        static string Ago(TimeSpan t) { return SpanText(t, false); }
+        static string SpanText(TimeSpan t, bool compact)
         {
             if (t.TotalSeconds < 60) return Math.Max(0, (int)t.TotalSeconds) + "s";
             if (t.TotalMinutes < 60) return (int)t.TotalMinutes + "m";
-            if (t.TotalHours < 24) return (int)t.TotalHours + "h";
-            return (int)t.TotalDays + "d";
-        }
-
-        static string Ago(TimeSpan t)
-        {
-            if (t.TotalSeconds < 60) return Math.Max(0, (int)t.TotalSeconds) + "s";
-            if (t.TotalMinutes < 60) return (int)t.TotalMinutes + "m";
-            if (t.TotalHours < 24) return (int)t.TotalHours + "h " + t.Minutes.ToString("00") + "m";
-            return (int)t.TotalDays + "d " + t.Hours + "h";
+            if (t.TotalHours < 24) return compact ? (int)t.TotalHours + "h" : (int)t.TotalHours + "h " + t.Minutes.ToString("00") + "m";
+            return compact ? (int)t.TotalDays + "d" : (int)t.TotalDays + "d " + t.Hours + "h";
         }
 
         // A bot's state from its check: 0 not running, 1 working, 2 quiet or failing. right is when it last showed work.
