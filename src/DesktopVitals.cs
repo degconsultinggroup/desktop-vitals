@@ -372,7 +372,7 @@ namespace DesktopVitals
             return File.Exists(file) ? file : mine;
         }
 
-        // Lines that start with @ are settings: "@temperature-file = <json>", "@temperature-task = <task path>".
+        // Lines that start with @ are settings: "@temperature-file = <json>", "@hide = <name>", and similar.
         public static Dictionary<string, string> Settings()
         {
             var d = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -2034,7 +2034,7 @@ namespace DesktopVitals
         }
 
         // Optional: "@temperature-file" points at a JSON file a sensor tool keeps writing, with "cpu_temp_c",
-        // "cpu_pkg_power_w" and "ts". "@temperature-task" is a scheduled task to start when the file goes stale.
+        // "cpu_pkg_power_w" and "ts". Read only; nothing is started when the file goes stale.
         string SensorDetail()
         {
             string file;
@@ -2048,7 +2048,7 @@ namespace DesktopVitals
                 var ts = Regex.Match(json, "\"ts\"\\s*:\\s*\"([^\"]+)\"");
                 DateTimeOffset when;
                 if (!ts.Success || !DateTimeOffset.TryParse(ts.Groups[1].Value, CultureInfo.InvariantCulture, DateTimeStyles.None, out when)) return "";
-                if ((DateTimeOffset.Now - when).TotalSeconds > 60) { WakeSensor(); return "temperature startingâ€¦"; }
+                if ((DateTimeOffset.Now - when).TotalSeconds > 60) return "temperature stale";
                 var t = Regex.Match(json, "\"cpu_temp_c\"\\s*:\\s*([0-9.]+)");
                 var w = Regex.Match(json, "\"cpu_pkg_power_w\"\\s*:\\s*([0-9.]+)");
                 var parts = new List<string>();
@@ -2057,23 +2057,6 @@ namespace DesktopVitals
                 return string.Join(" \u00B7 ", parts);
             }
             catch (Exception) { return ""; }
-        }
-
-        // While this window is live, start the sensor task again when its file goes quiet.
-        DateTime lastWake = DateTime.MinValue;
-        void WakeSensor()
-        {
-            string task;
-            if (!settings.TryGetValue("temperature-task", out task) || (DateTime.Now - lastWake).TotalMinutes < 2) return;
-            lastWake = DateTime.Now;
-            try
-            {
-                var psi = new ProcessStartInfo("schtasks.exe", "/run /tn \"" + task + "\"");
-                psi.CreateNoWindow = true;
-                psi.UseShellExecute = false;
-                using (Process.Start(psi)) { }
-            }
-            catch (Exception) { }
         }
 
         // Local model servers: llama.cpp, Ollama, LM Studio, koboldcpp, vLLM.

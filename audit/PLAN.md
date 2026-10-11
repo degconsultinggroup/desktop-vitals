@@ -10,14 +10,12 @@ No new features. No new dependencies. Net lines in `src/DesktopVitals.cs` should
 ### 1. Fix editor and Explorer path launches
 Refs: `src/DesktopVitals.cs:2151-2156`, `2191`, `2199-2204`, `2241` (known 1; security N1, N6; robustness R34)
 Done when: no `cmd.exe`; editor is a resolved `Cursor.exe` or `Code.exe`; launches use `UseShellExecute = false` with one path that exists; paths with `"`, newline, or `%` are rejected; Explorer open/select uses the same path rules.
-Commit: [x] e4066a8
+Commit: [x] eb74c27
 
 ### 2. Delete WakeSensor and temperature-task
 Refs: `src/DesktopVitals.cs:375`, `2036-2037`, `2051`, `2062-2077`; `watch.example.txt`; README settings that mention waking a task (known 2; security N2; robustness R15; lean A1)
 Done when: `WakeSensor`, `@temperature-task`, and docs for starting a task are gone; stale `@temperature-file` only shows a stale or off message; nothing runs `schtasks`.
-Commit: [ ]
-
-### 3. Restrict and bound HTTP checks
+Commit: [x] 227ae0e 3. Restrict and bound HTTP checks
 Refs: `src/DesktopVitals.cs:758`, `767-785` (known 3; security N5; robustness R21)
 Done when: only `http://` to `127.0.0.1`, `::1`, or `localhost` is accepted; `AllowAutoRedirect` is false; body read max is 64 KB; other URLs show `check must be a local address`.
 Commit: [ ]
