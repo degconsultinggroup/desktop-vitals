@@ -139,7 +139,7 @@ Commit: [x] 40ce263
 ### 26. Remove Live switch DropShadow
 Refs: `src/DesktopVitals.cs:1488` (lean D3)
 Done when: the Live switch has no `DropShadowEffect`.
-Commit: [x]
+Commit: [x] 04053fe
 
 ### 27. Remove bot crash log feature
 Refs: `src/DesktopVitals.cs:352`, `362`, `427-429`, `744-746`, `760`, `807-833`, `1881-1893`, `2245-2252`; `watch.example.txt` crash/log samples (lean C1)
