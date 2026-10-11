@@ -82,7 +82,7 @@ Commit: [x] 45df370
 ### 15. Surface review save failures
 Refs: `src/DesktopVitals.cs:365-372`, `2533-2534` (robustness R16)
 Done when: if create or write of settings fails, the review stays open and shows a one-line error in the existing footer or label area.
-Commit: [x]
+Commit: [x] 6ec761d
 
 ### 16. Cap snapshot bitmap size
 Refs: `src/DesktopVitals.cs:2584-2590` (robustness R27)
