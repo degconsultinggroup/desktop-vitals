@@ -10,8 +10,11 @@ $Work = Join-Path $env:TEMP ("dv-smoke-" + [guid]::NewGuid().ToString('N'))
 $ResultsDir = Join-Path $Root 'tests\results'
 $ConfigDir = Join-Path $env:APPDATA 'DesktopVitals'
 $ConfigFile = Join-Path $ConfigDir 'watch.txt'
+$ReviewFile = Join-Path $ConfigDir 'review.txt'
 $ConfigBackup = Join-Path $Work 'watch.txt.bak'
+$ReviewBackup = Join-Path $Work 'review.txt.bak'
 $HadConfig = $false
+$HadReview = $false
 
 function Write-Check {
     param([string]$Name, [bool]$Ok, [string]$Detail = '')
@@ -27,6 +30,10 @@ function Save-Config {
         $script:HadConfig = $true
         Copy-Item -LiteralPath $ConfigFile -Destination $ConfigBackup -Force
     }
+    if (Test-Path -LiteralPath $ReviewFile) {
+        $script:HadReview = $true
+        Copy-Item -LiteralPath $ReviewFile -Destination $ReviewBackup -Force
+    }
 }
 
 function Restore-Config {
@@ -36,6 +43,12 @@ function Restore-Config {
     }
     elseif (Test-Path -LiteralPath $ConfigFile) {
         Remove-Item -LiteralPath $ConfigFile -Force
+    }
+    if ($script:HadReview -and (Test-Path -LiteralPath $ReviewBackup)) {
+        Copy-Item -LiteralPath $ReviewBackup -Destination $ReviewFile -Force
+    }
+    elseif (Test-Path -LiteralPath $ReviewFile) {
+        Remove-Item -LiteralPath $ReviewFile -Force
     }
 }
 
@@ -69,13 +82,15 @@ function Stop-Children {
 function Invoke-Snapshot {
     param(
         [string]$Dir,
-        [switch]$Review
+        [switch]$Review,
+        [switch]$AcceptReview
     )
     New-Item -ItemType Directory -Force -Path $Dir | Out-Null
     $exe = Join-Path $Root 'bin\DesktopVitals.exe'
     if (-not (Test-Path -LiteralPath $exe)) { throw "missing $exe" }
     $args = @('--snapshot', $Dir)
     if ($Review) { $args += '--review' }
+    if ($AcceptReview) { $args += '--accept-review' }
     $p = Start-Process -FilePath $exe -ArgumentList $args -PassThru -WindowStyle Hidden
     if (-not $p.WaitForExit(20000)) {
         try { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue } catch { }
@@ -279,15 +294,16 @@ try {
     }
     Write-Check 'http-local-only' $httpOk $httpDetail
 
-    # 6. Huge watch.txt still allows a snapshot
+    # 6. watch.txt over 1 MB is skipped; snapshot still works
     $hugeOk = $false
     $hugeDetail = ''
     try {
-        $junk = New-Object byte[] (1MB)
+        $junk = New-Object byte[] (1MB + 1)
         (New-Object Random).NextBytes($junk)
         New-Item -ItemType Directory -Force -Path $ConfigDir | Out-Null
         [System.IO.File]::WriteAllBytes($ConfigFile, $junk)
-        $null = Invoke-Snapshot -Dir (Join-Path $Work 'snap-huge-watch')
+        $hugeSnap = Invoke-Snapshot -Dir (Join-Path $Work 'snap-huge-watch')
+        if ($hugeSnap.Text -notmatch 'settings file too large') { throw 'missing too-large message' }
         $hugeOk = $true
     }
     catch {
@@ -298,7 +314,40 @@ try {
     }
     Write-Check 'huge-watch-txt' $hugeOk $hugeDetail
 
-    # 7. errors.log bounds and no foreign command lines
+    # 7. Accept-review leaves a 250-line UTF-8 BOM watch.txt byte-for-byte unchanged
+    $watchOk = $false
+    $watchDetail = ''
+    try {
+        if (Test-Path -LiteralPath $ReviewFile) { Remove-Item -LiteralPath $ReviewFile -Force }
+        $lines = New-Object System.Collections.Generic.List[string]
+        $lines.Add('First = first.exe')
+        $long = 'Long = ' + ('x' * 600)
+        $lines.Add($long)
+        for ($i = 3; $i -le 250; $i++) { $lines.Add(("Line{0} = line{0}.exe" -f $i)) }
+        $utf8Bom = New-Object System.Text.UTF8Encoding $true
+        New-Item -ItemType Directory -Force -Path $ConfigDir | Out-Null
+        [System.IO.File]::WriteAllLines($ConfigFile, $lines, $utf8Bom)
+        $before = [System.IO.File]::ReadAllBytes($ConfigFile)
+        $null = Invoke-Snapshot -Dir (Join-Path $Work 'snap-watch-intact') -AcceptReview
+        $after = [System.IO.File]::ReadAllBytes($ConfigFile)
+        if ($before.Length -ne $after.Length) { throw "length $($before.Length) -> $($after.Length)" }
+        for ($i = 0; $i -lt $before.Length; $i++) {
+            if ($before[$i] -ne $after[$i]) { throw "byte $i changed" }
+        }
+        if (-not (Test-Path -LiteralPath $ReviewFile)) { throw 'review.txt not written' }
+        $reviewText = [System.IO.File]::ReadAllText($ReviewFile)
+        if ($reviewText -notmatch '@reviewed\s*=') { throw 'review.txt missing @reviewed' }
+        $watchOk = $true
+    }
+    catch {
+        $watchDetail = $_.Exception.Message
+    }
+    finally {
+        Restore-Config
+    }
+    Write-Check 'watch-txt-intact' $watchOk $watchDetail
+
+    # 8. errors.log bounds and no foreign command lines
     $logOk = $false
     $logDetail = ''
     try {

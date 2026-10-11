@@ -25,10 +25,11 @@
 #
 # Research agent = agent_loop.py | ai | kind: Agent
 #
-# The review screen (the gear button) writes these for you:
+# The review screen writes these into %APPDATA%\DesktopVitals\review.txt (never into this file):
 # @hide = <name>             don't show something Desktop Vitals found on its own
 # @kind = <name> | Agent     change the tag of something it found
 # @reviewed = <date>         the first-run review is done
+# The same @ lines still work here if you prefer to keep everything in one file.
 
 # ---- Processor temperature (read only) ----
 # Windows doesn't hand CPU temperature to normal apps. If a sensor tool already keeps writing a

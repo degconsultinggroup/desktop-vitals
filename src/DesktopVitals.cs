@@ -348,47 +348,33 @@ namespace DesktopVitals
         static readonly string[] AiWords = { "claude", "openclaw", "codex", "gemini", "chatgpt", "openai", "anthropic", "grok", "cursor", "windsurf", "copilot", "aider", "ollama", "llama", "lm studio", "koboldcpp", "vllm", "perplexity" };
         public static bool SoundsLikeAi(string s) { return AiWords.Any(w => s.IndexOf(w, StringComparison.OrdinalIgnoreCase) >= 0); }
 
-        // Your settings live in %APPDATA%\DesktopVitals\watch.txt, outside the app folder.
+        // watch.txt is yours; review answers go in review.txt. Both live under %APPDATA%\DesktopVitals.
         public static string ConfigFile()
         {
             return System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "DesktopVitals", "watch.txt");
         }
-
-        public static bool LinesSkipped;
-
-        // Cap hostile or huge watch.txt: 64 KB, 200 lines, 500 chars per line.
-        public static List<string> ReadConfigLines()
+        public static string ReviewFile()
         {
-            LinesSkipped = false;
+            return System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "DesktopVitals", "review.txt");
+        }
+
+        public static bool ConfigTooLarge;
+
+        // File.ReadAllLines keeps BOM and UTF-16. Skip files over 1 MB.
+        public static List<string> ReadLines(string file)
+        {
             var list = new List<string>();
-            string file = ConfigFile();
             if (!File.Exists(file)) return list;
             try
             {
-                using (var fs = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
-                {
-                    if (fs.Length > 64 * 1024) LinesSkipped = true;
-                    int take = (int)Math.Min(fs.Length, 64 * 1024);
-                    var buf = new byte[take];
-                    int n = fs.Read(buf, 0, take);
-                    using (var sr = new StringReader(Encoding.UTF8.GetString(buf, 0, n)))
-                    {
-                        string line;
-                        while ((line = sr.ReadLine()) != null)
-                        {
-                            if (list.Count >= 200) { LinesSkipped = true; break; }
-                            if (line.Length > 500) { LinesSkipped = true; continue; }
-                            list.Add(line);
-                        }
-                    }
-                }
+                if (new FileInfo(file).Length > 1024 * 1024) { ConfigTooLarge = true; return list; }
+                list.AddRange(File.ReadAllLines(file));
             }
             catch (Exception) { }
             return list;
         }
 
         // Lines that start with @ are settings: "@temperature-file = <json>", "@hide = <name>", and similar.
-        public static Dictionary<string, string> Settings() { return ParseSettings(ReadConfigLines()); }
         public static Dictionary<string, string> ParseSettings(List<string> lines)
         {
             var d = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -403,7 +389,6 @@ namespace DesktopVitals
         }
 
         // Every value of a setting that can repeat, such as "@hide = <name>".
-        public static List<string> Many(string key) { return ParseMany(ReadConfigLines(), key); }
         public static List<string> ParseMany(List<string> lines, string key)
         {
             var list = new List<string>();
@@ -418,7 +403,6 @@ namespace DesktopVitals
         }
 
         // "Label = something.exe" matches a process name; anything else matches text in the command line.
-        public static List<WatchRule> Load() { return ParseRules(ReadConfigLines()); }
         public static List<WatchRule> ParseRules(List<string> lines)
         {
             var rules = new List<WatchRule>();
@@ -1348,6 +1332,7 @@ namespace DesktopVitals
         UIElement reviewView;
         TextBlock reviewError;
         bool needReview;
+        bool acceptReview;
         bool configSkipped;
         static readonly string[] AiChoices = { "Agent", "App", "Model", "Bot", "Watching" };
         static readonly string[] ScriptChoices = { "Script", "Agent", "Bot" };
@@ -1358,12 +1343,15 @@ namespace DesktopVitals
 
         readonly string snapshotDir;
 
-        public VitalsWindow() : this(null, false) { }
+        public VitalsWindow() : this(null, false, false) { }
 
         // With a folder, the window renders off screen, writes vitals.txt and vitals.png there, and closes.
-        public VitalsWindow(string snapshotDir, bool review)
+        public VitalsWindow(string snapshotDir, bool review) : this(snapshotDir, review, false) { }
+
+        public VitalsWindow(string snapshotDir, bool review, bool acceptReview)
         {
             this.snapshotDir = snapshotDir;
+            this.acceptReview = acceptReview;
             LoadConfig();
             // First run: once the first readings are in, show what was found and ask if it's right.
             needReview = review || (snapshotDir == null && !settings.ContainsKey("reviewed"));
@@ -1413,22 +1401,31 @@ namespace DesktopVitals
 
         void LoadConfig()
         {
-            var lines = WatchRule.ReadConfigLines();
-            configSkipped = WatchRule.LinesSkipped;
-            var all = WatchRule.ParseRules(lines);
+            WatchRule.ConfigTooLarge = false;
+            var watch = WatchRule.ReadLines(WatchRule.ConfigFile());
+            var review = WatchRule.ReadLines(WatchRule.ReviewFile());
+            configSkipped = WatchRule.ConfigTooLarge;
+            var all = WatchRule.ParseRules(watch);
             rules = all.Where(r => !r.IsBot && !r.Ai).ToList();
             botRules = all.Where(r => r.IsBot && !r.Ai).ToList();
             aiRules = all.Where(r => r.Ai).ToList();
-            settings = WatchRule.ParseSettings(lines);
-            hidden = new HashSet<string>(WatchRule.ParseMany(lines, "hide"), StringComparer.OrdinalIgnoreCase);
+            settings = WatchRule.ParseSettings(watch);
+            foreach (var kv in WatchRule.ParseSettings(review)) settings[kv.Key] = kv.Value;
+            hidden = new HashSet<string>(WatchRule.ParseMany(watch, "hide"), StringComparer.OrdinalIgnoreCase);
+            foreach (string h in WatchRule.ParseMany(review, "hide")) hidden.Add(h);
             kindOf = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            foreach (string v in WatchRule.ParseMany(lines, "kind"))
+            Action<List<string>> takeKinds = delegate(List<string> lines)
             {
-                int bar = v.LastIndexOf('|');
-                if (bar <= 0) continue;
-                string k = Theme.Kinds.Keys.FirstOrDefault(x => x.Equals(v.Substring(bar + 1).Trim(), StringComparison.OrdinalIgnoreCase));
-                if (k != null) kindOf[v.Substring(0, bar).Trim()] = k;
-            }
+                foreach (string v in WatchRule.ParseMany(lines, "kind"))
+                {
+                    int bar = v.LastIndexOf('|');
+                    if (bar <= 0) continue;
+                    string k = Theme.Kinds.Keys.FirstOrDefault(x => x.Equals(v.Substring(bar + 1).Trim(), StringComparison.OrdinalIgnoreCase));
+                    if (k != null) kindOf[v.Substring(0, bar).Trim()] = k;
+                }
+            };
+            takeKinds(watch);
+            takeKinds(review);
         }
 
         // ---------- layout ----------
@@ -1660,7 +1657,7 @@ namespace DesktopVitals
                 prev.Clear();
                 cmdCache.Clear();
                 prevKernel = 0;
-                if (!live) subtitle.Text = "Off \u00B7 not collecting" + (configSkipped ? " \u00B7 some settings lines were skipped" : "");
+                if (!live) subtitle.Text = "Off \u00B7 not collecting" + (configSkipped ? " \u00B7 settings file too large" : "");
                 Native.SetProcessWorkingSetSize(Native.GetCurrentProcess(), (IntPtr)(-1), (IntPtr)(-1));
             }
         }
@@ -1782,7 +1779,7 @@ namespace DesktopVitals
 
             TimeSpan up = TimeSpan.FromMilliseconds(Native.GetTickCount64());
             string upText = up.TotalDays >= 1 ? string.Format("{0}d {1}h", (int)up.TotalDays, up.Hours) : string.Format("{0}h {1}m", up.Hours, up.Minutes);
-            subtitle.Text = "Up " + upText + " \u00B7 " + procs.Count + " processes" + (configSkipped ? " \u00B7 some settings lines were skipped" : "");
+            subtitle.Text = "Up " + upText + " \u00B7 " + procs.Count + " processes" + (configSkipped ? " \u00B7 settings file too large" : "");
 
             // AI: local models, coding agents, AI apps, and the bots and watched lines that are AI.
             lastProcs = procs;
@@ -1793,20 +1790,22 @@ namespace DesktopVitals
             for (int i = 0; i < ai.Count; i++) ShowAi(aiRows[i], ai[i]);
 
             // Watching
-            EnsureRows(watchList, watchRows, rules.Count);
-            for (int i = 0; i < rules.Count; i++)
+            var shownWatch = rules.Where(r => !hidden.Contains(r.Label)).ToList();
+            EnsureRows(watchList, watchRows, shownWatch.Count);
+            for (int i = 0; i < shownWatch.Count; i++)
             {
-                var hits = procs.Where(rules[i].Hit).ToList();
+                var hits = procs.Where(shownWatch[i].Hit).ToList();
                 var tip = hits.Count == 0 ? null : string.Join("\n", hits.Select(h => h.Pid + "  " + Trim(h.Cmd.Length > 0 ? h.Cmd : h.Exe, 140)));
-                watchRows[i].SetWatched(rules[i].Label, hits.Count > 0, hits.Count, hits.Sum(h => h.Cpu), hits.Sum(h => h.Private), tip);
+                watchRows[i].SetWatched(shownWatch[i].Label, hits.Count > 0, hits.Count, hits.Sum(h => h.Cpu), hits.Sum(h => h.Private), tip);
                 watchRows[i].Pids = hits.Select(h => h.Pid).ToArray();
             }
 
             // Bots
-            EnsureRows(botList, botRows, botRules.Count);
-            for (int i = 0; i < botRules.Count; i++)
+            var shownBots = botRules.Where(r => !hidden.Contains(r.Label)).ToList();
+            EnsureRows(botList, botRows, shownBots.Count);
+            for (int i = 0; i < shownBots.Count; i++)
             {
-                var r = botRules[i];
+                var r = shownBots[i];
                 var hits = procs.Where(r.Hit).ToList();
                 botRows[i].Pids = hits.Select(h => h.Pid).ToArray();
                 botRows[i].Bot = r;
@@ -1903,6 +1902,7 @@ namespace DesktopVitals
                 topRows[i].Pids = g.Pids;
             }
 
+            if (acceptReview && tickCount >= 2) { acceptReview = false; TryWriteReview(ReviewItems()); }
             if (needReview && tickCount >= 2 && (TaskList.Ready || tickCount >= 8)) { needReview = false; ShowReview(); }
         }
 
@@ -2032,7 +2032,7 @@ namespace DesktopVitals
             foreach (var l in lines)
             {
                 string k;
-                if (l.Rule == null && kindOf.TryGetValue(l.Name, out k)) l.Kind = k;
+                if (kindOf.TryGetValue(l.Name, out k)) l.Kind = k;
             }
             return lines.OrderBy(l => l.Procs.Count == 0).ThenBy(l => KindOrder.IndexOf(l.Kind)).ThenBy(l => l.Name, StringComparer.OrdinalIgnoreCase).ToList();
         }
@@ -2267,7 +2267,7 @@ namespace DesktopVitals
             foreach (var r in botRules)
             {
                 var hits = lastProcs.Where(r.Hit).ToList();
-                items.Add(new ReviewItem { Section = "Bot", Name = r.Label, Kind = "Bot", Rule = r, Detail = hits.Count == 0 ? "not running" : "running" });
+                items.Add(new ReviewItem { Section = "Bot", Name = r.Label, Kind = "Bot", Rule = r, On = !hidden.Contains(r.Label), Detail = hits.Count == 0 ? "not running" : "running" });
             }
             foreach (var kv in lastScripts)
             {
@@ -2280,7 +2280,10 @@ namespace DesktopVitals
             foreach (var r in rules)
             {
                 var hits = lastProcs.Where(r.Hit).ToList();
-                items.Add(new ReviewItem { Section = "Watching", Name = r.Label, Kind = r.Kind ?? "Watching", Rule = r, Kinds = WatchChoices, Detail = hits.Count == 0 ? "not running" : "running" });
+                string kind = r.Kind ?? "Watching";
+                string k;
+                if (kindOf.TryGetValue(r.Label, out k)) kind = k;
+                items.Add(new ReviewItem { Section = "Watching", Name = r.Label, Kind = kind, Rule = r, On = !hidden.Contains(r.Label), Kinds = WatchChoices, Detail = hits.Count == 0 ? "not running" : "running" });
             }
             foreach (var i in items) i.OrigKind = i.Kind;
             return items;
@@ -2390,62 +2393,33 @@ namespace DesktopVitals
             return row;
         }
 
-        // Writes the answers into watch.txt: unticked found items become "@hide", re-tagged ones "@kind",
-        // and your own lines are commented out or get "| kind:".
-        void SaveReview(List<ReviewItem> items)
+        // Writes "@hide", "@kind", and "@reviewed" to review.txt only. Never rewrites watch.txt.
+        bool TryWriteReview(List<ReviewItem> items)
         {
             try
             {
-                string file = WatchRule.ConfigFile();
-                var lines = File.Exists(file) ? WatchRule.ReadConfigLines()
-                    : new List<string> { "# Desktop Vitals settings for this PC. See watch.example.txt in the app folder for the format.", "" };
-                if (WatchRule.LinesSkipped) configSkipped = true;
-                var names = new HashSet<string>(items.Where(i => i.Rule == null || i.Section == "AI").Select(i => i.Name), StringComparer.OrdinalIgnoreCase);
-                Func<string, string, string> valueOf = (l, key) =>
-                {
-                    string t = l.Trim();
-                    int eq = t.IndexOf('=');
-                    if (!t.StartsWith("@") || eq < 2 || !t.Substring(1, eq - 1).Trim().Equals(key, StringComparison.OrdinalIgnoreCase)) return null;
-                    return t.Substring(eq + 1).Trim();
-                };
-                lines.RemoveAll(l =>
-                {
-                    if (valueOf(l, "reviewed") != null) return true;
-                    string h = valueOf(l, "hide");
-                    if (h != null) return names.Contains(h);
-                    string k = valueOf(l, "kind");
-                    return k != null && k.LastIndexOf('|') > 0 && names.Contains(k.Substring(0, k.LastIndexOf('|')).Trim());
-                });
-                var add = new List<string>();
+                string file = WatchRule.ReviewFile();
+                var lines = new List<string>();
                 foreach (var it in items)
                 {
-                    bool kindChanged = it.Kind != it.OrigKind;
-                    if (it.Rule != null)
-                    {
-                        int at = lines.IndexOf(it.Rule.Raw);
-                        if (at < 0) continue;
-                        if (!it.On) lines[at] = "# " + it.Rule.Raw;
-                        // An AI line can also be found on its own (Claude Code), so hide its name as well.
-                        if (!it.On && it.Section == "AI") add.Add("@hide = " + it.Name);
-                        else if (kindChanged) lines[at] = Regex.Replace(it.Rule.Raw, "\\s*\\|\\s*kind:[^|]*", "", RegexOptions.IgnoreCase).TrimEnd() + " | kind: " + it.Kind;
-                    }
-                    else if (!it.On) add.Add("@hide = " + it.Name);
-                    else if (kindChanged && it.Section == "Script") add.Add(it.Name + " = " + it.Match + " | kind: " + it.Kind);
-                    else if (kindChanged) add.Add("@kind = " + it.Name + " | " + it.Kind);
+                    if (!it.On) lines.Add("@hide = " + it.Name);
+                    else if (it.Kind != it.OrigKind) lines.Add("@kind = " + it.Name + " | " + it.Kind);
                 }
-                while (lines.Count > 0 && lines[lines.Count - 1].Trim().Length == 0) lines.RemoveAt(lines.Count - 1);
-                lines.Add("");
-                lines.AddRange(add);
                 lines.Add("@reviewed = " + DateTime.Now.ToString("yyyy-MM-dd"));
                 Directory.CreateDirectory(System.IO.Path.GetDirectoryName(file));
                 File.WriteAllLines(file, lines, new UTF8Encoding(false));
+                return true;
             }
-            catch (Exception)
+            catch (Exception) { return false; }
+        }
+
+        void SaveReview(List<ReviewItem> items)
+        {
+            if (!TryWriteReview(items))
             {
                 if (reviewError != null) reviewError.Text = "Could not save settings";
                 return;
             }
-
             LoadConfig();
             foreach (var l in new[] { aiRows, botRows, scriptRows, taskRows, watchRows, topRows }) l.Clear();
             reviewView = null;
@@ -2645,9 +2619,10 @@ namespace DesktopVitals
                 string dir = at + 1 < args.Length && !args[at + 1].StartsWith("--") ? args[at + 1] : System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "DesktopVitals", "snapshot");
                 var snapApp = new Application { ShutdownMode = ShutdownMode.OnMainWindowClose };
                 snapApp.DispatcherUnhandledException += (s, e) => { ErrorLog.Write(e.Exception); e.Handled = true; };
-                // "--review" pictures the review screen instead of the readings.
+                // "--review" pictures the review screen; "--accept-review" writes review.txt without touching watch.txt.
                 bool review = args.Any(a => a.Equals("--review", StringComparison.OrdinalIgnoreCase));
-                snapApp.Run(new VitalsWindow(System.IO.Path.GetFullPath(dir), review));
+                bool accept = args.Any(a => a.Equals("--accept-review", StringComparison.OrdinalIgnoreCase));
+                snapApp.Run(new VitalsWindow(System.IO.Path.GetFullPath(dir), review, accept));
                 return;
             }
             bool created;
