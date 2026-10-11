@@ -52,7 +52,7 @@ Commit: [x] 2278d6f
 ### 9. CoreLayout empty-mask fallback
 Refs: `src/DesktopVitals.cs:62-85`, `84`, `1413-1415`, `1686-1694` (robustness R1, R2)
 Done when: cores with empty thread lists are skipped; if none remain, the strip uses a flat `0 .. ProcessorCount-1` layout; the caption never shows `0 threads` when `ProcessorCount` is greater than 0; startup no longer throws on empty affinity.
-Commit: [ ]
+Commit: [x]
 
 ### 10. Multi-group processor fallback
 Refs: `src/DesktopVitals.cs:76-78` (robustness R3)
