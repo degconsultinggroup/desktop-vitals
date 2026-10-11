@@ -67,7 +67,7 @@ Commit: [x] 109b1d6
 ### 12. Honest GPU samples
 Refs: `src/DesktopVitals.cs:128-171`, `164-168`, `661-705`, `1705-1723` (robustness R7, R9)
 Done when: Nvml does not report fake `0` temp, power, or util when those calls failed; GpuCounters util is not marked ready until a real delta exists (no first-interval fake 0%).
-Commit: [x]
+Commit: [x] f1654b9
 
 ### 13. Guard memory and VRAM totals
 Refs: `src/DesktopVitals.cs:1699-1702`, `1708` (robustness R10, R11)
