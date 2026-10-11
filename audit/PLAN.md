@@ -114,7 +114,7 @@ Commit: [x] 31f8b19
 ### 21. Remove unused origOn
 Refs: `src/DesktopVitals.cs:2381`, `2421`, `2485` (lean B2)
 Done when: `origOn` is not built, passed, or accepted by `SaveReview`.
-Commit: [x] 09e2047
+Commit: [x] 3ec2f10
 
 ### 22. Merge Short and Ago
 Refs: `src/DesktopVitals.cs:1858-1872` (lean B3)
