@@ -1973,7 +1973,7 @@ namespace DesktopVitals
                 for (int i = 0; i < tasks.Count; i++)
                 {
                     var t = tasks[i];
-                    string result = t.Running ? "running" : t.NeverRan ? "\u2013" : t.Result == 0x41306 ? "stopped" : t.Failed ? "failed" : "OK";
+                    string result = t.Running ? "running" : t.NeverRan ? "n/a" : t.Result == 0x41306 ? "stopped" : t.Failed ? "failed" : "OK";
                     string last = t.NeverRan ? "never" : Short(DateTime.Now - t.LastRun) + " ago";
                     string next = t.NextRun > DateTime.Now ? "next in " + Ago(t.NextRun - DateTime.Now) : "";
                     string tip = t.Path + "\n" + Trim(t.Action ?? "", 160) + (t.Failed ? "\nLast result: 0x" + t.Result.ToString("X") : "");
