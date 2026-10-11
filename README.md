@@ -58,7 +58,7 @@ While live, it uses about 0.1% of the machine. One system call per refresh cover
 Everything works without settings. To add your own cards or a temperature sensor, copy `watch.example.txt` to `%APPDATA%\DesktopVitals\watch.txt`, edit it, and reopen the app. Your settings stay outside the app folder, so updates never touch them.
 
 - **Watching:** `Label = match` keeps an eye on an app or a command. A match ending in `.exe` is a process name. Anything else is text found in the command line.
-- **Bots:** add `| check:` to a line to track whether a bot is still doing work, not just running. The check is a file the bot rewrites, a folder it writes into, or an http health address. A bot turns amber when its check goes quiet for 5 minutes. Add `| log:` to count crash restarts from its log, and `| code:` to open its folder in your editor at the latest crash.
+- **Bots:** add `| check:` to a line to track whether a bot is still doing work, not just running. The check is a file the bot rewrites, a folder it writes into, or an http health address. A bot turns amber when its check goes quiet for 5 minutes. Add `| code:` to open its folder in your editor.
 - **AI:** lines that name a known AI program (Claude, Cursor, Ollama, OpenClaw ...) go in the AI card instead of Bots or Watching. Add `| ai` to put any other line there, and `| kind: Agent` (or `App`, `Model`, `Bot`, `Watching`) to choose its tag.
 - **Hidden and re-tagged items:** the review screen writes `@hide = <name>` for things you untick and `@kind = <name> | Agent` for things you re-tag. Delete those lines to undo them.
 - **Processor temperature:** Windows doesn't give CPU temperature to normal apps. If a sensor tool writes a JSON file, point `@temperature-file` at it.

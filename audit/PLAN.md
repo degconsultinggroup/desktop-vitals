@@ -144,7 +144,7 @@ Commit: [x] 04053fe
 ### 27. Remove bot crash log feature
 Refs: `src/DesktopVitals.cs:352`, `362`, `427-429`, `744-746`, `760`, `807-833`, `1881-1893`, `2245-2252`; `watch.example.txt` crash/log samples (lean C1)
 Done when: `| log:`, `| crash:`, `CountCrashes`, and crash jump-to-line are gone; `check:` and folder `| code:` remain.
-Commit: [ ]
+Commit: [x]
 
 ### 28. Trim HTTP health JSON extras
 Refs: `src/DesktopVitals.cs:767-784` (lean C2)

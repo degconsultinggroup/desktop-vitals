@@ -13,11 +13,9 @@
 # Add "| check:" to a line to put it in the Bots card. The check is the bot's last sign of work:
 #   a file it rewrites (a heartbeat or health file), a folder it writes into, or an http health address.
 #   A bot turns amber when its check goes quiet for 5 minutes.
-# "| log:"   a log file. Lines from the last day that start with a timestamp (2026-10-10 14:03:22)
-#            and contain "restart" count as crashes. Change the word with "| crash: <text>".
-# "| code:"  the bot's folder. Clicking the bot opens it in Cursor or VS Code, at its latest crash if any.
+# "| code:"  the bot's folder. Clicking the bot opens it in Cursor or VS Code.
 #
-# Price bot = price_bot.py | check: C:\bots\price\heartbeat.json | log: C:\bots\price\bot.log | code: C:\bots\price
+# Price bot = price_bot.py | check: C:\bots\price\heartbeat.json | code: C:\bots\price
 # Local API = uvicorn | check: http://127.0.0.1:8000/health
 
 # ---- AI ----

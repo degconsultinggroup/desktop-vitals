@@ -363,7 +363,6 @@ namespace DesktopVitals
         public string Match;
         public bool ByExe;
         public string Check;      // a file, folder or http address that shows the bot is working
-        public string Log;        // the supervisor log, for counting crash restarts
         public string Code;       // the bot's folder, opened in your editor on click
         public bool Ai;           // shown in the AI card: "| ai", or the match names a known AI program
         public string Kind;       // "| kind: Agent" overrides what the line is called in the AI card
@@ -372,8 +371,6 @@ namespace DesktopVitals
 
         static readonly string[] AiWords = { "claude", "openclaw", "codex", "gemini", "chatgpt", "openai", "anthropic", "grok", "cursor", "windsurf", "copilot", "aider", "ollama", "llama", "lm studio", "koboldcpp", "vllm", "perplexity" };
         public static bool SoundsLikeAi(string s) { return AiWords.Any(w => s.IndexOf(w, StringComparison.OrdinalIgnoreCase) >= 0); }
-
-        public string Crash = "restart";   // text in a log line that marks a crash restart
 
         // Your settings live in %APPDATA%\DesktopVitals\watch.txt, outside the app folder.
         public static string ConfigFile()
@@ -463,9 +460,7 @@ namespace DesktopVitals
                 {
                     string x = part.Trim();
                     if (x.StartsWith("check:", StringComparison.OrdinalIgnoreCase)) r.Check = x.Substring(6).Trim();
-                    else if (x.StartsWith("log:", StringComparison.OrdinalIgnoreCase)) r.Log = x.Substring(4).Trim();
                     else if (x.StartsWith("code:", StringComparison.OrdinalIgnoreCase)) r.Code = x.Substring(5).Trim();
-                    else if (x.StartsWith("crash:", StringComparison.OrdinalIgnoreCase)) r.Crash = x.Substring(6).Trim();
                     else if (x.Equals("ai", StringComparison.OrdinalIgnoreCase)) r.Ai = true;
                     else if (x.StartsWith("kind:", StringComparison.OrdinalIgnoreCase)) r.Kind = Theme.Kinds.Keys.FirstOrDefault(k => k.Equals(x.Substring(5).Trim(), StringComparison.OrdinalIgnoreCase));
                 }
@@ -822,15 +817,12 @@ namespace DesktopVitals
         }
     }
 
-    // What a bot's check says: when it last showed signs of work, how long it has been up, crashes in the last day.
+    // What a bot's check says: when it last showed signs of work, and how long it has been up.
     class BotStatus
     {
         public DateTime? LastSign;     // newest heartbeat file write, or the time the http check answered
         public TimeSpan? Uptime;       // from the http check, when it reports one
         public string Problem;         // set when the http check answers but reports something failing
-        public int Crashes = -1;
-        public int CrashLine;          // line in the supervisor log where the latest crash in the last day is recorded
-        public DateTime CrashTime;
         public bool Busy;
         public DateTime Read = DateTime.MinValue;
 
@@ -844,7 +836,6 @@ namespace DesktopVitals
                 {
                     if (r.Check.StartsWith("http", StringComparison.OrdinalIgnoreCase)) ReadHttp(r.Check);
                     else LastSign = NewestWrite(r.Check);
-                    if (r.Log != null) CountCrashes(r.Log, r.Crash);
                 }
                 catch (Exception) { }
                 finally { Read = DateTime.Now; Busy = false; }
@@ -916,41 +907,6 @@ namespace DesktopVitals
                 dir = subs.Length == 0 ? null : subs.OrderBy(d => d, StringComparer.OrdinalIgnoreCase).Last();
             }
             return newest;
-        }
-
-        // A crash is a log line from the last day that starts with a timestamp and contains the crash text ("restart" by default).
-        void CountCrashes(string log, string crashText)
-        {
-            if (!File.Exists(log)) { Crashes = -1; return; }
-            var since = DateTime.Now.AddHours(-24);
-            int n = 0, lineNo = 0, crashLine = 0;
-            DateTime crashTime = DateTime.MinValue;
-            try
-            {
-                using (var fs = new FileStream(log, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
-                {
-                    if (fs.Length > 1024 * 1024) fs.Seek(-1024 * 1024, SeekOrigin.End);
-                    using (var sr = new StreamReader(fs))
-                    {
-                        string line;
-                        while ((line = sr.ReadLine()) != null)
-                        {
-                            if (++lineNo > 10000) break;
-                            if (line.Length < 19 || line.IndexOf(crashText, StringComparison.OrdinalIgnoreCase) < 0) continue;
-                            DateTime t;
-                            string stamp = line.Substring(0, 19).Replace('T', ' ');
-                            if (DateTime.TryParseExact(stamp, "yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture, DateTimeStyles.None, out t) && t >= since)
-                            {
-                                n++;
-                                crashLine = lineNo;
-                                crashTime = t;
-                            }
-                        }
-                    }
-                }
-            }
-            catch (Exception) { Crashes = -1; return; }
-            CrashLine = crashLine; CrashTime = crashTime; Crashes = n;
         }
     }
 
@@ -2010,19 +1966,13 @@ namespace DesktopVitals
             if (!botStatus.TryGetValue(r.Label, out st)) botStatus[r.Label] = st = new BotStatus();
             st.Refresh(r);
             tip = hits.Count == 0 ? null : string.Join("\n", hits.Select(h => h.Pid + "  " + Trim(h.Cmd.Length > 0 ? h.Cmd : h.Exe, 140)));
-            if (r.Code != null)
-            {
-                string how = st.Crashes > 0 && r.Log != null ? OpenInEditor + " at the crash from " + st.CrashTime.ToString("ddd h:mm tt") : OpenInEditor;
-                tip = tip == null ? how : how + "\n\n" + tip;
-            }
+            if (r.Code != null) tip = tip == null ? OpenInEditor : OpenInEditor + "\n\n" + tip;
             state = 0; detail = ""; right = "not running";
             if (hits.Count == 0) return;
 
             TimeSpan botUp = st.Uptime ?? (DateTime.UtcNow - DateTime.FromFileTimeUtc(hits.Max(h => h.CreateTime)));
             var bits = new List<string> { "up " + Ago(botUp) };
             if (st.Problem != null) bits.Add(st.Problem);
-            else if (st.Crashes == 0) bits.Add("no crashes");
-            else if (st.Crashes > 0) bits.Add(st.Crashes + (st.Crashes == 1 ? " crash" : " crashes") + " in 24h");
             double quiet = st.LastSign.HasValue ? (DateTime.Now - st.LastSign.Value).TotalSeconds : -1;
             bool stale = st.Read != DateTime.MinValue && (quiet < 0 || quiet > 300);
             right = st.Read == DateTime.MinValue ? "" : quiet < 0 ? "no sign" : quiet < 60 ? "just now" : Short(TimeSpan.FromSeconds(quiet)) + " ago";
@@ -2345,14 +2295,7 @@ namespace DesktopVitals
             OpenPath(row.Pids.Select(Procs.ImagePath).FirstOrDefault(x => !string.IsNullOrEmpty(x)));
         }
 
-        // The bot's folder in the editor, or its log when a recent crash was counted.
-        void OpenBot(WatchRule bot)
-        {
-            BotStatus st;
-            botStatus.TryGetValue(bot.Label, out st);
-            bool crash = st != null && st.Crashes > 0 && bot.Log != null;
-            OpenPath(crash ? bot.Log : bot.Code);
-        }
+        void OpenBot(WatchRule bot) { OpenPath(bot.Code); }
 
         // Dedicated video memory per process, from Windows' "GPU Process Memory" counters. Read off the UI thread every 5 s.
         void ShowVram(List<Proc> procs)
