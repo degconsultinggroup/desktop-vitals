@@ -1436,6 +1436,7 @@ namespace DesktopVitals
         Grid rootGrid;
         ScrollViewer dashScroll;
         UIElement reviewView;
+        TextBlock reviewError;
         bool needReview;
         bool configSkipped;
         static readonly string[] AiChoices = { "Agent", "App", "Model", "Bot", "Watching" };
@@ -2565,11 +2566,15 @@ namespace DesktopVitals
             var foot = new Grid { Margin = new Thickness(18, 4, 14, 14) };
             foot.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             foot.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            var left = new StackPanel();
             var edit = Theme.Label("Edit settings file", 12, Theme.Link, FontWeights.Normal);
             edit.Cursor = Cursors.Hand;
             edit.ToolTip = "For things that aren't open now, or a bot's health check";
             edit.MouseLeftButtonUp += delegate { OpenSettingsFile(); };
-            foot.Children.Add(edit);
+            left.Children.Add(edit);
+            reviewError = Theme.Label("", 12, Theme.AmberDot, FontWeights.Normal);
+            left.Children.Add(reviewError);
+            foot.Children.Add(left);
             var ok = new Border { Background = Theme.Green, CornerRadius = new CornerRadius(8), Padding = new Thickness(16, 6, 16, 7), Cursor = Cursors.Hand };
             ok.Child = Theme.Label("Looks good", 13, new SolidColorBrush(Color.FromRgb(0x06, 0x24, 0x12)), FontWeights.SemiBold);
             ok.MouseLeftButtonUp += delegate { SaveReview(items, origOn); };
@@ -2688,11 +2693,16 @@ namespace DesktopVitals
                 Directory.CreateDirectory(System.IO.Path.GetDirectoryName(file));
                 File.WriteAllLines(file, lines, new UTF8Encoding(false));
             }
-            catch (Exception) { }
+            catch (Exception)
+            {
+                if (reviewError != null) reviewError.Text = "Could not save settings";
+                return;
+            }
 
             LoadConfig();
             foreach (var l in new[] { aiRows, botRows, scriptRows, taskRows, watchRows, topRows }) l.Clear();
             reviewView = null;
+            reviewError = null;
             Content = Build();
             SetLive(live);
             if (live) Prime();
