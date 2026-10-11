@@ -149,7 +149,7 @@ Commit: [x] 4ffeab4
 ### 28. Trim HTTP health JSON extras
 Refs: `src/DesktopVitals.cs:767-784` (lean C2)
 Done when: loopback GET still sets last-sign / working; parsing of `uptimeMs`, `failing`, and `ready` into Problem/Uptime is removed.
-Commit: [x]
+Commit: [x] e52e52f
 
 ## Packaging
 
