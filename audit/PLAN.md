@@ -97,7 +97,7 @@ Commit: [x] 06d4108
 ### 18. Format theme numbers with invariant culture
 Refs: `src/DesktopVitals.cs:906-923` (robustness R33)
 Done when: Theme numeric formatters use `CultureInfo.InvariantCulture` so decimals stay stable on non-English locales.
-Commit: [x]
+Commit: [x] 46a1974
 
 ### 19. Make install shortcuts independent
 Refs: `install.ps1:18-19` (robustness R36)
