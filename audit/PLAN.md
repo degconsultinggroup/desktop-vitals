@@ -177,6 +177,24 @@ Refs: README install section; release assets (known 10; Phase 4 packaging may la
 Done when: a prebuilt `DesktopVitals.exe` is published with `SHA256SUMS.txt`; README first install is download the exe; source build with Git and ExecutionPolicy is second.
 Commit: [x] e4465d2 (release job); README install order 7300d25
 
+## Review fixes
+
+Post-PR review on `harden`. One commit per change. `src/DesktopVitals.cs` stays at or under 2666 lines.
+
+### 1. The app never rewrites watch.txt
+`SaveReview` writes `@hide`, `@kind`, `@reviewed` only to `%APPDATA%\DesktopVitals\review.txt`. Load merges watch.txt and review.txt (review wins). `File.ReadAllLines` with a 1 MB skip. Commit: [x] 01a8a04
+
+### 2. Folders in editor; everything else in Explorer
+Only `| code:` paths open in the editor. Process, task, and command-line paths use Explorer. Prefer Cursor under LocalAppData, then walk PATH parents. Commit: [x] 7e9988c
+
+### 3. Slow reads wait instead of racing a timer
+Drop the Task Scheduler 5 s watchdog. One reader thread; Tasks card shows `loading` until the first result. First-run review does not wait on `TaskList.Ready`. Commit: [x] 7d31e1b
+
+### 4. Standard tools instead of hand-made limits
+`Directory.CreateDirectory` for snapshot folders; `uri.IsLoopback` for HTTP; 1 MB command-line cap; VRAM shows `not available` when NVML memory fails. Commit: [x] 2dd6459
+
+Follow-ups for reliable accept-review smoke: 6e6c7fe, 9cc6f50.
+
 ## Dropped (not in this PLAN)
 
 | Finding | Why dropped |
