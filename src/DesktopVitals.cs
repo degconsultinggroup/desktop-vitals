@@ -240,7 +240,7 @@ namespace DesktopVitals
             {
                 int ret;
                 int st = Native.NtQueryInformationProcess(h, 60, b, len, out ret);
-                if ((st == Native.StatusLengthMismatch || st == Native.StatusBufferTooSmall) && ret > len && ret < (1 << 20))
+                if ((st == Native.StatusLengthMismatch || st == Native.StatusBufferTooSmall) && ret > len && ret <= 32 * 1024)
                 {
                     Marshal.FreeHGlobal(b);
                     len = ret;
@@ -255,7 +255,8 @@ namespace DesktopVitals
             finally { Marshal.FreeHGlobal(b); Native.CloseHandle(h); }
         }
 
-        // The process's working folder, read from its parameters block. Works for 64-bit processes you own.
+        // Working folder from the PEB: display-only, best-effort on 64-bit processes you own.
+        // PROCESS_VM_READ is the minimum needed; never execute what is read; skip on any failure.
         public static string CurrentDirectory(int pid)
         {
             IntPtr h = Native.OpenProcess(Native.QueryLimited | 0x0010, false, pid);   // PROCESS_VM_READ
@@ -273,7 +274,7 @@ namespace DesktopVitals
                 if (!Native.ReadProcessMemory(h, parms + 0x38, us, 16, out got)) return null;
                 int len = BitConverter.ToUInt16(us, 0);
                 long bufAddr = BitConverter.ToInt64(us, 8);
-                if (len == 0 || len > 4096 || bufAddr == 0) return null;
+                if (len == 0 || len > 32 * 1024 || bufAddr == 0) return null;
                 byte[] chars = new byte[len];
                 if (!Native.ReadProcessMemory(h, new IntPtr(bufAddr), chars, len, out got)) return null;
                 return Encoding.Unicode.GetString(chars).TrimEnd('\\');
