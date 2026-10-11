@@ -2518,7 +2518,6 @@ namespace DesktopVitals
         {
             if (reviewView != null || rootGrid == null) return;
             var items = ReviewItems();
-            var origOn = items.ToDictionary(i => i, i => i.On);
 
             var page = new Grid();
             page.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
@@ -2562,7 +2561,7 @@ namespace DesktopVitals
             foot.Children.Add(left);
             var ok = new Border { Background = Theme.Green, CornerRadius = new CornerRadius(8), Padding = new Thickness(16, 6, 16, 7), Cursor = Cursors.Hand };
             ok.Child = Theme.Label("Looks good", 13, new SolidColorBrush(Color.FromRgb(0x06, 0x24, 0x12)), FontWeights.SemiBold);
-            ok.MouseLeftButtonUp += delegate { SaveReview(items, origOn); };
+            ok.MouseLeftButtonUp += delegate { SaveReview(items); };
             Grid.SetColumn(ok, 1);
             foot.Children.Add(ok);
             Grid.SetRow(foot, 1);
@@ -2626,7 +2625,7 @@ namespace DesktopVitals
 
         // Writes the answers into watch.txt: unticked found items become "@hide", re-tagged ones "@kind",
         // your own lines are commented out or get "| kind:", and ticked apps from "Did I miss anything" become new lines.
-        void SaveReview(List<ReviewItem> items, Dictionary<ReviewItem, bool> origOn)
+        void SaveReview(List<ReviewItem> items)
         {
             try
             {
