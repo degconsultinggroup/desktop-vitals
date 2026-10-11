@@ -25,7 +25,7 @@ Commit: [x] 4298c1c
 ### 4. Log unhandled errors
 Refs: `src/DesktopVitals.cs:2666`, `2678` (known 4; robustness R30)
 Done when: dispatcher and `AppDomain` unhandled errors append to `%APPDATA%\DesktopVitals\errors.log` with timestamp, version, type, message, and stack; log caps at 256 KB by truncating the oldest half; no foreign process command lines or paths in the log; dispatcher errors stay handled so the app keeps running.
-Commit: [x]
+Commit: [x] 668c6cb
 
 ### 5. Keep PEB cwd reads read-only and bounded
 Refs: `src/DesktopVitals.cs:233-256`, `261-282` (known 6; robustness R23)
