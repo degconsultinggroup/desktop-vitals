@@ -124,7 +124,7 @@ Commit: [x] 47eccda
 ### 23. ConfigFile always APPDATA
 Refs: `src/DesktopVitals.cs:364-373` (lean B4)
 Done when: settings path is always `%APPDATA%\DesktopVitals\watch.txt`; exe-adjacent fallbacks are gone.
-Commit: [x]
+Commit: [x] c9cdf3f
 
 ### 24. Remove Task Manager caption button
 Refs: `src/DesktopVitals.cs:1499-1503` (lean D1)
