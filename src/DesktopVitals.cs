@@ -1813,9 +1813,12 @@ namespace DesktopVitals
             ShowVram(procs);
 
             var ms = new Native.MEMSTAT { len = (uint)Marshal.SizeOf(typeof(Native.MEMSTAT)) };
-            Native.GlobalMemoryStatusEx(ref ms);
-            double used = ms.total - ms.avail;
-            memRow.Set(Theme.Gb(used) + " of " + Theme.Gb(ms.total) + " GB", Theme.Pct(100 * used / ms.total), used / ms.total);
+            if (!Native.GlobalMemoryStatusEx(ref ms) || ms.total == 0) memRow.Set("not available", "", 0);
+            else
+            {
+                double used = ms.total - ms.avail;
+                memRow.Set(Theme.Gb(used) + " of " + Theme.Gb(ms.total) + " GB", Theme.Pct(100 * used / ms.total), used / ms.total);
+            }
 
             double gu, vu, vt, gw; int gt;
             if (Nvml.Read(out gu, out vu, out vt, out gt, out gw))

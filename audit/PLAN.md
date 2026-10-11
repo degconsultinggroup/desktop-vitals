@@ -72,7 +72,7 @@ Commit: [x] f1654b9
 ### 13. Guard memory and VRAM totals
 Refs: `src/DesktopVitals.cs:1699-1702`, `1708` (robustness R10, R11)
 Done when: failed or zero `GlobalMemoryStatusEx` total shows not available with frac 0; Nvml VRAM percent uses the same `t > 0` guard as the counter path.
-Commit: [ ]
+Commit: [x]
 
 ### 14. Task Scheduler hang must not block review
 Refs: `src/DesktopVitals.cs:597-615`, `1852` (robustness R13, R14)
