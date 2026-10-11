@@ -10,7 +10,7 @@ No new features. No new dependencies. Net lines in `src/DesktopVitals.cs` should
 ### 1. Fix editor and Explorer path launches
 Refs: `src/DesktopVitals.cs:2151-2156`, `2191`, `2199-2204`, `2241` (known 1; security N1, N6; robustness R34)
 Done when: no `cmd.exe`; editor is a resolved `Cursor.exe` or `Code.exe`; launches use `UseShellExecute = false` with one path that exists; paths with `"`, newline, or `%` are rejected; Explorer open/select uses the same path rules.
-Commit: [ ]
+Commit: [x] e4066a8
 
 ### 2. Delete WakeSensor and temperature-task
 Refs: `src/DesktopVitals.cs:375`, `2036-2037`, `2051`, `2062-2077`; `watch.example.txt`; README settings that mention waking a task (known 2; security N2; robustness R15; lean A1)

@@ -2146,16 +2146,54 @@ namespace DesktopVitals
         // Clicking a line never ends anything. It brings that app's window to the front,
         // cycling through its windows on repeat clicks, or shows its file in Explorer when it has none.
         IntPtr lastJump = IntPtr.Zero;
-        // Cursor or VS Code, whichever is on PATH.
+        // Full path to Cursor.exe or Code.exe when found on PATH (or parent of a bin folder).
         static readonly string[] Editor = FindEditor();
         static string[] FindEditor()
         {
-            var dirs = (Environment.GetEnvironmentVariable("PATH") ?? "").Split(';');
-            foreach (var e in new[] { new[] { "cursor", "Cursor" }, new[] { "code", "VS Code" } })
-                if (dirs.Any(d => { try { return File.Exists(System.IO.Path.Combine(d.Trim(), e[0] + ".cmd")); } catch (Exception) { return false; } })) return e;
+            foreach (var e in new[] { new[] { "Cursor.exe", "Cursor" }, new[] { "Code.exe", "VS Code" } })
+                foreach (string raw in (Environment.GetEnvironmentVariable("PATH") ?? "").Split(';'))
+                {
+                    string d = raw.Trim();
+                    if (d.Length == 0) continue;
+                    try
+                    {
+                        string exe = System.IO.Path.Combine(d, e[0]);
+                        if (File.Exists(exe)) return new[] { exe, e[1] };
+                        string parent = System.IO.Path.GetDirectoryName(d.TrimEnd('\\'));
+                        if (parent != null) { exe = System.IO.Path.Combine(parent, e[0]); if (File.Exists(exe)) return new[] { exe, e[1] }; }
+                    }
+                    catch (Exception) { }
+                }
             return null;
         }
         static string OpenInEditor { get { return Editor == null ? "Show in File Explorer" : "Open in " + Editor[1]; } }
+
+        // Paths from other processes or settings: show or open only when they look like real files/folders.
+        static bool SafePath(string path)
+        {
+            if (string.IsNullOrEmpty(path)) return false;
+            if (path.IndexOf('"') >= 0 || path.IndexOf('\n') >= 0 || path.IndexOf('\r') >= 0 || path.IndexOf('%') >= 0) return false;
+            try { return File.Exists(path) || Directory.Exists(path); }
+            catch (Exception) { return false; }
+        }
+
+        static void OpenPath(string path)
+        {
+            if (!SafePath(path)) return;
+            try
+            {
+                if (Editor != null)
+                {
+                    var psi = new ProcessStartInfo(Editor[0], "\"" + path + "\"") { UseShellExecute = false };
+                    using (Process.Start(psi)) { }
+                    return;
+                }
+                string explorer = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), "explorer.exe");
+                string args = (File.Exists(path) ? "/select," : "") + "\"" + path + "\"";
+                using (Process.Start(new ProcessStartInfo(explorer, args) { UseShellExecute = false })) { }
+            }
+            catch (Exception) { }
+        }
 
         string Hint(ProcRow row)
         {
@@ -2182,35 +2220,11 @@ namespace DesktopVitals
             return found;
         }
 
-        // Opens a folder (and a file in it) in the editor, or in File Explorer when there is no editor.
-        static void OpenCode(string folder, string file, int line)
-        {
-            if (Editor == null)
-            {
-                string target = file ?? folder;
-                try { using (Process.Start("explorer.exe", (file != null ? "/select,\"" : "\"") + target + "\"")) { } } catch (Exception) { }
-                return;
-            }
-            string args = "\"" + folder + "\"";
-            if (file != null) args += line > 0 ? " -g \"" + file + ":" + line + "\"" : " \"" + file + "\"";
-            RunEditor(args);
-        }
-
-        static void RunEditor(string args)
-        {
-            try
-            {
-                var psi = new ProcessStartInfo("cmd.exe", "/c " + Editor[0] + " " + args) { CreateNoWindow = true, UseShellExecute = false };
-                using (Process.Start(psi)) { }
-            }
-            catch (Exception) { }
-        }
-
         void GoTo(ProcRow row)
         {
             if (row.Task != null)
             {
-                if (row.Task.Script != null) OpenCode(System.IO.Path.GetDirectoryName(row.Task.Script), row.Task.Script, 0);
+                if (row.Task.Script != null) OpenPath(row.Task.Script);
                 else try { using (Process.Start(new ProcessStartInfo("taskschd.msc") { UseShellExecute = true })) { } } catch (Exception) { }
                 return;
             }
@@ -2222,11 +2236,11 @@ namespace DesktopVitals
                 if (row.Script != null)
                 {
                     bool module = row.Script.StartsWith("module:");
-                    OpenCode(Scripts.Folder(row.Script), module ? null : row.Script, 0);
+                    OpenPath(module ? Scripts.Folder(row.Script) : row.Script);
                     return;
                 }
                 string script = ScriptOf(row.Pids);
-                if (script != null) { OpenCode(System.IO.Path.GetDirectoryName(script), script, 0); return; }
+                if (script != null) { OpenPath(script); return; }
             }
             if (wins.Count > 0)
             {
@@ -2236,19 +2250,16 @@ namespace DesktopVitals
                 Native.SetForegroundWindow(h);
                 return;
             }
-            string path = row.Pids.Select(Procs.ImagePath).FirstOrDefault(x => !string.IsNullOrEmpty(x));
-            if (path == null) return;
-            try { using (Process.Start("explorer.exe", "/select,\"" + path + "\"")) { } }
-            catch (Exception) { }
+            OpenPath(row.Pids.Select(Procs.ImagePath).FirstOrDefault(x => !string.IsNullOrEmpty(x)));
         }
 
-        // The bot's folder in the editor, with its log open at the latest crash when there was one in the last day.
+        // The bot's folder in the editor, or its log when a recent crash was counted.
         void OpenBot(WatchRule bot)
         {
             BotStatus st;
             botStatus.TryGetValue(bot.Label, out st);
-            bool crash = st != null && st.Crashes > 0 && bot.Log != null && st.CrashLine > 0;
-            OpenCode(bot.Code, crash ? bot.Log : null, crash ? st.CrashLine : 0);
+            bool crash = st != null && st.Crashes > 0 && bot.Log != null;
+            OpenPath(crash ? bot.Log : bot.Code);
         }
 
         // Dedicated video memory per process, from Windows' "GPU Process Memory" counters. Read off the UI thread every 5 s.
