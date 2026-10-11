@@ -23,9 +23,7 @@ It needs no setup. Open it and it finds what is running on your machine.
 
 Hover over a line to see what a click will do:
 
-- **Open in Cursor** or **Open in VS Code** opens a script's folder in your editor, whichever one is installed.
-- **Switch to window** brings an app's window to the front. Click again to cycle through its windows.
-- **Open Task Scheduler** opens Windows' task list for a scheduled task that doesn't run a script.
+- **Open in Cursor** or **Open in VS Code** opens a script or folder in your editor, whichever one is installed.
 - **Show in File Explorer** opens the program's folder with the file selected.
 
 Desktop Vitals never ends or changes a program. It only reads.

@@ -45,9 +45,6 @@ namespace DesktopVitals
         public struct MARGINS { public int l, r, t, b; }
         [DllImport("dwmapi.dll")] public static extern int DwmExtendFrameIntoClientArea(IntPtr h, ref MARGINS m);
         [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
-        [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
-        [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int cmd);
-        [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr h);
         [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr h);
         [DllImport("user32.dll")] static extern IntPtr GetWindow(IntPtr h, int cmd);
         [DllImport("user32.dll")] static extern int GetWindowTextLength(IntPtr h);
@@ -55,7 +52,6 @@ namespace DesktopVitals
         delegate bool EnumProc(IntPtr h, IntPtr lp);
         [DllImport("user32.dll")] static extern bool EnumWindows(EnumProc cb, IntPtr lp);
         [DllImport("dwmapi.dll")] static extern int DwmGetWindowAttribute(IntPtr h, int attr, out int val, int size);
-        public const int SwRestore = 9;
         [DllImport("kernel32.dll")] static extern bool GetLogicalProcessorInformationEx(int rel, IntPtr buf, ref int len);
 
         // Logical processors grouped by physical core, fastest cores first. Each entry is (efficiency class, thread numbers).
@@ -2256,9 +2252,7 @@ namespace DesktopVitals
             for (int i = 0; i < rows.Count; i++) rows[i].Visibility = i < n ? Visibility.Visible : Visibility.Collapsed;
         }
 
-        // Clicking a line never ends anything. It brings that app's window to the front,
-        // cycling through its windows on repeat clicks, or shows its file in Explorer when it has none.
-        IntPtr lastJump = IntPtr.Zero;
+        // Clicking a line never ends anything. It opens a script or folder in the editor or Explorer.
         // Full path to Cursor.exe or Code.exe when found on PATH (or parent of a bin folder).
         static readonly string[] Editor = FindEditor();
         static string[] FindEditor()
@@ -2310,10 +2304,9 @@ namespace DesktopVitals
 
         string Hint(ProcRow row)
         {
-            if (row.Task != null) return row.Task.Script != null ? OpenInEditor : "Open Task Scheduler";
+            if (row.Task != null) return row.Task.Script != null ? OpenInEditor : "";
             if (row.Bot != null && row.Bot.Code != null) return OpenInEditor;
             if (row.Pids.Length == 0) return "";
-            if (Native.AppWindows(row.Pids).Count > 0) return "Switch to window";
             if (row.Script != null || ScriptOf(row.Pids) != null) return OpenInEditor;
             if (row.Pids.Select(Procs.ImagePath).Any(x => !string.IsNullOrEmpty(x))) return "Show in File Explorer";
             return "";
@@ -2338,31 +2331,18 @@ namespace DesktopVitals
             if (row.Task != null)
             {
                 if (row.Task.Script != null) OpenPath(row.Task.Script);
-                else try { using (Process.Start(new ProcessStartInfo("taskschd.msc") { UseShellExecute = true })) { } } catch (Exception) { }
                 return;
             }
             if (row.Bot != null && row.Bot.Code != null) { OpenBot(row.Bot); return; }
             if (row.Pids.Length == 0) return;
-            var wins = Native.AppWindows(row.Pids);
-            if (wins.Count == 0)
+            if (row.Script != null)
             {
-                if (row.Script != null)
-                {
-                    bool module = row.Script.StartsWith("module:");
-                    OpenPath(module ? Scripts.Folder(row.Script) : row.Script);
-                    return;
-                }
-                string script = ScriptOf(row.Pids);
-                if (script != null) { OpenPath(script); return; }
-            }
-            if (wins.Count > 0)
-            {
-                IntPtr h = wins[(wins.IndexOf(lastJump) + 1) % wins.Count];
-                lastJump = h;
-                if (Native.IsIconic(h)) Native.ShowWindow(h, Native.SwRestore);
-                Native.SetForegroundWindow(h);
+                bool module = row.Script.StartsWith("module:");
+                OpenPath(module ? Scripts.Folder(row.Script) : row.Script);
                 return;
             }
+            string script = ScriptOf(row.Pids);
+            if (script != null) { OpenPath(script); return; }
             OpenPath(row.Pids.Select(Procs.ImagePath).FirstOrDefault(x => !string.IsNullOrEmpty(x)));
         }
 
