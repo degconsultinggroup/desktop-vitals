@@ -766,13 +766,29 @@ namespace DesktopVitals
 
         void ReadHttp(string url)
         {
+            Uri uri;
+            if (!Uri.TryCreate(url, UriKind.Absolute, out uri)
+                || !string.Equals(uri.Scheme, "http", StringComparison.OrdinalIgnoreCase)
+                || (uri.Host != "127.0.0.1" && uri.Host != "::1" && !string.Equals(uri.Host, "localhost", StringComparison.OrdinalIgnoreCase)))
+            {
+                Uptime = null; LastSign = null; Problem = "check must be a local address";
+                return;
+            }
             try
             {
-                var req = (System.Net.HttpWebRequest)System.Net.WebRequest.Create(url);
-                req.Timeout = 3000; req.ReadWriteTimeout = 3000; req.Proxy = null;
+                var req = (System.Net.HttpWebRequest)System.Net.WebRequest.Create(uri);
+                req.Timeout = 3000; req.ReadWriteTimeout = 3000; req.Proxy = null; req.AllowAutoRedirect = false;
                 string body;
                 using (var resp = req.GetResponse())
-                using (var sr = new StreamReader(resp.GetResponseStream())) body = sr.ReadToEnd();
+                using (var stream = resp.GetResponseStream())
+                {
+                    var buf = new char[64 * 1024];
+                    using (var sr = new StreamReader(stream))
+                    {
+                        int n = sr.Read(buf, 0, buf.Length);
+                        body = new string(buf, 0, n);
+                    }
+                }
                 LastSign = DateTime.Now;
                 var up = Regex.Match(body, "\"uptimeMs\"\\s*:\\s*([0-9.]+)");
                 Uptime = up.Success ? TimeSpan.FromMilliseconds(double.Parse(up.Groups[1].Value, CultureInfo.InvariantCulture)) : (TimeSpan?)null;
