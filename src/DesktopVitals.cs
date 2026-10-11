@@ -1372,7 +1372,13 @@ namespace DesktopVitals
                 ShowActivated = false;
                 ShowInTaskbar = false;
                 var done = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(4500) };
-                done.Tick += delegate { done.Stop(); WriteSnapshot(); Close(); };
+                done.Tick += delegate
+                {
+                    done.Stop();
+                    if (acceptReview) { acceptReview = false; TryWriteReview(ReviewItems()); }
+                    WriteSnapshot();
+                    Close();
+                };
                 Loaded += delegate { done.Start(); };
             }
 
@@ -1897,7 +1903,6 @@ namespace DesktopVitals
                 topRows[i].Pids = g.Pids;
             }
 
-            if (acceptReview && tickCount >= 2) { acceptReview = false; TryWriteReview(ReviewItems()); }
             if (needReview && tickCount >= 2) { needReview = false; ShowReview(); }
         }
 
