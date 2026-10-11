@@ -175,7 +175,7 @@ Commit: [ ] skipped (2666 lines after items 30-31; under 2685)
 ### 29. Ship prebuilt exe and checksums
 Refs: README install section; release assets (known 10; Phase 4 packaging may land the GitHub Actions piece)
 Done when: a prebuilt `DesktopVitals.exe` is published with `SHA256SUMS.txt`; README first install is download the exe; source build with Git and ExecutionPolicy is second.
-Commit: [ ]
+Commit: [x] e4465d2 (release job); README install order 7300d25
 
 ## Dropped (not in this PLAN)
 
