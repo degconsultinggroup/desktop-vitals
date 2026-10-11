@@ -587,43 +587,29 @@ namespace DesktopVitals
         public static bool Failed;
         static bool busy;
         static DateTime read = DateTime.MinValue;
-        static int finishGate;
 
-        // Reads Task Scheduler off the UI thread, at most every 30 s. A 5 s watchdog marks Ready on hang.
+        // Reads Task Scheduler off the UI thread, at most every 30 s. One reader at a time; no watchdog.
         public static void Refresh(Action done)
         {
-            if (busy || (DateTime.Now - read).TotalSeconds < 30) return;
+            if (busy || (Ready && (DateTime.Now - read).TotalSeconds < 30)) return;
             busy = true;
-            finishGate = 0;
             ThreadPool.QueueUserWorkItem(delegate
             {
                 var found = new List<TaskInfo>();
-                bool ok = false;
+                bool failed = false;
                 try
                 {
                     dynamic svc = Activator.CreateInstance(Type.GetTypeFromProgID("Schedule.Service"));
                     svc.Connect();
                     Walk(svc.GetFolder("\\"), found);
-                    ok = true;
                 }
-                catch (Exception) { }
-                Finish(found, !ok, done);
+                catch (Exception) { failed = true; }
+                Items = found;
+                Failed = failed;
+                read = DateTime.Now;
+                busy = false;
+                if (done != null) done();
             });
-            ThreadPool.QueueUserWorkItem(delegate
-            {
-                Thread.Sleep(5000);
-                Finish(null, true, done);
-            });
-        }
-
-        static void Finish(List<TaskInfo> found, bool failed, Action done)
-        {
-            if (Interlocked.Exchange(ref finishGate, 1) != 0) return;
-            if (found != null) Items = found;
-            Failed = failed;
-            read = DateTime.Now;
-            busy = false;
-            if (done != null) done();
         }
 
         static void Walk(dynamic folder, List<TaskInfo> found)
@@ -1858,7 +1844,15 @@ namespace DesktopVitals
             // Scheduled tasks: running first, then failures, then the most recent runs.
             TaskList.Refresh(null);
             var tasks = TaskList.Items.Where(t => !hidden.Contains(t.Name)).OrderByDescending(t => t.Running).ThenByDescending(t => t.Failed).ThenByDescending(t => t.LastRun).Take(8).ToList();
-            if (TaskList.Failed && tasks.Count == 0)
+            if (!TaskList.Ready)
+            {
+                tasksCard.Visibility = Visibility.Visible;
+                EnsureRows(taskList, taskRows, 1);
+                taskRows[0].Task = null;
+                taskRows[0].Pids = new int[0];
+                taskRows[0].SetPlain("loading", Theme.Off, "", "", "", "");
+            }
+            else if (TaskList.Failed && tasks.Count == 0)
             {
                 tasksCard.Visibility = Visibility.Visible;
                 EnsureRows(taskList, taskRows, 1);
@@ -1903,7 +1897,7 @@ namespace DesktopVitals
             }
 
             if (acceptReview && tickCount >= 2) { acceptReview = false; TryWriteReview(ReviewItems()); }
-            if (needReview && tickCount >= 2 && (TaskList.Ready || tickCount >= 8)) { needReview = false; ShowReview(); }
+            if (needReview && tickCount >= 2) { needReview = false; ShowReview(); }
         }
 
         static string Trim(string s, int n) { return s.Length <= n ? s : s.Substring(0, n) + "\u2026"; }
