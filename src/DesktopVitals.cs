@@ -45,13 +45,6 @@ namespace DesktopVitals
         public struct MARGINS { public int l, r, t, b; }
         [DllImport("dwmapi.dll")] public static extern int DwmExtendFrameIntoClientArea(IntPtr h, ref MARGINS m);
         [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
-        [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr h);
-        [DllImport("user32.dll")] static extern IntPtr GetWindow(IntPtr h, int cmd);
-        [DllImport("user32.dll")] static extern int GetWindowTextLength(IntPtr h);
-        [DllImport("user32.dll")] static extern int GetWindowThreadProcessId(IntPtr h, out int pid);
-        delegate bool EnumProc(IntPtr h, IntPtr lp);
-        [DllImport("user32.dll")] static extern bool EnumWindows(EnumProc cb, IntPtr lp);
-        [DllImport("dwmapi.dll")] static extern int DwmGetWindowAttribute(IntPtr h, int attr, out int val, int size);
         [DllImport("kernel32.dll")] static extern bool GetLogicalProcessorInformationEx(int rel, IntPtr buf, ref int len);
 
         // Logical processors grouped by physical core, fastest cores first. Each entry is (efficiency class, thread numbers).
@@ -113,23 +106,6 @@ namespace DesktopVitals
                 return true;
             }
             finally { Marshal.FreeHGlobal(b); }
-        }
-
-        // The windows you would see in Alt+Tab for these processes: visible, titled, unowned, not cloaked.
-        public static List<IntPtr> AppWindows(int[] pids)
-        {
-            var want = new HashSet<int>(pids);
-            var found = new List<IntPtr>();
-            EnumWindows(delegate (IntPtr h, IntPtr lp)
-            {
-                int pid, cloaked;
-                GetWindowThreadProcessId(h, out pid);
-                if (want.Contains(pid) && IsWindowVisible(h) && GetWindow(h, 4) == IntPtr.Zero && GetWindowTextLength(h) > 0
-                    && !(DwmGetWindowAttribute(h, 14, out cloaked, 4) == 0 && cloaked != 0))
-                    found.Add(h);
-                return true;
-            }, IntPtr.Zero);
-            return found;
         }
 
         public const int QueryLimited = 0x1000;
@@ -1310,7 +1286,7 @@ namespace DesktopVitals
     class ReviewItem
     {
         public string Name, Kind, OrigKind, Detail, Match, Section;
-        public bool On = true, Missed;
+        public bool On = true;
         public WatchRule Rule;
         public string[] Kinds;      // what clicking the tag cycles through; null when the kind is fixed
     }
@@ -2286,16 +2262,11 @@ namespace DesktopVitals
         List<ReviewItem> ReviewItems()
         {
             var items = new List<ReviewItem>();
-            var seen = new HashSet<int>();
             foreach (var l in lastAi)
-            {
                 items.Add(new ReviewItem { Section = "AI", Name = l.Name, Kind = l.Kind, Rule = l.Rule, On = !hidden.Contains(l.Name), Kinds = AiChoices, Detail = l.Procs.Count == 0 ? "not running" : "running" });
-                foreach (var p in l.Procs) seen.Add(p.Pid);
-            }
             foreach (var r in botRules)
             {
                 var hits = lastProcs.Where(r.Hit).ToList();
-                foreach (var p in hits) seen.Add(p.Pid);
                 items.Add(new ReviewItem { Section = "Bot", Name = r.Label, Kind = "Bot", Rule = r, Detail = hits.Count == 0 ? "not running" : "running" });
             }
             foreach (var kv in lastScripts)
@@ -2303,35 +2274,13 @@ namespace DesktopVitals
                 string label = Scripts.Label(kv.Key);
                 string match = kv.Key.StartsWith("module:") ? "-m " + kv.Key.Substring(7).Split('|')[0] : kv.Key;
                 items.Add(new ReviewItem { Section = "Script", Name = label, Kind = "Script", Match = match, On = !hidden.Contains(label), Kinds = ScriptChoices, Detail = Scripts.Language(kv.Value[0].Exe) });
-                foreach (var p in kv.Value) seen.Add(p.Pid);
             }
             foreach (var t in TaskList.Items.OrderByDescending(t => t.Running).ThenByDescending(t => t.LastRun))
                 items.Add(new ReviewItem { Section = "Task", Name = t.Name, Kind = "Task", On = !hidden.Contains(t.Name), Detail = t.Running ? "running" : t.NeverRan ? "never ran" : t.Failed ? "failed" : "last ran " + Short(DateTime.Now - t.LastRun) + " ago" });
             foreach (var r in rules)
             {
                 var hits = lastProcs.Where(r.Hit).ToList();
-                foreach (var p in hits) seen.Add(p.Pid);
                 items.Add(new ReviewItem { Section = "Watching", Name = r.Label, Kind = r.Kind ?? "Watching", Rule = r, Kinds = WatchChoices, Detail = hits.Count == 0 ? "not running" : "running" });
-            }
-
-            // Did I miss anything: open apps with a window that nothing above covers, biggest first.
-            string win = Environment.GetFolderPath(Environment.SpecialFolder.Windows);
-            var skip = new[] { "DesktopVitals.exe", "explorer.exe", "ApplicationFrameHost.exe", "TextInputHost.exe", "SystemSettings.exe", "SearchHost.exe", "StartMenuExperienceHost.exe", "ShellExperienceHost.exe" };
-            var apps = lastProcs.Where(p => !seen.Contains(p.Pid) && !skip.Contains(p.Exe, StringComparer.OrdinalIgnoreCase))
-                .GroupBy(p => p.Exe, StringComparer.OrdinalIgnoreCase)
-                .Where(g => !items.Any(i => i.Rule != null && i.Rule.ByExe && i.Rule.Match.Equals(g.Key, StringComparison.OrdinalIgnoreCase)))
-                .OrderByDescending(g => g.Sum(p => p.Private)).ToList();
-            int added = 0;
-            foreach (var g in apps)
-            {
-                if (added >= 10) break;
-                int[] pids = g.Select(p => p.Pid).ToArray();
-                if (Native.AppWindows(pids).Count == 0) continue;
-                string path = Procs.ImagePath(pids[0]) ?? "";
-                if (path.StartsWith(win, StringComparison.OrdinalIgnoreCase)) continue;
-                var id = Identify(g.First());
-                items.Add(new ReviewItem { Section = "Missed", Name = AppIdentity.For(g.Key, pids).Title, Kind = id == null ? "Watching" : id[0], Match = g.Key, On = false, Missed = true, Kinds = WatchChoices, Detail = "open" });
-                added++;
             }
             foreach (var i in items) i.OrigKind = i.Kind;
             return items;
@@ -2364,11 +2313,6 @@ namespace DesktopVitals
                 if (these.Count == 0) continue;
                 stack.Children.Add(Card(sec, null, these.Select(ReviewRow).ToArray()));
             }
-            var missed = items.Where(i => i.Missed).Select(ReviewRow).ToList();
-            var missHint = Theme.Label(missed.Count == 0 ? "No other apps are open right now." : "Tick an open app to keep an eye on it.", 12, Theme.Faint, FontWeights.Normal);
-            missHint.Margin = new Thickness(0, 0, 0, 4);
-            missed.Insert(0, missHint);
-            stack.Children.Add(Card("Did I miss anything?", null, missed.ToArray()));
 
             var foot = new Grid { Margin = new Thickness(18, 4, 14, 14) };
             foot.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
@@ -2447,7 +2391,7 @@ namespace DesktopVitals
         }
 
         // Writes the answers into watch.txt: unticked found items become "@hide", re-tagged ones "@kind",
-        // your own lines are commented out or get "| kind:", and ticked apps from "Did I miss anything" become new lines.
+        // and your own lines are commented out or get "| kind:".
         void SaveReview(List<ReviewItem> items)
         {
             try
@@ -2456,7 +2400,7 @@ namespace DesktopVitals
                 var lines = File.Exists(file) ? WatchRule.ReadConfigLines()
                     : new List<string> { "# Desktop Vitals settings for this PC. See watch.example.txt in the app folder for the format.", "" };
                 if (WatchRule.LinesSkipped) configSkipped = true;
-                var names = new HashSet<string>(items.Where(i => (i.Rule == null && !i.Missed) || i.Section == "AI").Select(i => i.Name), StringComparer.OrdinalIgnoreCase);
+                var names = new HashSet<string>(items.Where(i => i.Rule == null || i.Section == "AI").Select(i => i.Name), StringComparer.OrdinalIgnoreCase);
                 Func<string, string, string> valueOf = (l, key) =>
                 {
                     string t = l.Trim();
@@ -2484,10 +2428,6 @@ namespace DesktopVitals
                         // An AI line can also be found on its own (Claude Code), so hide its name as well.
                         if (!it.On && it.Section == "AI") add.Add("@hide = " + it.Name);
                         else if (kindChanged) lines[at] = Regex.Replace(it.Rule.Raw, "\\s*\\|\\s*kind:[^|]*", "", RegexOptions.IgnoreCase).TrimEnd() + " | kind: " + it.Kind;
-                    }
-                    else if (it.Missed)
-                    {
-                        if (it.On) add.Add(it.Name + " = " + it.Match + (it.Kind == "Watching" ? "" : " | kind: " + it.Kind));
                     }
                     else if (!it.On) add.Add("@hide = " + it.Name);
                     else if (kindChanged && it.Section == "Script") add.Add(it.Name + " = " + it.Match + " | kind: " + it.Kind);

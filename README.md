@@ -42,7 +42,7 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1
 
 ## First run
 
-The first time it opens, Desktop Vitals shows **Here's what I found**: everything it detected and everything in your settings, grouped by kind. Untick anything that shouldn't be shown, and click a tag if something is the wrong kind (a script that is really a bot, say). **Did I miss anything?** lists the other apps you have open; tick one to keep an eye on it. **Looks good** saves your answers to your settings file. The gear button at the top brings this screen back any time.
+The first time it opens, Desktop Vitals shows **Here's what I found**: everything it detected and everything in your settings, grouped by kind. Untick anything that shouldn't be shown, and click a tag if something is the wrong kind (a script that is really a bot, say). **Looks good** saves your answers to your settings file. The gear button at the top brings this screen back any time.
 
 ## Use
 
