@@ -158,9 +158,10 @@ namespace DesktopVitals
         static bool ready, tried;
         public static string Name;
 
+        // Out values stay negative when that sensor call failed so the UI does not invent zeros.
         public static bool Read(out double util, out double usedGb, out double totalGb, out int temp, out double watts)
         {
-            util = usedGb = totalGb = watts = 0; temp = 0;
+            util = usedGb = totalGb = watts = -1; temp = -1;
             try
             {
                 if (!tried)
@@ -181,7 +182,7 @@ namespace DesktopVitals
                 if (nvmlDeviceGetMemoryInfo(dev, out m) == 0) { usedGb = m.used / 1073741824.0; totalGb = m.total / 1073741824.0; }
                 if (nvmlDeviceGetTemperature(dev, 0, out t) == 0) temp = (int)t;
                 if (nvmlDeviceGetPowerUsage(dev, out mw) == 0) watts = mw / 1000.0;
-                return true;
+                return util >= 0 || totalGb >= 0;
             }
             catch (Exception) { ready = false; return false; }
         }
@@ -699,7 +700,7 @@ namespace DesktopVitals
     {
         public static string Name;
         public static double Util, UsedGb, TotalGb;
-        public static bool Have, Failed;
+        public static bool Have, Failed, UtilReady;
         static Dictionary<string, long> prevRaw = new Dictionary<string, long>();
         static long prevTs;
         static bool busy, tried;
@@ -767,13 +768,14 @@ namespace DesktopVitals
                             byType[k] = have + (kv.Value - before) * 100.0 / (ts - prevTs);
                         }
                         Util = byType.Count == 0 ? 0 : Math.Min(100, byType.Values.Max());
+                        UtilReady = true;
                     }
                     prevRaw = raw; prevTs = ts;
                     var mem = new PerformanceCounterCategory(PerfName("GPU Adapter Memory")).ReadCategory()[PerfName("Dedicated Usage")];
                     long used = 0;
                     foreach (InstanceData d in mem.Values) used = Math.Max(used, d.RawValue);
                     UsedGb = used / 1073741824.0;
-                    Have = Name != null || used > 0;
+                    Have = Name != null || used > 0 || UtilReady;
                     Failed = false;
                 }
                 catch (Exception) { Have = false; Failed = true; }
@@ -1818,15 +1820,19 @@ namespace DesktopVitals
             double gu, vu, vt, gw; int gt;
             if (Nvml.Read(out gu, out vu, out vt, out gt, out gw))
             {
-                gpuRow.Set((Nvml.Name ?? "GPU") + " \u00B7 " + gt + "\u00B0C \u00B7 " + gw.ToString("0") + " W", Theme.Pct(gu), gu / 100);
-                vramRow.Set(vu.ToString("0.0") + " of " + vt.ToString("0") + " GB", Theme.Pct(100 * vu / vt), vu / vt);
+                var bits = new List<string> { Nvml.Name ?? "GPU" };
+                if (gt >= 0) bits.Add(gt + "\u00B0C");
+                if (gw >= 0) bits.Add(gw.ToString("0") + " W");
+                gpuRow.Set(string.Join(" \u00B7 ", bits), gu >= 0 ? Theme.Pct(gu) : "", gu >= 0 ? gu / 100 : 0);
+                if (vt > 0) vramRow.Set(vu.ToString("0.0") + " of " + vt.ToString("0") + " GB", Theme.Pct(100 * vu / vt), vu / vt);
+                else if (vu >= 0) vramRow.Set(vu.ToString("0.0") + " GB", "", 0);
             }
             else
             {
                 GpuCounters.Refresh();
                 if (GpuCounters.Have)
                 {
-                    gpuRow.Set(GpuCounters.Name ?? "GPU", Theme.Pct(GpuCounters.Util), GpuCounters.Util / 100);
+                    gpuRow.Set(GpuCounters.Name ?? "GPU", GpuCounters.UtilReady ? Theme.Pct(GpuCounters.Util) : "", GpuCounters.UtilReady ? GpuCounters.Util / 100 : 0);
                     double t = GpuCounters.TotalGb, u = GpuCounters.UsedGb;
                     vramRow.Set(t > 0 ? u.ToString("0.0") + " of " + t.ToString("0") + " GB" : u.ToString("0.0") + " GB", t > 0 ? Theme.Pct(100 * u / t) : "", t > 0 ? u / t : 0);
                 }
