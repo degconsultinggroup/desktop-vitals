@@ -57,7 +57,7 @@ Commit: [x] d4ab4b2
 ### 10. Multi-group processor fallback
 Refs: `src/DesktopVitals.cs:76-78` (robustness R3)
 Done when: machines with more than one processor group or more than 64 logical processors fall back to flat `ProcessorCount` bars without hybrid labels, or show an honest first-group limit without new product features.
-Commit: [ ]
+Commit: [x]
 
 ### 11. GPU counters on non-English Windows
 Refs: `src/DesktopVitals.cs:670`, `696`, `2265-2266` (known 5; robustness R5, R6)

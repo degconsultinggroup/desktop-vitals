@@ -69,7 +69,10 @@ namespace DesktopVitals
         public static List<KeyValuePair<int, int[]>> CoreLayout()
         {
             int n = Math.Max(1, Environment.ProcessorCount);
+            // One 64-bit group mask only; beyond that, flat bars without hybrid labels.
+            if (n > 64) return FlatCores(n);
             var cores = new List<KeyValuePair<int, int[]>>();
+            bool multiGroup = false;
             int len = 0;
             GetLogicalProcessorInformationEx(0, IntPtr.Zero, ref len);
             if (len <= 0) return FlatCores(n);
@@ -81,7 +84,11 @@ namespace DesktopVitals
                 {
                     int size = Marshal.ReadInt32(b, off + 4);
                     int eff = Marshal.ReadByte(b, off + 9);
+                    int groupCount = Marshal.ReadInt16(b, off + 30) & 0xffff;
+                    if (groupCount > 1) multiGroup = true;
                     long mask = Marshal.ReadInt64(b, off + 32);
+                    int group = Marshal.ReadInt16(b, off + 40) & 0xffff;
+                    if (group != 0) multiGroup = true;
                     var threads = new List<int>();
                     for (int i = 0; i < 64; i++) if ((mask & (1L << i)) != 0) threads.Add(i);
                     if (threads.Count > 0) cores.Add(new KeyValuePair<int, int[]>(eff, threads.ToArray()));
@@ -89,7 +96,7 @@ namespace DesktopVitals
                 }
             }
             finally { Marshal.FreeHGlobal(b); }
-            if (cores.Count == 0) return FlatCores(n);
+            if (multiGroup || cores.Count == 0) return FlatCores(n);
             return cores.OrderByDescending(c => c.Key).ThenBy(c => c.Value[0]).ToList();
         }
 
