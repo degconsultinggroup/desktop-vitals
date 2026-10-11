@@ -30,7 +30,7 @@ Commit: [x] 668c6cb
 ### 5. Keep PEB cwd reads read-only and bounded
 Refs: `src/DesktopVitals.cs:233-256`, `261-282` (known 6; robustness R23)
 Done when: cwd still uses the minimum access mask; handles close in `finally`; reads stay bounded (max 32 KB); failures skip; a short comment states why the read is display-only and best-effort across architectures.
-Commit: [x]
+Commit: [x] 51dc146
 
 ### 6. Harden snapshot directory writes
 Refs: `src/DesktopVitals.cs:2563-2597`, `2661-2669` (known 7; robustness R37)
