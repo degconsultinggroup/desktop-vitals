@@ -9,4 +9,5 @@ status.html
 __pycache__/
 *.pyc
 .env*
+!.env.example
 .cursor/skills/verify-desktop-status/artifacts/

@@ -39,3 +39,4 @@ Each feature file starts with an H1 and one paragraph, then exactly four H2 sect
 - [Task schedule](./task-schedule.md) covers logon plus a 2-minute clock, and backing up the previous task.
 - [Runtime paths](./runtime-paths.md) covers script-relative paths and the gitignored runtime folder.
 - [Desktop overlay](./overlay.md) covers the frosted panel, the ON/OFF pill, and skipping a redraw when nothing changed.
+- [Disk events](./disk-events.md) covers counting only disk-provider errors and warnings, so Kernel-Boot 153 stays out.

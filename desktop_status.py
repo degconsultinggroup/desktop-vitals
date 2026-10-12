@@ -297,8 +297,11 @@ def xpath_kernel_power():
 
 def xpath_disk():
     # 7 bad block, 51 paging error, 153 disk reset, 157 surprise removal.
+    # Provider disk only, and only level 2 (error) or level 3 (warning).
+    # Kernel-Boot 153 is information about VBS and is not a disk error.
     return (
-        "*[System[(EventID=7 or EventID=51 or EventID=153 or EventID=157) and "
+        "*[System[Provider[@Name='disk'] and (Level=2 or Level=3) and "
+        "(EventID=7 or EventID=51 or EventID=153 or EventID=157) and "
         f"TimeCreated[timediff(@SystemTime) <= {event_window_ms()}]]]"
     )
 

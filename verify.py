@@ -39,6 +39,7 @@ def main(argv):
         ('source is free of hardcoded home paths and dashes', check_source),
         ('requirements are Pillow and psutil only', check_requirements),
         ('thresholds and event window', check_thresholds),
+        ('disk events stay on the disk provider', check_disk_event_filter),
         ('fan, disk, memory, and stability rules', check_rules),
         ('task XML triggers and backup', check_task_xml),
         ('doctor', check_doctor),
@@ -183,6 +184,48 @@ def check_thresholds():
         raise AssertionError('disk query lost an event id')
     if 'Application Error' not in board.xpath_crash() or 'EventID=1000' not in board.xpath_crash():
         raise AssertionError('crash query lost application errors')
+
+
+def _disk_query_selects(query, provider, event_id, level):
+    # Apply only clauses the query actually states. A missing provider or level
+    # clause does not filter, which is how Kernel-Boot 153 used to count.
+    providers = re.findall(r"Provider\[@Name='([^']*)'\]", query)
+    if providers and provider not in providers:
+        return False
+    levels = [int(item) for item in re.findall(r'Level=(\d+)', query)]
+    if levels and level not in levels:
+        return False
+    ids = [int(item) for item in re.findall(r'EventID=(\d+)', query)]
+    if not ids or event_id not in ids:
+        return False
+    if 'timediff(@SystemTime)' not in query:
+        return False
+    return True
+
+
+def check_disk_event_filter():
+    query = board.xpath_disk()
+    if "Provider[@Name='disk']" not in query:
+        raise AssertionError('disk query is missing Provider disk')
+    if 'Level=2' not in query or 'Level=3' not in query:
+        raise AssertionError('disk query is missing level 2 or level 3')
+    samples = (
+        ('Microsoft-Windows-Kernel-Boot', 153, 4, False),
+        ('disk', 153, 4, False),
+        ('disk', 153, 2, True),
+        ('disk', 153, 3, True),
+        ('disk', 7, 2, True),
+        ('disk', 51, 3, True),
+        ('disk', 157, 2, True),
+        ('disk', 11, 2, False),
+        ('Microsoft-Windows-Kernel-Boot', 153, 2, False),
+    )
+    for provider, event_id, level, expect in samples:
+        got = _disk_query_selects(query, provider, event_id, level)
+        if got != expect:
+            raise AssertionError(
+                f'disk query for {provider} id {event_id} level {level} was {got}, expected {expect}'
+            )
 
 
 def check_rules():
