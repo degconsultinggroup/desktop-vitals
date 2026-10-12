@@ -1,0 +1,85 @@
+{
+  "now": "2026-10-09T18:00:00",
+  "computer_name": "FIXTURE-PC",
+  "gpu_csv": "NVIDIA GeForce RTX 4080, 42, 3, 800, 16376, 22.50, 320.00, 30, 210, 405, 210, 2610, 11201",
+  "voltage_csv": "",
+  "voltage_error": "nvidia-smi did not report GPU voltage",
+  "gpu_error": null,
+  "memory": {
+    "used": 21474836480,
+    "total": 68719476736,
+    "available": 47244640256,
+    "percent": 31.25
+  },
+  "modules": [
+    {
+      "BankLabel": "DIMM A",
+      "Speed": 5600,
+      "ConfiguredClockSpeed": 5600,
+      "ConfiguredVoltage": 0
+    }
+  ],
+  "modules_error": null,
+  "disk_c": {
+    "free": 429496729600,
+    "total": 1073741824000
+  },
+  "disk_health": null,
+  "disk_health_error": "Windows did not return disk health counters",
+  "fans_wmi": [],
+  "fans_wmi_error": null,
+  "events": null,
+  "events_error": "the Windows event log could not be read",
+  "bios": "12.01",
+  "microcode": 307,
+  "bios_error": null,
+  "microcode_error": null,
+  "reboot_pending": false,
+  "uptime_s": 183600,
+  "cpu_count": 1,
+  "processes": [
+    {
+      "name": "chrome.exe",
+      "cpu": 12,
+      "rss": 1500000000,
+      "cmd": [
+        "chrome.exe"
+      ]
+    },
+    {
+      "name": "claude.exe",
+      "cpu": 2,
+      "rss": 400000000,
+      "cmd": [
+        "claude.exe"
+      ]
+    },
+    {
+      "name": "Cursor.exe",
+      "cpu": 4,
+      "rss": 1800000000,
+      "cmd": [
+        "Cursor.exe"
+      ]
+    },
+    {
+      "name": "node.exe",
+      "cpu": 1,
+      "rss": 250000000,
+      "cmd": [
+        "node",
+        "openclaw",
+        "gateway"
+      ]
+    },
+    {
+      "name": "python.exe",
+      "cpu": 3,
+      "rss": 180000000,
+      "cmd": [
+        "python",
+        "local-ai-bench"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,112 @@
+{
+  "now": "2026-10-09T18:00:00",
+  "computer_name": "FIXTURE-PC",
+  "gpu_csv": "NVIDIA GeForce RTX 4080, 90, 80, 14000, 16376, 400, 320, 70, 2700, 10000, 2700, 2610, 11201",
+  "voltage_csv": "875",
+  "voltage_error": null,
+  "gpu_error": null,
+  "memory": {
+    "used": 65498251264,
+    "total": 68719476736,
+    "available": 3221225472,
+    "percent": 95
+  },
+  "modules": [
+    {
+      "BankLabel": "DIMM A",
+      "Speed": 5600,
+      "ConfiguredClockSpeed": 5600,
+      "ConfiguredVoltage": 1500
+    }
+  ],
+  "modules_error": null,
+  "disk_c": {
+    "free": 53687091200,
+    "total": 1073741824000
+  },
+  "disk_health": {
+    "disks": [
+      {
+        "DeviceId": "0",
+        "FriendlyName": "Samsung SSD 990",
+        "HealthStatus": "Unhealthy",
+        "OperationalStatus": "Predictive Failure",
+        "MediaType": "SSD"
+      }
+    ],
+    "reliability": [
+      {
+        "DeviceId": "0",
+        "Temperature": 72,
+        "Wear": 96,
+        "ReadErrorsTotal": 12,
+        "ReadErrorsUncorrected": 4,
+        "WriteErrorsTotal": 1,
+        "WriteErrorsUncorrected": 1,
+        "PowerOnHours": 20000
+      }
+    ]
+  },
+  "disk_health_error": null,
+  "fans_wmi": [],
+  "fans_wmi_error": null,
+  "events": {
+    "whea": 1,
+    "kp": 2,
+    "disk": 1,
+    "crash": 6
+  },
+  "events_error": null,
+  "bios": "11.20",
+  "microcode": 200,
+  "bios_error": null,
+  "microcode_error": null,
+  "reboot_pending": false,
+  "uptime_s": 3456000,
+  "cpu_count": 1,
+  "processes": [
+    {
+      "name": "chrome.exe",
+      "cpu": 12,
+      "rss": 1500000000,
+      "cmd": [
+        "chrome.exe"
+      ]
+    },
+    {
+      "name": "claude.exe",
+      "cpu": 2,
+      "rss": 400000000,
+      "cmd": [
+        "claude.exe"
+      ]
+    },
+    {
+      "name": "Cursor.exe",
+      "cpu": 4,
+      "rss": 1800000000,
+      "cmd": [
+        "Cursor.exe"
+      ]
+    },
+    {
+      "name": "node.exe",
+      "cpu": 1,
+      "rss": 250000000,
+      "cmd": [
+        "node",
+        "openclaw",
+        "gateway"
+      ]
+    },
+    {
+      "name": "python.exe",
+      "cpu": 3,
+      "rss": 180000000,
+      "cmd": [
+        "python",
+        "local-ai-bench"
+      ]
+    }
+  ]
+}

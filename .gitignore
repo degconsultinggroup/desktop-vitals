@@ -1,0 +1,12 @@
+.venv/
+render/
+backup/
+runtime/
+state.json
+latest-render.png
+status.html
+*.lnk
+__pycache__/
+*.pyc
+.env*
+.cursor/skills/verify-desktop-status/artifacts/

@@ -1,0 +1,14 @@
+{
+  "ts": "2026-10-09T17:59:00",
+  "cpu_temp_c": 48,
+  "cpu_pkg_power_w": 35,
+  "cpu_core_temps_c": [
+    47
+  ],
+  "tjmax_c": 100,
+  "cpu_vcore_v": 1.15,
+  "diag": {
+    "pl1_w": 125,
+    "pl2_w": 253
+  }
+}

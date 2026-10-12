@@ -1,0 +1,20 @@
+{
+  "ts": "2026-10-09T17:59:00",
+  "cpu_temp_c": 92,
+  "cpu_pkg_power_w": 180,
+  "cpu_core_temps_c": [
+    95
+  ],
+  "tjmax_c": 100,
+  "cpu_vcore_v": 1.52,
+  "diag": {
+    "pl1_w": 125,
+    "pl2_w": 253
+  },
+  "fans": [
+    {
+      "name": "CPU fan",
+      "rpm": 0
+    }
+  ]
+}

@@ -1,0 +1,5 @@
+==== 2026-10-08 06:00 start
+nhl-live-dog-v0 1 1 1 0 0 0 aa bb OLD ignored
+==== 2026-10-09 06:00 start
+nhl-live-dog-v0 12 8 3 1.2 0.1 2.0 aa bb NOT YET enough
+nhl-terminal-penny-v0 40 20 10 2.0 1.0 3.0 aa bb PASS sample
