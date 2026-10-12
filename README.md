@@ -8,6 +8,8 @@ When you want to open something, it links out to your IDE or File Explorer.
 
 It needs no setup. Open it and it finds what is running on your machine.
 
+<img src="docs/screenshot.png" alt="Desktop Vitals on a fresh Windows machine" width="400">
+
 ## What it can and can't do
 
 - It only reads what is already on the machine and shows it.
@@ -20,13 +22,14 @@ It needs no setup. Open it and it finds what is running on your machine.
 
 - **System:** processor load, with a bar for every thread, grouped into performance and efficiency cores when the CPU reports them; memory; graphics load and video memory; free space on the system drive. NVIDIA cards also show temperature and power.
 - **Scripts:** every script an interpreter is running from your own files, one line per script, with how long it has been up, its CPU and its memory. This covers Python (including `python -m`), Node, Bun, Deno, PowerShell, batch files, Windows Script, Ruby, PHP, Perl and Java. Scripts that belong to installed apps or to Windows are left out.
-- **Scheduled tasks:** the tasks you or your tools created, not Windows' own or app updaters. It shows which are running now, which failed their last run, when each last ran, and when each runs next.
+- **Starts with Windows:** everything that launches when you sign in: the Startup folder, Startup apps, and tasks set to run at sign-in. It shows which are running, with their CPU and memory. Anything you turned off in Task Manager's Startup apps is left out.
+- **Scheduled:** tasks that run at set times, created by you or your tools, not Windows' own or app updaters. It shows which are running now, which failed their last run, when each last ran, and when each runs next.
 - **AI:** everything AI on the machine in one card, each line tagged with what it is:
   - **Agent:** command-line agents such as Claude Code, Codex, Gemini CLI, OpenClaw and Aider. For agents with one process per session it shows how many sessions are open; hover to see the folder each one works in.
   - **App:** AI desktop apps such as Claude, ChatGPT, Cursor, Windsurf and Grok.
-  - **Model:** local model servers (llama.cpp `llama-server`, Ollama, LM Studio, koboldcpp, vLLM), with the model name and port.
-  - **Bot** and **Watching:** your own bots and watched apps that are AI (see [Settings](#settings)).
-- **Bots** and **Watching:** optional cards you set up yourself. See [Settings](#settings).
+  - **Model:** every model installed on the PC, loaded or not. It looks in `models` folders at a drive root or in your user folder, and in the Hugging Face, Ollama and LM Studio stores. Add a folder with `@models = D:\my-models`. A model in use shows what is using it (a server and its port, or the script that loaded it) and how much video memory that holds. One that isn't loaded shows its size, or "new today". A script or model server holding 1 GB or more of video memory with no model found for it gets its own line, so nothing big on the GPU goes unexplained. Running model servers (llama.cpp `llama-server`, Ollama, LM Studio, koboldcpp, vLLM) show too.
+  - **Bot** and **Pinned:** your own bots and pinned apps that are AI (see [Settings](#settings)).
+- **Bots** and **Pinned:** optional cards you set up yourself. See [Settings](#settings).
 - **Top apps:** the busiest apps, grouped, so all Chrome processes count as one line. Click **CPU** or **Memory** to sort.
 
 Hover over a line to see what a click will do:
@@ -64,17 +67,18 @@ The first time it opens, Desktop Vitals shows **Here's what I found**: everythin
 
 - **Ctrl+Alt+P** opens the window. Press it again while the window is in front to tuck it away.
 - The **Live** switch turns readings on and off. When it is off, or the window is minimized, the app does no work.
+- The refresh button looks again for new scripts, models, tasks and settings. It also does this on its own.
 - **Esc** or **×** closes it. Nothing starts at logon.
 
 While live, it uses about 0.1% of the machine. One system call per refresh covers every process.
 
 ## Settings
 
-Everything works without settings. To add your own Watching or Bots lines, or an optional temperature file, copy `watch.example.txt` to `%APPDATA%\DesktopVitals\watch.txt`, edit it, and reopen the app. Your settings stay outside the app folder, so updates never touch them.
+Everything works without settings. To add your own Pinned or Bots lines, or an optional temperature file, copy `watch.example.txt` to `%APPDATA%\DesktopVitals\watch.txt`, edit it, and reopen the app. Your settings stay outside the app folder, so updates never touch them.
 
-- **Watching:** `Label = match` keeps an eye on an app or a command. A match ending in `.exe` is a process name. Anything else is text found in the command line.
+- **Pinned:** `Label = match` keeps an eye on an app or a command. A match ending in `.exe` is a process name. Anything else is text found in the command line.
 - **Bots:** add `| check:` to a line to track whether a bot is still doing work, not just running. The check is a file the bot rewrites, a folder it writes into, or a local http health address (`127.0.0.1`, `::1`, or `localhost` only). A bot turns amber when its check goes quiet for 5 minutes. Add `| code:` to open its folder in your editor.
-- **AI:** lines that name a known AI program (Claude, Cursor, Ollama, OpenClaw ...) go in the AI card instead of Bots or Watching. Add `| ai` to put any other line there, and `| kind: Agent` (or `App`, `Model`, `Bot`, `Watching`) to choose its tag.
+- **AI:** lines that name a known AI program (Claude, Cursor, Ollama, OpenClaw ...) go in the AI card instead of Bots or Pinned. Add `| ai` to put any other line there, and `| kind: Agent` (or `App`, `Model`, `Bot`, `Watching`) to choose its tag (`Watching` shows as Pinned).
 - **Hidden and re-tagged items:** the review screen writes `@hide = <name>` for things you untick and `@kind = <name> | Agent` for things you re-tag. Delete those lines to undo them.
 - **Processor temperature:** Windows doesn't give CPU temperature to normal apps. If a sensor tool already writes a JSON file, point `@temperature-file` at it. Desktop Vitals only reads that file; it never starts a sensor task.
 
@@ -86,7 +90,7 @@ Everything works without settings. To add your own Watching or Bots lines, or an
 DesktopVitals.exe --snapshot C:\some\folder
 ```
 
-Add `--review` to picture the review screen instead. This takes a reading off screen, writes `vitals.txt` (a plain-text report) and `vitals.png` (a picture of the full window) to that folder, and exits. It takes about 5 seconds and doesn't disturb an open window. A chat bot or an AI agent can run it to answer "how's my PC doing?" with text or a screenshot.
+Add `--review` to picture the review screen instead, and `--width 1200` to picture a wider window. This takes a reading off screen, writes `vitals.txt` (a plain-text report) and `vitals.png` (a picture of the full window) to that folder, and exits. It takes about 5 seconds and doesn't disturb an open window. A chat bot or an AI agent can run it to answer "how's my PC doing?" with text or a screenshot.
 
 In `vitals.txt`, bots are marked `[ok]`, `[QUIET]` (running but no sign of work for 5 minutes) or `[DOWN]` (not running).
 

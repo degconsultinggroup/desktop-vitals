@@ -167,7 +167,8 @@ namespace DesktopVitals
         public long CpuTime;      // 100 ns units, user + kernel
         public long CreateTime;
         public long Private;      // private working set, what Task Manager calls Memory
-        public double Cpu;        // percent of the whole machine
+        public long Committed;    // private bytes, held even when Windows pages an idle process out of RAM
+        public double Cpu;       // percent of the whole machine
         public string Cmd = "";
     }
 
@@ -205,6 +206,7 @@ namespace DesktopVitals
                     var pr = new Proc();
                     pr.Pid = pid;
                     pr.Private = Marshal.ReadInt64(p, 8);
+                    pr.Committed = Marshal.ReadInt64(p, 200);   // PrivatePageCount
                     pr.CreateTime = Marshal.ReadInt64(p, 32);
                     pr.CpuTime = Marshal.ReadInt64(p, 40) + Marshal.ReadInt64(p, 48);
                     int nlen = Marshal.ReadInt16(p, 56) & 0xffff;
@@ -345,7 +347,7 @@ namespace DesktopVitals
         public string Raw;        // the line as written, so the review screen can change it in place
         public bool IsBot { get { return Check != null; } }
 
-        static readonly string[] AiWords = { "claude", "openclaw", "codex", "gemini", "chatgpt", "openai", "anthropic", "grok", "cursor", "windsurf", "copilot", "aider", "ollama", "llama", "lm studio", "koboldcpp", "vllm", "perplexity" };
+        static readonly string[] AiWords = { "claude", "openclaw", "codex", "gemini", "chatgpt", "openai", "anthropic", "grok", "cursor", "windsurf", "copilot", "aider", "ollama", "llama", "lm studio", "koboldcpp", "vllm", "perplexity", "meetily" };
         public static bool SoundsLikeAi(string s) { return AiWords.Any(w => s.IndexOf(w, StringComparison.OrdinalIgnoreCase) >= 0); }
 
         // watch.txt is yours; review answers go in review.txt. Both live under %APPDATA%\DesktopVitals.
@@ -452,6 +454,7 @@ namespace DesktopVitals
             Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86),
             System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Programs"),
             System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Microsoft"),
+            System.IO.Path.GetTempPath(),   // throwaway scripts tools write and run once
         }.Where(x => !string.IsNullOrEmpty(x)).ToArray();
 
         public static bool IsInterpreter(string exe)
@@ -567,13 +570,278 @@ namespace DesktopVitals
         }
     }
 
+    // A model on disk: one weights file (or its shards), or one folder of them.
+    class InstalledModel
+    {
+        public string Name, Path, Where;
+        public long Bytes;
+        public int Files;
+        public DateTime Added;
+        public long WeightBytes;   // the weights alone, for spotting the same model kept in two places
+        public bool Beside;        // found in a running script's own model folder
+        public List<string> PathKeys = new List<string>();   // looked for in command lines and the config files they name
+        public List<string> NameKeys = new List<string>();   // looked for in the source of a script using the GPU
+    }
+
+    // Finds the AI models installed on this PC: folders named "models" at a drive root or in your user folder,
+    // apps' own "models" folders in AppData (Meetily, Whisper apps ...), a "model" or "models" folder beside a running
+    // script, the Hugging Face, Ollama and LM Studio stores, and any "@models = <folder>" lines in watch.txt.
+    static class ModelStore
+    {
+        static readonly string[] WeightExts = { ".gguf", ".safetensors", ".ggml", ".onnx", ".bin", ".pt", ".pth", ".ckpt" };
+        static readonly string[] PlainNames = { "model", "models", "weights", "checkpoint", "checkpoints" };
+        const long MinWeights = 20L << 20;   // smaller .bin and .pt files are usually not weights
+
+        public static string Norm(string s) { return (s ?? "").Replace("\\\\", "\\").Replace('/', '\\').ToLowerInvariant(); }
+
+        static bool IsWeights(FileInfo f)
+        {
+            string ext = f.Extension.ToLowerInvariant();
+            if (!WeightExts.Contains(ext)) return false;
+            return ext == ".gguf" || ext == ".safetensors" || f.Length >= MinWeights;
+        }
+
+        // beside: folders of running scripts, whose own "model" or "models" folder counts.
+        public static List<InstalledModel> Scan(IEnumerable<string> extra, IEnumerable<string> beside)
+        {
+            var list = new List<InstalledModel>();
+            string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            var roots = new List<string>(extra);
+            foreach (var d in DriveInfo.GetDrives())
+                try { if (d.DriveType == DriveType.Fixed && d.IsReady) roots.Add(System.IO.Path.Combine(d.RootDirectory.FullName, "models")); } catch (Exception) { }
+            roots.Add(System.IO.Path.Combine(home, "models"));
+            foreach (var app in new[] { Environment.SpecialFolder.ApplicationData, Environment.SpecialFolder.LocalApplicationData })
+                try
+                {
+                    foreach (var d in new DirectoryInfo(Environment.GetFolderPath(app)).EnumerateDirectories())
+                        if ((d.Attributes & FileAttributes.ReparsePoint) == 0 && !d.Name.Equals("Temp", StringComparison.OrdinalIgnoreCase))
+                            roots.Add(System.IO.Path.Combine(d.FullName, "models"));
+                }
+                catch (Exception) { }
+            roots.Add(System.IO.Path.Combine(home, ".lmstudio", "models"));
+            roots.Add(System.IO.Path.Combine(home, ".cache", "lm-studio", "models"));
+            string hf = Environment.GetEnvironmentVariable("HF_HUB_CACHE");
+            if (string.IsNullOrEmpty(hf))
+            {
+                string hfHome = Environment.GetEnvironmentVariable("HF_HOME");
+                hf = System.IO.Path.Combine(string.IsNullOrEmpty(hfHome) ? System.IO.Path.Combine(home, ".cache", "huggingface") : hfHome, "hub");
+            }
+            string ollama = Environment.GetEnvironmentVariable("OLLAMA_MODELS");
+            if (string.IsNullOrEmpty(ollama)) ollama = System.IO.Path.Combine(home, ".ollama", "models");
+
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (string r in roots)
+            {
+                string root;
+                try { root = System.IO.Path.GetFullPath(r).TrimEnd('\\'); } catch (Exception) { continue; }
+                if (!seen.Add(root) || !Directory.Exists(root)) continue;
+                try { Folder(new DirectoryInfo(root), root, 0, list); } catch (Exception) { }
+            }
+            // A script's own model folder: one model when the weights sit right in it (encoder + decoder files), else a shelf.
+            foreach (string b in beside)
+                foreach (string name in new[] { "model", "models" })
+                {
+                    string root;
+                    try { root = System.IO.Path.GetFullPath(System.IO.Path.Combine(b, name)).TrimEnd('\\'); } catch (Exception) { continue; }
+                    if (!seen.Add(root) || !Directory.Exists(root)) continue;
+                    try
+                    {
+                        var dir = new DirectoryInfo(root);
+                        int before = list.Count;
+                        if (dir.EnumerateFiles().Any(IsWeights)) { var m = FolderModel(dir, b); if (m != null) list.Add(m); }
+                        else Folder(dir, root, 0, list);
+                        for (int i = before; i < list.Count; i++) list[i].Beside = true;
+                    }
+                    catch (Exception) { }
+                }
+            try { if (Directory.Exists(hf) && seen.Add(hf)) HuggingFace(hf, list); } catch (Exception) { }
+            try { if (Directory.Exists(ollama) && seen.Add(ollama)) Ollama(ollama, list); } catch (Exception) { }
+            return Merge(list);
+        }
+
+        // The same weights kept in two places (an app's copy and a script's copy) are one model with both paths.
+        // The line keeps the installed copy's name ("parakeet-tdt-0.6b-v3-int8") over the script folder's ("push-to-talk").
+        static List<InstalledModel> Merge(List<InstalledModel> list)
+        {
+            var output = new List<InstalledModel>();
+            foreach (var g in list.GroupBy(m => m.WeightBytes > 0 ? m.WeightBytes + ":" + m.Files : m.Path, StringComparer.OrdinalIgnoreCase))
+            {
+                var keep = g.OrderBy(m => m.Beside ? 1 : 0).ThenBy(m => m.Added).First();
+                foreach (var m in g)
+                {
+                    if (m == keep) continue;
+                    keep.PathKeys.AddRange(m.PathKeys.Where(k => !keep.PathKeys.Contains(k)));
+                    keep.NameKeys.AddRange(m.NameKeys.Where(k => !keep.NameKeys.Contains(k)));
+                }
+                output.Add(keep);
+            }
+            return output;
+        }
+
+        // A folder of models. A subfolder whose own subfolders each hold weights (hf\<model>, a publisher in LM Studio)
+        // is opened up; any other folder with weights in it is one model.
+        static void Folder(DirectoryInfo dir, string root, int depth, List<InstalledModel> list)
+        {
+            var shards = new Dictionary<string, List<FileInfo>>(StringComparer.OrdinalIgnoreCase);
+            foreach (var f in dir.EnumerateFiles())
+            {
+                if (!IsWeights(f)) continue;
+                string key = Regex.Replace(f.Name, "-\\d{5}-of-\\d{5}(?=\\.[a-z]+$)", "", RegexOptions.IgnoreCase);
+                List<FileInfo> l;
+                if (!shards.TryGetValue(key, out l)) shards[key] = l = new List<FileInfo>();
+                l.Add(f);
+            }
+            foreach (var kv in shards)
+            {
+                var m = new InstalledModel { Name = Pretty(System.IO.Path.GetFileNameWithoutExtension(kv.Key)), Path = kv.Value[0].FullName, Where = root };
+                m.Bytes = m.WeightBytes = kv.Value.Sum(f => f.Length);
+                m.Files = kv.Value.Count;
+                m.Added = kv.Value.Max(f => f.CreationTime);
+                foreach (var f in kv.Value) m.PathKeys.Add(Norm(f.FullName));
+                m.NameKeys.Add(Norm(System.IO.Path.GetFileNameWithoutExtension(kv.Key)));
+                list.Add(m);
+            }
+            foreach (var sub in dir.EnumerateDirectories())
+            {
+                if (sub.Name.StartsWith(".") || (sub.Attributes & FileAttributes.ReparsePoint) != 0) continue;
+                if (depth < 2 && IsShelf(sub)) { Folder(sub, root, depth + 1, list); continue; }
+                var m = FolderModel(sub, root);
+                if (m != null) list.Add(m);
+            }
+        }
+
+        // One folder of weights as one model, or null when it holds none.
+        static InstalledModel FolderModel(DirectoryInfo sub, string root)
+        {
+            var weights = new List<FileInfo>();
+            long bytes = 0;
+            int n = 0;
+            foreach (var f in sub.EnumerateFiles("*", SearchOption.AllDirectories))
+            {
+                bytes += f.Length;
+                if (IsWeights(f)) weights.Add(f);
+                if (++n > 20000) break;
+            }
+            if (weights.Count == 0) return null;
+            // "push-to-talk\model" is better called push-to-talk.
+            string name = PlainNames.Contains(sub.Name.ToLowerInvariant()) && sub.Parent != null ? sub.Parent.Name : sub.Name;
+            var m = new InstalledModel { Name = Pretty(name), Path = sub.FullName, Where = root, Bytes = bytes, Files = weights.Count, WeightBytes = weights.Sum(f => f.Length) };
+            m.Added = weights.Max(f => f.CreationTime);
+            m.PathKeys.Add(Norm(sub.FullName));
+            if (sub.Name.Length >= 5) m.NameKeys.Add(Norm(sub.Name));
+            if (sub.Name.Contains("__")) m.NameKeys.Add(Norm(sub.Name.Replace("__", "/")));
+            return m;
+        }
+
+        // No weights of its own, and every subfolder holds weights directly.
+        static bool IsShelf(DirectoryInfo d)
+        {
+            if (d.EnumerateFiles().Any(IsWeights)) return false;
+            var subs = d.EnumerateDirectories().Where(s => !s.Name.StartsWith(".")).Take(200).ToList();
+            return subs.Count > 0 && subs.All(s => s.EnumerateFiles().Any(IsWeights));
+        }
+
+        // "Qwen__Qwen3-8B-GGUF" -> "Qwen3-8B": a download tool's "owner__" prefix and the format name say little.
+        static string Pretty(string name)
+        {
+            int at = name.IndexOf("__");
+            if (at > 0 && at < name.Length - 2) name = name.Substring(at + 2);
+            string bare = Regex.Replace(name, "[-_.](gguf|ggml|safetensors|onnx)$", "", RegexOptions.IgnoreCase);
+            return bare.Length > 0 ? bare : name;
+        }
+
+        // hub\models--owner--name, one model per folder.
+        static void HuggingFace(string hub, List<InstalledModel> list)
+        {
+            foreach (var d in new DirectoryInfo(hub).EnumerateDirectories("models--*"))
+            {
+                var blobs = new DirectoryInfo(System.IO.Path.Combine(d.FullName, "blobs"));
+                if (!blobs.Exists) continue;
+                var files = blobs.EnumerateFiles().ToList();
+                long bytes = files.Sum(f => f.Length);
+                if (bytes < MinWeights) continue;
+                var parts = d.Name.Substring(8).Split(new[] { "--" }, 2, StringSplitOptions.None);
+                string repo = parts.Length == 2 ? parts[0] + "/" + parts[1] : parts[0];
+                var m = new InstalledModel { Name = parts[parts.Length - 1], Path = d.FullName, Where = "Hugging Face", Bytes = bytes, Files = files.Count(f => f.Length >= MinWeights) };
+                m.Added = files.Where(f => f.Length >= MinWeights).Select(f => f.CreationTime).DefaultIfEmpty(d.CreationTime).Max();
+                m.PathKeys.Add(Norm(d.FullName));
+                m.NameKeys.Add(Norm(repo));
+                list.Add(m);
+            }
+        }
+
+        // manifests\<host>\<namespace>\<model>\<tag>: JSON naming the blobs. The runner's command line names the model blob.
+        static void Ollama(string dir, List<InstalledModel> list)
+        {
+            string man = System.IO.Path.Combine(dir, "manifests");
+            if (!Directory.Exists(man)) return;
+            foreach (var f in new DirectoryInfo(man).EnumerateFiles("*", SearchOption.AllDirectories))
+            {
+                string json;
+                try { json = File.ReadAllText(f.FullName); } catch (Exception) { continue; }
+                var rel = f.FullName.Substring(man.Length + 1).Split('\\');
+                if (rel.Length < 4) continue;
+                string name = (rel[rel.Length - 3] == "library" ? "" : rel[rel.Length - 3] + "/") + rel[rel.Length - 2] + ":" + rel[rel.Length - 1];
+                var m = new InstalledModel { Name = name, Path = f.FullName, Where = "Ollama", Added = f.CreationTime };
+                foreach (Match x in Regex.Matches(json, "\"mediaType\"\\s*:\\s*\"([^\"]+)\"\\s*,\\s*\"digest\"\\s*:\\s*\"sha256:([0-9a-f]+)\"\\s*,\\s*\"size\"\\s*:\\s*(\\d+)"))
+                {
+                    m.Bytes += long.Parse(x.Groups[3].Value);
+                    if (x.Groups[1].Value.EndsWith(".model")) { m.PathKeys.Add(Norm(System.IO.Path.Combine(dir, "blobs", "sha256-" + x.Groups[2].Value))); m.Files++; }
+                }
+                m.NameKeys.Add(Norm(name));
+                if (m.Bytes > 0) list.Add(m);
+            }
+        }
+
+        // What a process says about the files it uses: its command line, plus small config files that command line names.
+        public static string CommandText(Proc p)
+        {
+            var sb = new StringBuilder(Norm(p.Cmd));
+            foreach (string a in Scripts.SplitArgs(p.Cmd ?? ""))
+            {
+                string ext;
+                try { ext = System.IO.Path.GetExtension(a).ToLowerInvariant(); } catch (Exception) { continue; }
+                if (ext != ".json" && ext != ".yaml" && ext != ".yml" && ext != ".toml" && ext != ".ini" && ext != ".cfg") continue;
+                try
+                {
+                    var fi = new FileInfo(a);
+                    if (fi.Exists && fi.Length < 256 << 10) sb.Append('\n').Append(Norm(File.ReadAllText(fi.FullName)));
+                }
+                catch (Exception) { }
+            }
+            return sb.ToString();
+        }
+
+        // The source of a script and the scripts beside it, for telling which model a Python process put on the GPU.
+        public static string ScriptText(string script)
+        {
+            var sb = new StringBuilder();
+            try
+            {
+                string dir = Scripts.Folder(script);
+                if (dir == null || !Directory.Exists(dir)) return "";
+                var files = new List<string>();
+                if (File.Exists(script)) files.Add(script);
+                files.AddRange(Directory.EnumerateFiles(dir).Where(Scripts.IsScriptFile).Where(f => !f.Equals(script, StringComparison.OrdinalIgnoreCase)).Take(40));
+                foreach (string f in files)
+                    try { if (new FileInfo(f).Length < 512 << 10) sb.Append('\n').Append(Norm(File.ReadAllText(f))); } catch (Exception) { }
+            }
+            catch (Exception) { }
+            return sb.ToString();
+        }
+    }
+
     // A scheduled task you (or your tools) made: not Windows' own, not an app's updater.
     class TaskInfo
     {
-        public string Name, Path, Action, Script;
+        public string Name, Path, Action, Script, Exe;
         public int State;            // 4 = running
         public int Result;
         public DateTime LastRun, NextRun;
+        public bool AtLogon;         // starts when you sign in or the PC boots
+        public bool Timed;           // starts at set times: once, daily, weekly, monthly, or on a repeat
+        public bool OnDemand { get { return !AtLogon && !Timed; } }   // no trigger at all; something else starts it
+        public bool StartsWithWindows { get { return AtLogon && !Timed; } }
 
         public bool Running { get { return State == 4; } }
         public bool NeverRan { get { return Result == 0x41303 || LastRun.Year < 2000; } }
@@ -587,6 +855,9 @@ namespace DesktopVitals
         public static bool Failed;
         static bool busy;
         static DateTime read = DateTime.MinValue;
+
+        // Read again on the next Refresh, without waiting out the 30 s.
+        public static void Soon() { if (!busy) read = DateTime.MinValue.AddSeconds(1); }
 
         // Reads Task Scheduler off the UI thread, at most every 30 s. One reader at a time; no watchdog.
         public static void Refresh(Action done)
@@ -622,6 +893,13 @@ namespace DesktopVitals
                 {
                     if (!(bool)t.Enabled) continue;
                     var info = new TaskInfo { Name = Regex.Replace((string)t.Name, "-S-1-5-[0-9-]+$", ""), Path = (string)t.Path, State = (int)t.State, Result = (int)t.LastTaskResult, LastRun = (DateTime)t.LastRunTime, NextRun = (DateTime)t.NextRunTime };
+                    foreach (dynamic tr in t.Definition.Triggers)
+                    {
+                        int type = (int)tr.Type;
+                        if (!(bool)tr.Enabled) continue;
+                        if (type == 8 || type == 9) info.AtLogon = true;      // boot, logon
+                        else if (type >= 1 && type <= 5) info.Timed = true;   // once, daily, weekly, monthly, monthly by weekday
+                    }
                     bool mine = false;
                     foreach (dynamic a in t.Definition.Actions)
                     {
@@ -629,6 +907,7 @@ namespace DesktopVitals
                         string exe = Environment.ExpandEnvironmentVariables(((string)a.Path ?? "").Trim('"'));
                         string args = Environment.ExpandEnvironmentVariables((string)a.Arguments ?? "");
                         info.Action = (exe + " " + args).Trim();
+                        info.Exe = exe;
                         foreach (string arg in Scripts.SplitArgs(args))
                             if (System.IO.Path.IsPathRooted(arg) && Scripts.IsScriptFile(arg) && !Scripts.IsSystemPath(arg)) { info.Script = arg; break; }
                         if (info.Script == null && Scripts.IsScriptFile(exe) && !Scripts.IsSystemPath(exe)) info.Script = exe;
@@ -641,6 +920,136 @@ namespace DesktopVitals
                 catch (Exception) { }
             }
             foreach (dynamic sub in folder.GetFolders(0)) Walk(sub, found);
+        }
+    }
+
+    // Something that starts when you sign in: a Startup folder shortcut, a "Run" entry in the registry, or a
+    // scheduled task whose only trigger is sign-in or boot.
+    class StartItem
+    {
+        public string Name, Where, Exe, Script;
+        public TaskInfo Task;
+    }
+
+    // The programs Windows starts for you at sign-in, the ones you'd see under Startup apps, minus those you turned
+    // off there. Read off the UI thread at most once a minute.
+    static class StartupList
+    {
+        public static List<StartItem> Items = new List<StartItem>();
+        static bool busy;
+        static DateTime read = DateTime.MinValue;
+
+        public static void Soon() { if (!busy) read = DateTime.MinValue; }
+
+        public static void Refresh()
+        {
+            if (busy || (DateTime.Now - read).TotalSeconds < 60) return;
+            busy = true;
+            var t = new Thread(delegate ()
+            {
+                var found = new List<StartItem>();
+                try { Folders(found); } catch (Exception) { }
+                try { RunKeys(found); } catch (Exception) { }
+                Items = found;
+                read = DateTime.Now;
+                busy = false;
+            });
+            t.SetApartmentState(ApartmentState.STA);   // the shortcut reader is a COM object
+            t.IsBackground = true;
+            t.Start();
+        }
+
+        // Task Manager's on/off switch for each entry: the first byte is even when on, odd when turned off.
+        static bool TurnedOff(Microsoft.Win32.RegistryKey hive, string list, string name)
+        {
+            try
+            {
+                using (var k = hive.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\" + list))
+                {
+                    var v = k == null ? null : k.GetValue(name) as byte[];
+                    return v != null && v.Length > 0 && (v[0] & 1) == 1;
+                }
+            }
+            catch (Exception) { return false; }
+        }
+
+        static void Folders(List<StartItem> found)
+        {
+            dynamic shell = Activator.CreateInstance(Type.GetTypeFromProgID("WScript.Shell"));
+            var places = new[]
+            {
+                new { Dir = Environment.GetFolderPath(Environment.SpecialFolder.Startup), Hive = Microsoft.Win32.Registry.CurrentUser },
+                new { Dir = Environment.GetFolderPath(Environment.SpecialFolder.CommonStartup), Hive = Microsoft.Win32.Registry.LocalMachine },
+            };
+            foreach (var place in places)
+            {
+                if (string.IsNullOrEmpty(place.Dir) || !Directory.Exists(place.Dir)) continue;
+                foreach (string f in Directory.GetFiles(place.Dir))
+                {
+                    string file = System.IO.Path.GetFileName(f);
+                    if (file.Equals("desktop.ini", StringComparison.OrdinalIgnoreCase) || TurnedOff(place.Hive, "StartupFolder", file)) continue;
+                    var item = new StartItem { Name = System.IO.Path.GetFileNameWithoutExtension(f), Where = "Startup folder", Exe = f };
+                    if (f.EndsWith(".lnk", StringComparison.OrdinalIgnoreCase))
+                    {
+                        try
+                        {
+                            dynamic lnk = shell.CreateShortcut(f);
+                            item.Exe = (string)lnk.TargetPath;
+                            item.Script = ScriptIn((string)lnk.Arguments);
+                        }
+                        catch (Exception) { }
+                    }
+                    else if (Scripts.IsScriptFile(f)) item.Script = f;
+                    found.Add(item);
+                }
+            }
+        }
+
+        static void RunKeys(List<StartItem> found)
+        {
+            string win = Environment.GetFolderPath(Environment.SpecialFolder.Windows);
+            foreach (var hive in new[] { Microsoft.Win32.Registry.CurrentUser, Microsoft.Win32.Registry.LocalMachine })
+                foreach (var sub in new[] { "Run", "Run32" })
+                {
+                    string path = sub == "Run" ? @"Software\Microsoft\Windows\CurrentVersion\Run" : @"Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Run";
+                    using (var k = hive.OpenSubKey(path))
+                    {
+                        if (k == null) continue;
+                        foreach (string name in k.GetValueNames())
+                        {
+                            if (TurnedOff(hive, sub, name)) continue;
+                            string cmd = Environment.ExpandEnvironmentVariables(k.GetValue(name) as string ?? "").Trim();
+                            if (cmd.Length == 0) continue;
+                            string exe = ExeOf(cmd);
+                            if (exe.StartsWith(win + "\\", StringComparison.OrdinalIgnoreCase)) continue;   // Windows' own (Security, etc.)
+                            // "GoogleChromeAutoLaunch_23DF09..." says less than the program's own description.
+                            string label = name;
+                            if (Regex.IsMatch(name, "_[0-9A-Fa-f]{16,}$"))
+                            {
+                                label = Regex.Replace(name, "(AutoLaunch)?_[0-9A-Fa-f]{16,}$", "");
+                                try { string d = FileVersionInfo.GetVersionInfo(exe).FileDescription; if (!string.IsNullOrWhiteSpace(d)) label = d.Trim(); } catch (Exception) { }
+                            }
+                            int at = cmd.IndexOf(exe, StringComparison.OrdinalIgnoreCase);
+                            string rest = at < 0 ? "" : cmd.Substring(at + exe.Length).TrimStart('"');
+                            found.Add(new StartItem { Name = label, Where = "Startup apps", Exe = exe, Script = ScriptIn(rest) });
+                        }
+                    }
+                }
+        }
+
+        // The program a command line starts: the quoted first part, or everything up to ".exe".
+        static string ExeOf(string cmd)
+        {
+            if (cmd.StartsWith("\"")) { int end = cmd.IndexOf('"', 1); return end > 0 ? cmd.Substring(1, end - 1) : cmd.Trim('"'); }
+            int at = cmd.IndexOf(".exe", StringComparison.OrdinalIgnoreCase);
+            return at > 0 ? cmd.Substring(0, at + 4) : Scripts.SplitArgs(cmd)[0];
+        }
+
+        static string ScriptIn(string args)
+        {
+            foreach (string a in Scripts.SplitArgs(args ?? ""))
+                if (!a.StartsWith("-") && Scripts.IsScriptFile(a)) return a;
+            return null;
         }
     }
 
@@ -853,8 +1262,9 @@ namespace DesktopVitals
         public static readonly Brush Text = Solid(0xFF, 0xF3, 0xF5, 0xF8);
         public static readonly Brush Sub = Solid(0x9E, 0xFF, 0xFF, 0xFF);
         public static readonly Brush Faint = Solid(0x5C, 0xFF, 0xFF, 0xFF);
-        public static readonly Brush Card = Solid(0x14, 0xFF, 0xFF, 0xFF);
-        public static readonly Brush Hover = Solid(0x14, 0xFF, 0xFF, 0xFF);
+        public static readonly Brush Card = Gradient(Color.FromArgb(0x1E, 0xFF, 0xFF, 0xFF), Color.FromArgb(0x0A, 0xFF, 0xFF, 0xFF), false);
+        public static readonly Brush Sheen = Gradient(Color.FromArgb(0x12, 0xFF, 0xFF, 0xFF), Color.FromArgb(0x00, 0xFF, 0xFF, 0xFF), false);
+        public static readonly Brush Hover = Solid(0x1A, 0xFF, 0xFF, 0xFF);
         public static readonly Brush Track = Solid(0x1C, 0xFF, 0xFF, 0xFF);
         public static readonly Brush Green = Solid(0xFF, 0x34, 0xD3, 0x6A);
         public static readonly Brush Link = Solid(0xFF, 0x6F, 0xC8, 0xFF);
@@ -866,7 +1276,19 @@ namespace DesktopVitals
         public static readonly Brush BlueV = Gradient(Color.FromRgb(0x6F, 0xE0, 0xFF), Color.FromRgb(0x5E, 0x9B, 0xFF), false);
         public static readonly Brush AmberV = Gradient(Color.FromRgb(0xFF, 0xCF, 0x5C), Color.FromRgb(0xFF, 0x9F, 0x2E), false);
         public static readonly Brush RedV = Gradient(Color.FromRgb(0xFF, 0x7E, 0x6B), Color.FromRgb(0xFF, 0x45, 0x5A), false);
-        public static readonly Brush Edge = Gradient(Color.FromArgb(0x40, 0xFF, 0xFF, 0xFF), Color.FromArgb(0x0A, 0xFF, 0xFF, 0xFF), false);
+        public static readonly Brush Edge = Rim();
+
+        // Light catching a glass edge: bright at the top-left, gone along the sides, a faint glint at the bottom-right.
+        static Brush Rim()
+        {
+            var br = new LinearGradientBrush { StartPoint = new Point(0, 0), EndPoint = new Point(1, 1) };
+            br.GradientStops.Add(new GradientStop(Color.FromArgb(0x80, 0xFF, 0xFF, 0xFF), 0));
+            br.GradientStops.Add(new GradientStop(Color.FromArgb(0x26, 0xFF, 0xFF, 0xFF), 0.28));
+            br.GradientStops.Add(new GradientStop(Color.FromArgb(0x0C, 0xFF, 0xFF, 0xFF), 0.62));
+            br.GradientStops.Add(new GradientStop(Color.FromArgb(0x36, 0xFF, 0xFF, 0xFF), 1));
+            br.Freeze();
+            return br;
+        }
         // One color per kind of thing, kept apart from the green / amber / grey status dots.
         public static readonly Dictionary<string, Color> Kinds = new Dictionary<string, Color>
         {
@@ -877,12 +1299,16 @@ namespace DesktopVitals
             { "Watching", Color.FromRgb(0xC8, 0xCD, 0xD6) },
             { "Script", Color.FromRgb(0xFF, 0xB8, 0x8C) },
             { "Task", Color.FromRgb(0xA9, 0xC4, 0xD8) },
+            { "Start", Color.FromRgb(0x9F, 0xE8, 0xB4) },
         };
+
+        // What a kind is called on screen. "Watching" stays the word in watch.txt; on screen it reads Pinned.
+        public static string Say(string kind) { return kind == "Watching" ? "Pinned" : kind; }
         public static readonly string[] AiKinds = { "Bot", "Agent", "App", "Model", "Watching" };
 
         public static Border Tag(string kind)
         {
-            var b = new Border { Child = Label("", 10.5, Sub, FontWeights.SemiBold), CornerRadius = new CornerRadius(4), Padding = new Thickness(5, 0, 5, 1), VerticalAlignment = VerticalAlignment.Center };
+            var b = new Border { Child = Label("", 10.5, Sub, FontWeights.SemiBold), CornerRadius = new CornerRadius(8), Padding = new Thickness(7, 0, 7, 1), VerticalAlignment = VerticalAlignment.Center };
             Paint(b, kind);
             return b;
         }
@@ -891,7 +1317,7 @@ namespace DesktopVitals
         {
             Color c = Kinds[kind];
             var t = (TextBlock)tag.Child;
-            t.Text = kind;
+            t.Text = Say(kind);
             t.Foreground = new SolidColorBrush(c);
             tag.Background = new SolidColorBrush(Color.FromArgb(0x2E, c.R, c.G, c.B));
         }
@@ -1019,12 +1445,12 @@ namespace DesktopVitals
 
         public Bar()
         {
-            Height = 4;
+            Height = 5;
             var track = new Border();
-            track.CornerRadius = new CornerRadius(2);
+            track.CornerRadius = new CornerRadius(2.5);
             track.Background = Theme.Track;
             fill = new Border();
-            fill.CornerRadius = new CornerRadius(2);
+            fill.CornerRadius = new CornerRadius(2.5);
             fill.Background = Theme.Blue;
             fill.RenderTransform = scale;
             fill.RenderTransformOrigin = new Point(0, 0.5);
@@ -1114,15 +1540,15 @@ namespace DesktopVitals
 
         public ProcRow()
         {
-            Padding = new Thickness(6, 4, 6, 4);
-            Margin = new Thickness(-6, 0, -6, 0);
-            CornerRadius = new CornerRadius(8);
+            Padding = new Thickness(8, 4, 8, 4);
+            Margin = new Thickness(-8, 0, -8, 0);
+            CornerRadius = new CornerRadius(10);
             Background = Brushes.Transparent;
             var g = new Grid();
             g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(24) });
             g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(56) });
-            g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(72) });
+            g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(84) });
             icon.Width = icon.Height = 16;
             icon.HorizontalAlignment = HorizontalAlignment.Left;
             RenderOptions.SetBitmapScalingMode(icon, BitmapScalingMode.HighQuality);
@@ -1136,8 +1562,8 @@ namespace DesktopVitals
             count.Margin = new Thickness(6, 1, 0, 0);
             kindText = Theme.Label("", 10.5, Theme.Sub, FontWeights.SemiBold);
             kindTag.Child = kindText;
-            kindTag.CornerRadius = new CornerRadius(4);
-            kindTag.Padding = new Thickness(5, 0, 5, 1);
+            kindTag.CornerRadius = new CornerRadius(8);
+            kindTag.Padding = new Thickness(7, 0, 7, 1);
             kindTag.Margin = new Thickness(7, 1, 0, 0);
             kindTag.VerticalAlignment = VerticalAlignment.Center;
             kindTag.Visibility = Visibility.Collapsed;
@@ -1221,7 +1647,7 @@ namespace DesktopVitals
             {
                 Kind = kind;
                 Color c = Theme.Kinds[kind];
-                kindText.Text = kind;
+                kindText.Text = Theme.Say(kind);
                 kindText.Foreground = new SolidColorBrush(c);
                 kindTag.Background = new SolidColorBrush(Color.FromArgb(0x2E, c.R, c.G, c.B));
                 kindTag.Visibility = Visibility.Visible;
@@ -1240,6 +1666,65 @@ namespace DesktopVitals
             if (cpu.Text != cp) cpu.Text = cp;
             if (mem.Text != m) mem.Text = m;
             if (!object.Equals(ToolTip, tip)) ToolTip = tip;
+        }
+    }
+
+    // Lays the cards out in columns as the window widens, instead of stretching each card across it.
+    // Each card goes, in order, to the shortest column. Columns never grow past MaxCol, and the set is centered.
+    class CardFlow : Panel
+    {
+        const double MinCol = 360, MaxCol = 540, Gap = 12;
+        double colW, left;
+        int cols;
+
+        void Plan(double width)
+        {
+            if (double.IsInfinity(width) || width <= 0) width = MinCol;
+            cols = Math.Max(1, (int)((width + Gap) / (MinCol + Gap)));
+            int shown = InternalChildren.Cast<UIElement>().Count(c => c.Visibility != Visibility.Collapsed);
+            cols = Math.Max(1, Math.Min(cols, shown));
+            colW = Math.Min(MaxCol, (width - Gap * (cols - 1)) / cols);
+            left = Math.Max(0, (width - (colW * cols + Gap * (cols - 1))) / 2);
+        }
+
+        // Where each card goes: its column and top, in the order the cards were added.
+        List<Point> Place(Func<UIElement, double> height, out double tallest)
+        {
+            var tops = new double[cols];
+            var spots = new List<Point>();
+            foreach (UIElement c in InternalChildren)
+            {
+                if (c.Visibility == Visibility.Collapsed) { spots.Add(new Point(-1, 0)); continue; }
+                int col = 0;
+                for (int i = 1; i < cols; i++) if (tops[i] < tops[col] - 1) col = i;
+                spots.Add(new Point(col, tops[col]));
+                tops[col] += height(c) + Gap;
+            }
+            tallest = Math.Max(0, tops.Max() - Gap);
+            return spots;
+        }
+
+        protected override Size MeasureOverride(Size available)
+        {
+            Plan(available.Width);
+            foreach (UIElement c in InternalChildren) c.Measure(new Size(colW, double.PositiveInfinity));
+            double tallest;
+            Place(c => c.DesiredSize.Height, out tallest);
+            return new Size(double.IsInfinity(available.Width) ? colW : available.Width, tallest);
+        }
+
+        protected override Size ArrangeOverride(Size final)
+        {
+            Plan(final.Width);
+            double tallest;
+            var spots = Place(c => c.DesiredSize.Height, out tallest);
+            for (int i = 0; i < InternalChildren.Count; i++)
+            {
+                var c = InternalChildren[i];
+                if (spots[i].X < 0) { c.Arrange(new Rect(0, 0, 0, 0)); continue; }
+                c.Arrange(new Rect(left + spots[i].X * (colW + Gap), spots[i].Y, colW, c.DesiredSize.Height));
+            }
+            return final;
         }
     }
 
@@ -1267,6 +1752,8 @@ namespace DesktopVitals
         public string Kind, Name;
         public List<Proc> Procs = new List<Proc>();
         public WatchRule Rule;
+        public InstalledModel Model;   // a model on disk; Procs are what has it loaded
+        public bool GpuOnly;           // a script holding video memory with no model found for it
     }
 
     class VitalsWindow : Window
@@ -1296,7 +1783,8 @@ namespace DesktopVitals
         TextBlock subtitle, stateLabel;
         Border switchTrack;
         TranslateTransform knob;
-        StackPanel body, aiList, botList, watchList, topList;
+        CardFlow body;
+        StackPanel aiList, botList, watchList, topList;
         StatRow cpuRow, memRow, gpuRow, vramRow, diskRow;
         ThreadStrip threadStrip;
         long[] threadBusy, threadTotal, prevThreadBusy, prevThreadTotal;
@@ -1307,7 +1795,9 @@ namespace DesktopVitals
         readonly List<ProcRow> scriptRows = new List<ProcRow>();
         readonly List<ProcRow> taskRows = new List<ProcRow>();
         StackPanel scriptList, taskList;
-        Border aiCard, scriptsCard, tasksCard;
+        Border aiCard, scriptsCard, tasksCard, startCard;
+        StackPanel startList;
+        readonly List<ProcRow> startRows = new List<ProcRow>();
         readonly Dictionary<long, string[]> aiCache = new Dictionary<long, string[]>();
         static readonly List<string> KindOrder = new List<string> { "Bot", "Agent", "App", "Model", "Watching" };
         List<AiLine> lastAi = new List<AiLine>();
@@ -1324,6 +1814,13 @@ namespace DesktopVitals
         static readonly string[] ScriptChoices = { "Script", "Agent", "Bot" };
         static readonly string[] WatchChoices = { "Watching", "App", "Agent", "Bot", "Model" };
         readonly Dictionary<long, string> scriptCache = new Dictionary<long, string>();
+        List<InstalledModel> installed = new List<InstalledModel>();
+        DateTime modelsRead = DateTime.MinValue;
+        bool modelsBusy;
+        HashSet<string> scriptFolders = new HashSet<string>(StringComparer.OrdinalIgnoreCase);   // where running scripts live, as of the last model scan
+        DateTime configTime;   // watch.txt's last change, to read it again when it changes
+        readonly Dictionary<long, string> useCache = new Dictionary<long, string>();      // command line + configs it names
+        readonly Dictionary<long, string> sourceCache = new Dictionary<long, string>();   // script source, for GPU users
         Dictionary<string, string> settings;
         static readonly string DiskRoot = System.IO.Path.GetPathRoot(Environment.SystemDirectory);
 
@@ -1425,13 +1922,13 @@ namespace DesktopVitals
         UIElement Build()
         {
             var root = rootGrid = new Grid();
-            root.Background = snapshotDir == null && TransparencyOn() ? new SolidColorBrush(Color.FromArgb(0x70, 0x0E, 0x10, 0x16)) : new SolidColorBrush(Color.FromArgb(0xFF, 0x17, 0x1A, 0x21));
+            root.Background = snapshotDir == null && TransparencyOn() ? new SolidColorBrush(Color.FromArgb(0x52, 0x0C, 0x0E, 0x14)) : new SolidColorBrush(Color.FromArgb(0xFF, 0x17, 0x1A, 0x21));
             root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
             root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
 
             root.Children.Add(BuildHeader());
 
-            body = new StackPanel { Margin = new Thickness(14, 2, 14, 14) };
+            body = new CardFlow { Margin = new Thickness(14, 2, 14, 14) };
             var scroll = dashScroll = new ScrollViewer();
             scroll.VerticalScrollBarVisibility = ScrollBarVisibility.Hidden;
             scroll.Content = body;
@@ -1459,6 +1956,11 @@ namespace DesktopVitals
             scriptsCard = Card("Script", Columns(Head("CPU"), Head("Memory")), scriptList);
             scriptsCard.Visibility = Visibility.Collapsed;
             body.Children.Add(scriptsCard);
+
+            startList = new StackPanel();
+            startCard = Card("Start", Columns(Head("CPU"), Head("Memory")), startList);
+            startCard.Visibility = Visibility.Collapsed;
+            body.Children.Add(startCard);
 
             taskList = new StackPanel();
             tasksCard = Card("Task", Columns(Head("Result"), Head("Last run")), taskList);
@@ -1526,6 +2028,7 @@ namespace DesktopVitals
             WindowChrome.SetIsHitTestVisibleInChrome(sw, true);
             right.Children.Add(sw);
 
+            right.Children.Add(CaptionButton("\uE72C", "Look again now: new scripts, models, tasks and settings", delegate { RefreshAll(); }));
             right.Children.Add(CaptionButton("\uE713", "Review what's shown", delegate { ShowReview(); }));
             right.Children.Add(CaptionButton("\uE921", "Minimize", delegate { WindowState = WindowState.Minimized; }));
             right.Children.Add(CaptionButton("\uE8BB", "Close", delegate { Close(); }));
@@ -1552,13 +2055,13 @@ namespace DesktopVitals
             return t;
         }
 
-        // Sits over a list's two number columns, which are 56 and 72 wide in ProcRow.
+        // Sits over a list's two number columns, which are 56 and 84 wide in ProcRow.
         static Grid Columns(TextBlock a, TextBlock b)
         {
             var g = new Grid();
             g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(56) });
-            g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(72) });
+            g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(84) });
             Grid.SetColumn(a, 1); Grid.SetColumn(b, 2);
             g.Children.Add(a); g.Children.Add(b);
             return g;
@@ -1571,7 +2074,7 @@ namespace DesktopVitals
             head.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             head.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
             // Cards that hold one kind of thing are headed by that kind's colored tag, the same tag AI lines carry.
-            string[] plural = { "Bot", "Bots", "Script", "Scripts", "Task", "Scheduled tasks", "Watching", "Watching" };
+            string[] plural = { "Bot", "Bots", "Script", "Scripts", "Task", "Scheduled", "Start", "Starts with Windows", "Watching", "Pinned" };
             int at = Array.IndexOf(plural, heading);
             if (at >= 0 && at % 2 == 0)
             {
@@ -1585,15 +2088,17 @@ namespace DesktopVitals
             else if (extra != null) { Grid.SetColumn(extra, 1); head.Children.Add(extra); }
             stack.Children.Add(head);
             foreach (var r in rows) stack.Children.Add(r);
+            stack.Margin = new Thickness(16, 13, 16, 12);
+            // Glass: a clear pane that thins out toward the bottom, a sheen across its top, and a rim that catches
+            // light on the top-left edge and again faintly at the bottom-right.
+            var sheen = new Border { Height = 46, VerticalAlignment = VerticalAlignment.Top, CornerRadius = new CornerRadius(19, 19, 0, 0), Background = Theme.Sheen, IsHitTestVisible = false };
             return new Border
             {
                 Background = Theme.Card,
                 BorderBrush = Theme.Edge,
                 BorderThickness = new Thickness(1),
-                CornerRadius = new CornerRadius(14),
-                Padding = new Thickness(14, 11, 14, 10),
-                Margin = new Thickness(0, 0, 0, 10),
-                Child = stack
+                CornerRadius = new CornerRadius(20),
+                Child = new Grid { Children = { sheen, stack } }
             };
         }
 
@@ -1776,6 +2281,9 @@ namespace DesktopVitals
 
             // AI: local models, coding agents, AI apps, and the bots and watched lines that are AI.
             lastProcs = procs;
+            ReloadIfChanged();
+            ReadVram();
+            ScanModels(procs);
             lastAi = FindAi(procs);
             var ai = lastAi.Where(l => !hidden.Contains(l.Name)).ToList();
             aiCard.Visibility = ai.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
@@ -1809,19 +2317,13 @@ namespace DesktopVitals
 
             // Scripts: anything an interpreter is running from a script file of yours, one line per script.
             var claimed = new HashSet<int>(botRules.SelectMany(r => procs.Where(r.Hit)).Select(p => p.Pid));
-            foreach (var l in lastAi) foreach (var p in l.Procs) claimed.Add(p.Pid);
+            // A script that has a model loaded still shows here; the model's line only says who is using it.
+            foreach (var l in lastAi) if (l.Model == null && !l.GpuOnly) foreach (var p in l.Procs) claimed.Add(p.Pid);
             var byScript = new Dictionary<string, List<Proc>>(StringComparer.OrdinalIgnoreCase);
             foreach (var p in procs)
             {
                 if (claimed.Contains(p.Pid)) continue;
-                long key = ((long)p.Pid << 32) ^ p.CreateTime;
-                string script;
-                if (!scriptCache.TryGetValue(key, out script))
-                {
-                    int pid = p.Pid;
-                    script = Scripts.Find(p, () => Procs.CurrentDirectory(pid));
-                    scriptCache[key] = script;
-                }
+                string script = ScriptOf(p);
                 if (script == null) continue;
                 List<Proc> l;
                 if (!byScript.TryGetValue(script, out l)) byScript[script] = l = new List<Proc>();
@@ -1848,9 +2350,41 @@ namespace DesktopVitals
                     Theme.Pct(items.Sum(h => h.Cpu)), Theme.Mem(items.Sum(h => h.Private)), tip);
             }
 
-            // Scheduled tasks: running first, then failures, then the most recent runs.
+            // Starts with Windows: Startup folder, Startup apps in the registry, and tasks that only run at sign-in.
             TaskList.Refresh(null);
-            var tasks = TaskList.Items.Where(t => !hidden.Contains(t.Name)).OrderByDescending(t => t.Running).ThenByDescending(t => t.Failed).ThenByDescending(t => t.LastRun).Take(8).ToList();
+            StartupList.Refresh();
+            var starts = StartupList.Items.Concat(TaskList.Items.Where(t => t.StartsWithWindows)
+                    .Select(t => new StartItem { Name = t.Name, Where = "sign-in task", Exe = t.Exe, Script = t.Script, Task = t }))
+                .Where(s => !hidden.Contains(s.Name))
+                .Select(s => new { Item = s, Hits = StartProcs(s, procs) })
+                .OrderByDescending(s => s.Hits.Count > 0 || (s.Item.Task != null && s.Item.Task.Running)).ThenBy(s => s.Item.Name, StringComparer.OrdinalIgnoreCase)
+                .Take(12).ToList();
+            startCard.Visibility = starts.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
+            EnsureRows(startList, startRows, starts.Count);
+            for (int i = 0; i < starts.Count; i++)
+            {
+                var s = starts[i].Item;
+                var hits = starts[i].Hits;
+                bool running = hits.Count > 0 || (s.Task != null && s.Task.Running);
+                string tip = s.Where + "\n" + (s.Script ?? s.Exe ?? "") + (hits.Count == 0 ? "" : "\n\n" + string.Join("\n", hits.Take(12).Select(h => h.Pid + "  " + Trim(h.Cmd.Length > 0 ? h.Cmd : h.Exe, 140))));
+                startRows[i].Task = s.Task;
+                startRows[i].Script = s.Script;
+                startRows[i].Pids = hits.Select(h => h.Pid).ToArray();
+                if (!running) startRows[i].SetPlain(s.Name, Theme.Off, s.Where, "", "not running", tip);
+                else
+                {
+                    string since = hits.Count == 0 ? "" : " · up " + Ago(DateTime.UtcNow - DateTime.FromFileTimeUtc(hits.Min(h => h.CreateTime)));
+                    startRows[i].SetPlain(s.Name, Theme.Green, s.Where + since, hits.Count == 0 ? "" : Theme.Pct(hits.Sum(h => h.Cpu)), hits.Count == 0 ? "running" : Theme.Mem(hits.Sum(h => h.Private)), tip);
+                }
+            }
+
+            // Scheduled: only tasks that run at set times. A bot's restart-every-few-minutes task is the bot's own
+            // business and shows in Bots; a task with no trigger is started by something else (the temperature sensor).
+            var bots = botRules.Concat(aiRules.Where(r => r.IsBot)).ToList();
+            var tasks = TaskList.Items.Where(t => t.Timed && !hidden.Contains(t.Name))
+                .Where(t => !bots.Any(r => (t.Action ?? "").IndexOf(r.Match, StringComparison.OrdinalIgnoreCase) >= 0))
+                .OrderByDescending(t => t.Running).ThenByDescending(t => t.Failed)
+                .ThenBy(t => t.NextRun > DateTime.Now ? t.NextRun : DateTime.MaxValue).Take(8).ToList();
             if (!TaskList.Ready)
             {
                 tasksCard.Visibility = Visibility.Visible;
@@ -1907,6 +2441,20 @@ namespace DesktopVitals
         }
 
         static string Trim(string s, int n) { return s.Length <= n ? s : s.Substring(0, n) + "\u2026"; }
+
+        // The processes a startup entry started: an interpreter running its script, or its program by name.
+        static List<Proc> StartProcs(StartItem s, List<Proc> procs)
+        {
+            if (s.Script != null)
+            {
+                string file = System.IO.Path.GetFileName(s.Script);
+                return procs.Where(p => p.Cmd.IndexOf(file, StringComparison.OrdinalIgnoreCase) >= 0 && Scripts.IsInterpreter(p.Exe)).ToList();
+            }
+            string exe;
+            try { exe = System.IO.Path.GetFileName(s.Exe ?? ""); } catch (Exception) { return new List<Proc>(); }
+            if (exe.Length == 0 || Scripts.IsInterpreter(exe) || !exe.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)) return new List<Proc>();
+            return procs.Where(p => string.Equals(p.Exe, exe, StringComparison.OrdinalIgnoreCase)).ToList();
+        }
 
         // compact: 45s, 12m, 13h, 2d. otherwise: 13h 05m, 2d 3h.
         static string Short(TimeSpan t) { return SpanText(t, true); }
@@ -1978,6 +2526,7 @@ namespace DesktopVitals
             if (exe == "chatgpt.exe") return new[] { "App", "ChatGPT" };
             if (exe == "windsurf.exe") return new[] { "App", "Windsurf" };
             if (exe == "perplexity.exe") return new[] { "App", "Perplexity" };
+            if (exe == "meetily.exe") return new[] { "App", "Meetily" };
             if (exe == "copilot.exe") return new[] { "App", "Copilot" };
             if (exe.Contains("grok") && exe.EndsWith(".exe")) return new[] { "App", System.IO.Path.GetFileNameWithoutExtension(p.Exe) };
             return null;
@@ -2029,12 +2578,179 @@ namespace DesktopVitals
                 }
             }
             lines.AddRange(found.Values);
+            AddModels(lines, procs);
             foreach (var l in lines)
             {
                 string k;
                 if (kindOf.TryGetValue(l.Name, out k)) l.Kind = k;
             }
-            return lines.OrderBy(l => l.Procs.Count == 0).ThenBy(l => KindOrder.IndexOf(l.Kind)).ThenBy(l => l.Name, StringComparer.OrdinalIgnoreCase).ToList();
+            return lines.OrderBy(l => l.Procs.Count == 0).ThenBy(l => KindOrder.IndexOf(l.Kind))
+                .ThenByDescending(l => l.Model == null ? DateTime.MinValue : l.Model.Added).ThenBy(l => l.Name, StringComparer.OrdinalIgnoreCase).ToList();
+        }
+
+        // The models on disk, looked for again every minute off the UI thread, and at once when a script starts
+        // from a folder not seen before, so a new model shows up without waiting.
+        void ScanModels(List<Proc> procs)
+        {
+            var folders = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var p in procs)
+            {
+                string script = ScriptOf(p);
+                string dir = script == null ? null : Scripts.Folder(script);
+                if (dir != null) folders.Add(dir);
+            }
+            if (folders.Any(f => !scriptFolders.Contains(f))) modelsRead = DateTime.MinValue;
+            if (modelsBusy || (DateTime.Now - modelsRead).TotalSeconds < 60) return;
+            modelsBusy = true;
+            scriptFolders = folders;
+            var extra = WatchRule.ParseMany(WatchRule.ReadLines(WatchRule.ConfigFile()), "models");
+            ThreadPool.QueueUserWorkItem(delegate
+            {
+                List<InstalledModel> found;
+                try { found = ModelStore.Scan(extra, folders); } catch (Exception) { found = new List<InstalledModel>(); }
+                Dispatcher.BeginInvoke(new Action(delegate { installed = found; modelsRead = DateTime.Now; modelsBusy = false; }));
+            });
+        }
+
+        // Your settings, read again when watch.txt changes (the review screen, or you editing it).
+        void ReloadIfChanged()
+        {
+            DateTime t;
+            try { t = File.GetLastWriteTimeUtc(WatchRule.ConfigFile()); } catch (Exception) { return; }
+            if (t == configTime) return;
+            configTime = t;
+            LoadConfig();
+        }
+
+        // The refresh button: read settings, models and scheduled tasks again now, and look at every process afresh.
+        void RefreshAll()
+        {
+            configTime = DateTime.MinValue;
+            ReloadIfChanged();
+            aiCache.Clear(); scriptCache.Clear(); useCache.Clear(); sourceCache.Clear(); cmdCache.Clear();
+            scriptFolders.Clear();
+            modelsRead = DateTime.MinValue;
+            TaskList.Soon();
+            StartupList.Soon();
+            if (live && WindowState != WindowState.Minimized) Tick();
+        }
+
+        string ScriptOf(Proc p)
+        {
+            long key = ((long)p.Pid << 32) ^ p.CreateTime;
+            string script;
+            if (!scriptCache.TryGetValue(key, out script))
+            {
+                int pid = p.Pid;
+                script = Scripts.Find(p, () => Procs.CurrentDirectory(pid));
+                scriptCache[key] = script;
+            }
+            return script;
+        }
+
+        long VramOf(Proc p) { long b; return vramByPid.TryGetValue(p.Pid, out b) ? b : 0; }
+
+        // One line per installed model, holding the processes that use it: a server whose command line (or the config
+        // file it names) points at the model, or a script on the GPU whose source names it. Then a line for any script
+        // or model server holding 1 GB or more of video memory that no model was found for, so nothing big hides.
+        void AddModels(List<AiLine> lines, List<Proc> procs)
+        {
+            var models = installed;
+            var mine = models.Select(m => new AiLine { Kind = "Model", Name = m.Name, Model = m }).ToList();
+            var using_ = new HashSet<int>();
+            foreach (var p in procs)
+            {
+                long key = ((long)p.Pid << 32) ^ p.CreateTime;
+                string use;
+                if (!useCache.TryGetValue(key, out use)) { use = p.Cmd.Length == 0 ? "" : ModelStore.CommandText(p); useCache[key] = use; }
+                // A script big enough to hold a model, on the GPU or running it on the CPU (speech, small ONNX models).
+                string src = "", home = null;
+                // Committed, not the working set: an idle model gets paged out but is still loaded.
+                if (VramOf(p) >= 256L << 20 || (p.Committed >= 256L << 20 && Scripts.IsInterpreter(p.Exe)))
+                {
+                    string script = ScriptOf(p);
+                    if (!sourceCache.TryGetValue(key, out src))
+                        src = sourceCache[key] = script == null || script.StartsWith("module:") ? "" : ModelStore.ScriptText(script);
+                    string dir = script == null ? null : Scripts.Folder(script);
+                    if (dir != null) home = ModelStore.Norm(dir).TrimEnd('\\') + "\\";
+                }
+                if (use.Length == 0 && src.Length == 0 && home == null) continue;
+                foreach (var l in mine)
+                {
+                    var m = l.Model;
+                    // ... or a model kept in the script's own folder (push-to-talk\model).
+                    if (m.PathKeys.Any(k => Has(use, k)) || (home != null && m.PathKeys.Any(k => k.StartsWith(home, StringComparison.Ordinal)))
+                        || (src.Length > 0 && (m.PathKeys.Any(k => Has(src, k)) || m.NameKeys.Any(k => Has(src, k)))))
+                    {
+                        l.Procs.Add(p);
+                        using_.Add(p.Pid);
+                    }
+                }
+            }
+            foreach (var d in new[] { useCache, sourceCache })
+                if (d.Count > procs.Count * 3)
+                {
+                    var keep = new HashSet<long>(procs.Select(p => ((long)p.Pid << 32) ^ p.CreateTime));
+                    foreach (var k in d.Keys.Where(k => !keep.Contains(k)).ToList()) d.Remove(k);
+                }
+            // A model server found by name says less than the installed model it serves.
+            lines.RemoveAll(l => l.Kind == "Model" && l.Rule == null && l.Procs.Count > 0 && l.Procs.All(p => using_.Contains(p.Pid)));
+            lines.AddRange(mine);
+            var shown = new HashSet<int>(lines.SelectMany(l => l.Procs).Select(p => p.Pid));
+            foreach (var p in procs)
+            {
+                if (shown.Contains(p.Pid) || VramOf(p) < 1L << 30) continue;
+                if (!Scripts.IsInterpreter(p.Exe) && !ModelExes.Any(x => string.Equals(x, p.Exe, StringComparison.OrdinalIgnoreCase))) continue;
+                string script = ScriptOf(p);
+                lines.Add(new AiLine { Kind = "Model", Name = script != null ? Scripts.Label(script) : AppIdentity.For(p.Exe, new[] { p.Pid }).Title, Procs = new List<Proc> { p }, GpuOnly = true });
+            }
+        }
+
+        // text contains key as a whole path or name, not as part of a longer one.
+        static bool Has(string text, string key)
+        {
+            for (int at = text.IndexOf(key, StringComparison.Ordinal); at >= 0; at = text.IndexOf(key, at + 1, StringComparison.Ordinal))
+            {
+                int end = at + key.Length;
+                bool before = at == 0 || !IsNameChar(text[at - 1]);
+                bool after = end == text.Length || !IsNameChar(text[end]);
+                if (before && after) return true;
+            }
+            return false;
+        }
+
+        static bool IsNameChar(char c) { return char.IsLetterOrDigit(c) || c == '-' || c == '_' || c == '.'; }
+
+        static string AddedText(DateTime when)
+        {
+            int days = (DateTime.Today - when.Date).Days;
+            if (days <= 0) return "new today";
+            if (days == 1) return "added yesterday";
+            return "added " + when.ToString("MMM d", CultureInfo.InvariantCulture);
+        }
+
+        // A model's line: who has it loaded and how much video memory that holds, or its size and when it arrived.
+        void ShowModel(ProcRow row, AiLine l)
+        {
+            var m = l.Model;
+            string about = m == null ? "" : m.Path + "\n" + Theme.Mem(m.Bytes) + " on disk \u00B7 " + m.Files + (m.Files == 1 ? " weights file" : " weights files") + " \u00B7 " + AddedText(m.Added);
+            if (l.Procs.Count == 0)
+            {
+                string added = AddedText(m.Added);
+                row.SetAi(l.Name, l.Kind, 0, added == "new today" ? added : Theme.Mem(m.Bytes), "", "not loaded", about);
+                return;
+            }
+            long vram = l.Procs.Sum(p => VramOf(p));
+            var user = l.Procs.OrderByDescending(p => VramOf(p)).First();
+            string script = ScriptOf(user);
+            string port = l.Procs.Select(p => ArgAfter(Scripts.SplitArgs(p.Cmd), "--port")).FirstOrDefault(x => x != null);
+            string who = port != null ? "serving :" + port : script != null ? Scripts.Label(script) : AppIdentity.For(user.Exe, new[] { user.Pid }).Title;
+            if (l.GpuOnly) who = "model not found";
+            // What a model costs is mostly video memory, so that is what its right-hand column shows when it has any.
+            bool onGpu = vram >= 32L << 20;
+            string tip = (about.Length > 0 ? about + "\n\n" : "") + (vram > 0 ? Theme.Mem(vram) + " of video memory\n" : "")
+                + string.Join("\n", l.Procs.Take(12).Select(h => h.Pid + "  " + Trim(h.Cmd.Length > 0 ? h.Cmd : h.Exe, 140)));
+            row.SetAi(l.Name, l.Kind, 1, who, Theme.Pct(l.Procs.Sum(h => h.Cpu)), onGpu ? Theme.Mem(vram) + " GPU" : Theme.Mem(l.Procs.Sum(h => h.Private)), tip);
         }
 
         void ShowAi(ProcRow row, AiLine l)
@@ -2055,6 +2771,7 @@ namespace DesktopVitals
                 row.SetAi(l.Name, l.Kind, state, detail, state == 0 ? "" : Theme.Pct(cpu), state == 0 ? "not running" : Theme.Mem(mem), btip);
                 return;
             }
+            if (l.Model != null || l.GpuOnly) { ShowModel(row, l); return; }
             if (l.Procs.Count == 0) { row.SetAi(l.Name, l.Kind, 0, "", "", "not running", null); return; }
 
             TimeSpan up = DateTime.UtcNow - DateTime.FromFileTimeUtc(l.Procs.Min(h => h.CreateTime));
@@ -2280,13 +2997,49 @@ namespace DesktopVitals
 
         void OpenBot(WatchRule bot) { OpenCode(bot.Code); }
 
+        Dictionary<int, long> vramByPid = new Dictionary<int, long>();
+        bool vramBusy;
+        DateTime vramRead = DateTime.MinValue;
+
+        // Dedicated video memory per process, from Windows' "GPU Process Memory" counters. Read off the UI thread every 5 s.
+        void ReadVram()
+        {
+            if (!vramBusy && (DateTime.Now - vramRead).TotalSeconds >= 5)
+            {
+                vramBusy = true;
+                ThreadPool.QueueUserWorkItem(delegate
+                {
+                    var next = new Dictionary<int, long>();
+                    try
+                    {
+                        var data = new PerformanceCounterCategory("GPU Process Memory").ReadCategory();
+                        var usage = data["Local Usage"];
+                        if (usage != null)
+                            foreach (InstanceData d in usage.Values)
+                            {
+                                var m = Regex.Match(d.InstanceName, "^pid_(\\d+)_");
+                                if (!m.Success || d.RawValue <= 0) continue;
+                                int pid = int.Parse(m.Groups[1].Value);
+                                long have;
+                                next.TryGetValue(pid, out have);
+                                next[pid] = have + d.RawValue;
+                            }
+                    }
+                    catch (Exception) { }
+                    Dispatcher.BeginInvoke(new Action(delegate { vramByPid = next; vramRead = DateTime.Now; vramBusy = false; }));
+                });
+            }
+        }
+
         // ---------- review: "here's what I found, is it right?" ----------
 
         List<ReviewItem> ReviewItems()
         {
             var items = new List<ReviewItem>();
             foreach (var l in lastAi)
-                items.Add(new ReviewItem { Section = "AI", Name = l.Name, Kind = l.Kind, Rule = l.Rule, On = !hidden.Contains(l.Name), Kinds = AiChoices, Detail = l.Procs.Count == 0 ? "not running" : "running" });
+            {
+                items.Add(new ReviewItem { Section = "AI", Name = l.Name, Kind = l.Kind, Rule = l.Rule, On = !hidden.Contains(l.Name), Kinds = AiChoices, Detail = l.Model != null ? (l.Procs.Count == 0 ? "installed" : "in use") : l.Procs.Count == 0 ? "not running" : "running" });
+            }
             foreach (var r in botRules)
             {
                 var hits = lastProcs.Where(r.Hit).ToList();
@@ -2298,8 +3051,8 @@ namespace DesktopVitals
                 string match = kv.Key.StartsWith("module:") ? "-m " + kv.Key.Substring(7).Split('|')[0] : kv.Key;
                 items.Add(new ReviewItem { Section = "Script", Name = label, Kind = "Script", Match = match, On = !hidden.Contains(label), Kinds = ScriptChoices, Detail = Scripts.Language(kv.Value[0].Exe) });
             }
-            foreach (var t in TaskList.Items.OrderByDescending(t => t.Running).ThenByDescending(t => t.LastRun))
-                items.Add(new ReviewItem { Section = "Task", Name = t.Name, Kind = "Task", On = !hidden.Contains(t.Name), Detail = t.Running ? "running" : t.NeverRan ? "never ran" : t.Failed ? "failed" : "last ran " + Short(DateTime.Now - t.LastRun) + " ago" });
+            foreach (var t in TaskList.Items.Where(t => !t.OnDemand).OrderByDescending(t => t.Running).ThenByDescending(t => t.LastRun))
+                items.Add(new ReviewItem { Section = t.StartsWithWindows ? "Start" : "Task", Name = t.Name, Kind = "Task", On = !hidden.Contains(t.Name), Detail = t.Running ? "running" : t.NeverRan ? "never ran" : t.Failed ? "failed" : "last ran " + Short(DateTime.Now - t.LastRun) + " ago" });
             foreach (var r in rules)
             {
                 var hits = lastProcs.Where(r.Hit).ToList();
@@ -2333,11 +3086,13 @@ namespace DesktopVitals
             stack.Children.Add(title);
             stack.Children.Add(hint);
 
-            foreach (var sec in new[] { "AI", "Bot", "Script", "Task", "Watching" })
+            foreach (var sec in new[] { "AI", "Bot", "Script", "Start", "Task", "Watching" })
             {
                 var these = items.Where(i => i.Section == sec).ToList();
                 if (these.Count == 0) continue;
-                stack.Children.Add(Card(sec, null, these.Select(ReviewRow).ToArray()));
+                var secCard = Card(sec, null, these.Select(ReviewRow).ToArray());
+                secCard.Margin = new Thickness(0, 0, 0, 12);
+                stack.Children.Add(secCard);
             }
 
             var foot = new Grid { Margin = new Thickness(18, 4, 14, 14) };
@@ -2462,7 +3217,7 @@ namespace DesktopVitals
                 return;
             }
             LoadConfig();
-            foreach (var l in new[] { aiRows, botRows, scriptRows, taskRows, watchRows, topRows }) l.Clear();
+            foreach (var l in new[] { aiRows, botRows, scriptRows, startRows, taskRows, watchRows, topRows }) l.Clear();
             reviewView = null;
             reviewError = null;
             Content = Build();
@@ -2505,8 +3260,9 @@ namespace DesktopVitals
                 Section(sb, "AI", aiRows, "");
                 Section(sb, "Bots", botRows, "");
                 Section(sb, "Scripts", scriptRows, "none running");
-                Section(sb, "Scheduled tasks", taskRows, "");
-                Section(sb, "Watching", watchRows, "");
+                Section(sb, "Starts with Windows", startRows, "");
+                Section(sb, "Scheduled", taskRows, "");
+                Section(sb, "Pinned", watchRows, "");
                 Section(sb, "Top apps", topRows, "");
                 string text = sb.ToString();
                 File.WriteAllText(txtPath, text, new UTF8Encoding(false));
@@ -2643,7 +3399,12 @@ namespace DesktopVitals
                 // "--review" pictures the review screen; "--accept-review" writes review.txt without touching watch.txt.
                 bool review = args.Any(a => a.Equals("--review", StringComparison.OrdinalIgnoreCase));
                 bool accept = args.Any(a => a.Equals("--accept-review", StringComparison.OrdinalIgnoreCase));
-                snapApp.Run(new VitalsWindow(System.IO.Path.GetFullPath(dir), review, accept));
+                var snapWin = new VitalsWindow(System.IO.Path.GetFullPath(dir), review, accept);
+                // "--width 1200" pictures a widened window.
+                int wAt = Array.FindIndex(args, a => a.Equals("--width", StringComparison.OrdinalIgnoreCase));
+                double w;
+                if (wAt >= 0 && wAt + 1 < args.Length && double.TryParse(args[wAt + 1], NumberStyles.Float, CultureInfo.InvariantCulture, out w)) snapWin.Width = Math.Max(snapWin.MinWidth, w);
+                snapApp.Run(snapWin);
                 return;
             }
             bool created;

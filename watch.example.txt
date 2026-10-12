@@ -2,7 +2,7 @@
 # then close and reopen the app. Everything here is optional: scripts, scheduled tasks and system
 # stats show up on their own.
 
-# ---- Watching: keep an eye on an app or a command ----
+# ---- Pinned: keep an eye on an app or a command ----
 # Label = match
 # A match ending in .exe is a process name. Anything else is text found in the command line.
 #
@@ -20,10 +20,14 @@
 # Local API = uvicorn | check: http://127.0.0.1:8000/health
 
 # ---- AI ----
-# Lines that name a known AI program (Claude, Cursor, Ollama, OpenClaw ...) go in the AI card, not Bots or Watching.
-# "| ai" puts any other line there. "| kind:" sets its tag: Agent, App, Model, Bot or Watching.
+# Lines that name a known AI program (Claude, Cursor, Ollama, OpenClaw ...) go in the AI card, not Bots or Pinned.
+# "| ai" puts any other line there. "| kind:" sets its tag: Agent, App, Model, Bot or Watching (shown as Pinned).
 #
 # Research agent = agent_loop.py | ai | kind: Agent
+#
+# Installed models are found in "models" folders (C:\models, %USERPROFILE%\models) and the Hugging Face,
+# Ollama and LM Studio stores. Add other folders, one line each:
+# @models = D:\my-models
 #
 # The review screen writes these into %APPDATA%\DesktopVitals\review.txt (never into this file):
 # @hide = <name>             don't show something Desktop Vitals found on its own
