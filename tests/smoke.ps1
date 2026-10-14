@@ -235,10 +235,15 @@ function Invoke-SafetyStaticChecks {
     if ($src -notmatch 'AllowAutoRedirect\s*=\s*false') { throw 'ReadHttp must disable redirects' }
     if ($src -notmatch 'string\.Equals\(uri\.Scheme,\s*"http"') { throw 'ReadHttp must allow only http scheme' }
 
-    # No hardcoded http(s) URLs in app source (xmlns-only URLs live in the manifest).
+    # No hardcoded outbound product URLs. RFC 2606 example.* (and loopback) may appear in
+    # privacy/redaction sample strings; those are not network destinations.
     $urlHits = [regex]::Matches($src, 'https?://[^\s"<>]+')
-    if ($urlHits.Count -gt 0) {
-        throw ("hardcoded URL in DesktopVitals.cs: " + $urlHits[0].Value)
+    foreach ($m in $urlHits) {
+        $u = $m.Value
+        if ($u -match '(?i)(^https?://([^/@]*@)?(example\.(com|org|net)|localhost|127\.0\.0\.1|\[::1\])(:|/|$))') {
+            continue
+        }
+        throw ("hardcoded outbound URL in DesktopVitals.cs: " + $u)
     }
 
     # No telemetry / auto-update hooks.
