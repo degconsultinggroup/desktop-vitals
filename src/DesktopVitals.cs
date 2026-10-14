@@ -1866,7 +1866,10 @@ namespace DesktopVitals
                     bool tasks = TaskList.Ready || sec >= 12;
                     if (sec < 2.5 || !models || !tasks) return;
                     done.Stop();
+                    // Snapshot can finish at 2.5s; open review before the PNG so --review is not a board shot.
+                    if (needReview) { needReview = false; ShowReview(); }
                     if (acceptReview) { acceptReview = false; WriteAcceptedReview(); }
+                    if (reviewView != null) { UpdateLayout(); }
                     WriteSnapshot();
                     Close();
                 };
@@ -2430,8 +2433,8 @@ namespace DesktopVitals
                 topRows[i].Pids = g.Pids;
             }
 
-            // Board paints on tick 1; review opens after a second sample so a fresh user sees real readings first.
-            if (needReview && tickCount >= 3) { needReview = false; ShowReview(); }
+            // Interactive: board paints first (tick 1-2), review on tick 3. Snapshot --review: open on tick 2 so the PNG catches it.
+            if (needReview && tickCount >= (snapshotDir != null ? 2 : 3)) { needReview = false; ShowReview(); }
         }
 
         static string Trim(string s, int n) { return s.Length <= n ? s : s.Substring(0, n) + "\u2026"; }
