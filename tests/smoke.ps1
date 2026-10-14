@@ -6,7 +6,7 @@ Set-Location $Root
 
 $script:FailCount = 0
 $Children = New-Object System.Collections.Generic.List[System.Diagnostics.Process]
-$Work = Join-Path $env:TEMP ("dv-smoke-" + [guid]::NewGuid().ToString('N'))
+$Work = Join-Path $env:USERPROFILE ("dv-smoke-" + [guid]::NewGuid().ToString('N'))
 $ResultsDir = Join-Path $Root 'tests\results'
 $ConfigDir = Join-Path $env:APPDATA 'DesktopVitals'
 $ConfigFile = Join-Path $ConfigDir 'watch.txt'
@@ -288,6 +288,8 @@ function Invoke-SafetyStaticChecks {
 }
 
 New-Item -ItemType Directory -Force -Path $Work, $ResultsDir | Out-Null
+# A real project marker, outside Temp, so the sample scripts are the person's.
+New-Item -ItemType Directory -Force -Path (Join-Path $Work '.git') | Out-Null
 Save-Config
 
 try {
