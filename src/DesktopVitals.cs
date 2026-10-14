@@ -1766,7 +1766,7 @@ namespace DesktopVitals
         int tickCount;
         bool live = true;
         bool sortByMemory;
-        string diskDetail = "";
+        string diskDetail = "Reading disk";
         double diskFrac;
         string diskValue = "";
 
@@ -2245,7 +2245,7 @@ namespace DesktopVitals
                 }
                 else
                 {
-                    string msg = GpuCounters.Failed ? "GPU readings not available on this system" : "not available";
+                    string msg = GpuCounters.Failed ? "GPU readings not available on this system" : "Reading GPU";
                     gpuRow.Set(msg, "", 0);
                     vramRow.Set(msg, "", 0);
                 }
@@ -2381,7 +2381,7 @@ namespace DesktopVitals
                 EnsureRows(taskList, taskRows, 1);
                 taskRows[0].Task = null;
                 taskRows[0].Pids = new int[0];
-                taskRows[0].SetPlain("loading", Theme.Off, "", "", "", "");
+                taskRows[0].SetPlain("Reading Task Scheduler", Theme.Off, "", "", "", "");
             }
             else if (TaskList.Failed && tasks.Count == 0)
             {
@@ -2427,7 +2427,8 @@ namespace DesktopVitals
                 topRows[i].Pids = g.Pids;
             }
 
-            if (needReview && tickCount >= 2) { needReview = false; ShowReview(); }
+            // Board paints on tick 1; review opens after a second sample so a fresh user sees real readings first.
+            if (needReview && tickCount >= 3) { needReview = false; ShowReview(); }
         }
 
         static string Trim(string s, int n) { return s.Length <= n ? s : s.Substring(0, n) + "\u2026"; }
@@ -2794,7 +2795,7 @@ namespace DesktopVitals
                 string json;
                 using (var fs = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
                 {
-                    if (fs.Length > 64 * 1024) return "";
+                    if (fs.Length > 64 * 1024) return "temperature not readable";
                     var buf = new char[64 * 1024];
                     using (var sr = new StreamReader(fs))
                     {
@@ -2804,16 +2805,22 @@ namespace DesktopVitals
                 }
                 var ts = Regex.Match(json, "\"ts\"\\s*:\\s*\"([^\"]+)\"");
                 DateTimeOffset when;
-                if (!ts.Success || !DateTimeOffset.TryParse(ts.Groups[1].Value, CultureInfo.InvariantCulture, DateTimeStyles.None, out when)) return "";
+                if (!ts.Success || !DateTimeOffset.TryParse(ts.Groups[1].Value, CultureInfo.InvariantCulture, DateTimeStyles.None, out when)) return "temperature not readable";
                 if ((DateTimeOffset.Now - when).TotalSeconds > 60) return "temperature stale";
                 var t = Regex.Match(json, "\"cpu_temp_c\"\\s*:\\s*([0-9.]+)");
                 var w = Regex.Match(json, "\"cpu_pkg_power_w\"\\s*:\\s*([0-9.]+)");
                 var parts = new List<string>();
+<<<<<<< HEAD
                 if (t.Success) parts.Add(Theme.N(double.Parse(t.Groups[1].Value, CultureInfo.InvariantCulture), "0") + "\u00B0C");
                 if (w.Success) parts.Add(Theme.N(double.Parse(w.Groups[1].Value, CultureInfo.InvariantCulture), "0") + " W");
                 return string.Join(" \u00B7 ", parts);
+=======
+                if (t.Success) parts.Add(double.Parse(t.Groups[1].Value, CultureInfo.InvariantCulture).ToString("0") + "\u00B0C");
+                if (w.Success) parts.Add(double.Parse(w.Groups[1].Value, CultureInfo.InvariantCulture).ToString("0") + " W");
+                return parts.Count == 0 ? "temperature not readable" : string.Join(" \u00B7 ", parts);
+>>>>>>> 65915f8 (Make first-run board and grey states human)
             }
-            catch (Exception) { return ""; }
+            catch (Exception) { return "temperature not readable"; }
         }
 
         // Local model servers: llama.cpp, Ollama, LM Studio, koboldcpp, vLLM.
@@ -3068,13 +3075,8 @@ namespace DesktopVitals
             page.Children.Add(scroll);
 
             var title = Theme.Label("Here's what I found", 15, Theme.Text, FontWeights.SemiBold);
-            title.Margin = new Thickness(4, 0, 0, 2);
-            var hint = Theme.Label("Untick anything that shouldn't be shown. If a tag is wrong, click it to change it.", 12, Theme.Sub, FontWeights.Normal);
-            hint.TextWrapping = TextWrapping.Wrap;
-            hint.TextTrimming = TextTrimming.None;
-            hint.Margin = new Thickness(4, 0, 0, 10);
+            title.Margin = new Thickness(4, 0, 0, 10);
             stack.Children.Add(title);
-            stack.Children.Add(hint);
 
             foreach (var sec in new[] { "AI", "Bot", "Script", "Start", "Task", "Watching" })
             {
@@ -3119,7 +3121,7 @@ namespace DesktopVitals
             g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(26) });
             g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             var check = new TextBlock { Text = "\uE73E", FontFamily = new FontFamily("Segoe Fluent Icons, Segoe MDL2 Assets"), FontSize = 10, Foreground = Brushes.White, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
-            var box = new Border { Width = 16, Height = 16, CornerRadius = new CornerRadius(4), BorderThickness = new Thickness(1.5), HorizontalAlignment = HorizontalAlignment.Left, Child = check };
+            var box = new Border { Width = 16, Height = 16, CornerRadius = new CornerRadius(4), BorderThickness = new Thickness(1.5), HorizontalAlignment = HorizontalAlignment.Left, Child = check, ToolTip = "Show on the board" };
             var line = new StackPanel { Orientation = Orientation.Horizontal };
             var name = Theme.Label(it.Name, 13, Theme.Text, FontWeights.Normal);
             var tag = Theme.Tag(it.Kind);
@@ -3132,6 +3134,7 @@ namespace DesktopVitals
             Grid.SetColumn(line, 1);
             g.Children.Add(box); g.Children.Add(line);
             row.Child = g;
+            row.ToolTip = it.On ? "Click to hide from the board" : "Click to show on the board";
 
             Action show = delegate
             {
@@ -3140,6 +3143,7 @@ namespace DesktopVitals
                 check.Visibility = it.On ? Visibility.Visible : Visibility.Hidden;
                 name.Foreground = it.On ? Theme.Text : Theme.Faint;
                 tag.Opacity = it.On ? 1 : 0.5;
+                row.ToolTip = it.On ? "Click to hide from the board" : "Click to show on the board";
             };
             show();
             row.MouseEnter += delegate { row.Background = Theme.Hover; };
@@ -3148,7 +3152,7 @@ namespace DesktopVitals
             if (it.Kinds != null)
             {
                 tag.Cursor = Cursors.Hand;
-                tag.ToolTip = "Wrong kind? Click to change: " + string.Join(", ", it.Kinds);
+                tag.ToolTip = "Click to change kind: " + string.Join(", ", it.Kinds);
                 tag.MouseLeftButtonUp += (s, e) =>
                 {
                     e.Handled = true;
