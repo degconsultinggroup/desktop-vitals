@@ -377,7 +377,7 @@ namespace AgentProbe
 
     static class Logs
     {
-        const int Cap = 64 * 1024;
+        const int Cap = 16 * 1024;
         public static long BytesRead;
 
         static Dictionary<string, Tail> tails = new Dictionary<string, Tail>(StringComparer.OrdinalIgnoreCase);
@@ -433,42 +433,37 @@ namespace AgentProbe
             row.Action = tail.Last;
         }
 
-        static bool codexReady;
-        static string codexIndex = "";
+        static bool codexListed;
+        static string[] codexFiles = new string[0];
+        static Dictionary<string, string> codexCwd = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
         static string FindCodex(string root, Proc p)
         {
-            // Index once per process: first 2 KB of each transcript, cwd and filename time only.
-            if (!codexReady)
+            // Filename time first. Only transcripts born with this process are opened.
+            if (!codexListed)
             {
-                var sb = new StringBuilder();
-                string[] files;
-                try { files = Directory.GetFiles(root, "rollout-*.jsonl", SearchOption.AllDirectories); }
-                catch (Exception) { files = new string[0]; }
-                for (int i = 0; i < files.Length; i++)
-                {
-                    string cwd = HeadCwd(files[i]);
-                    if (string.IsNullOrEmpty(cwd)) continue;
-                    sb.Append(files[i]).Append('\t').Append(cwd).Append('\n');
-                    BytesRead += 2048;
-                }
-                codexIndex = sb.ToString();
-                codexReady = true;
+                try { codexFiles = Directory.GetFiles(root, "rollout-*.jsonl", SearchOption.AllDirectories); }
+                catch (Exception) { codexFiles = new string[0]; }
+                codexListed = true;
             }
             string best = null;
             long bestSkew = long.MaxValue;
             DateTime start = DateTime.FromFileTimeUtc(p.CreateTime);
-            string[] lines = codexIndex.Split('\n');
-            for (int i = 0; i < lines.Length; i++)
+            for (int i = 0; i < codexFiles.Length; i++)
             {
-                int tab = lines[i].IndexOf('\t');
-                if (tab < 0) continue;
-                string path = lines[i].Substring(0, tab);
-                string cwd = lines[i].Substring(tab + 1);
-                if (!string.Equals(cwd, p.Cwd, StringComparison.OrdinalIgnoreCase)) continue;
+                string path = codexFiles[i];
                 DateTime born = CodexBorn(path);
+                if (born == DateTime.MinValue) continue;
+                if (born < start.AddSeconds(-5) || born > start.AddMinutes(5)) continue;
+                string cwd;
+                if (!codexCwd.TryGetValue(path, out cwd))
+                {
+                    cwd = HeadCwd(path) ?? "";
+                    codexCwd[path] = cwd;
+                    BytesRead += 512;
+                }
+                if (!string.Equals(cwd, p.Cwd, StringComparison.OrdinalIgnoreCase)) continue;
                 long skew = Math.Abs((long)(born - start).TotalSeconds);
-                if (born < start.AddSeconds(-5)) continue;
                 if (skew < bestSkew) { bestSkew = skew; best = path; }
             }
             return best;
@@ -494,7 +489,7 @@ namespace AgentProbe
             {
                 using (var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
                 {
-                    byte[] b = new byte[2048];
+                    byte[] b = new byte[512];
                     int n = fs.Read(b, 0, b.Length);
                     string s = Encoding.UTF8.GetString(b, 0, n);
                     return Scan.JsonString(s, "\"cwd\":\"", 0);
@@ -1171,7 +1166,8 @@ namespace AgentProbe
         static void Decide(Row row, Proc p)
         {
             long prev;
-            bool cpuMoved = cpu.TryGetValue(p.Pid, out prev) && p.CpuTime > prev + 10000 * 20;
+            // Half a second of CPU. Smaller blips are timers, not the agent working.
+            bool cpuMoved = cpu.TryGetValue(p.Pid, out prev) && p.CpuTime > prev + 5000000;
             cpu[p.Pid] = p.CpuTime;
             int age = Age(row.Action);
             bool open = row.Action != null && row.Action.Open;
@@ -1370,7 +1366,7 @@ namespace AgentProbe
             }
             long one;
             Console.Write(Probe.Json(Probe.Pass(out one)));
-            Console.Error.WriteLine("log_ms=" + one);
+            Console.Error.WriteLine("log_ms=" + one + " log_us=" + Probe.LastLogUs);
             return 0;
         }
 
