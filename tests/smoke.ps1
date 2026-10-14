@@ -313,6 +313,42 @@ try {
         Write-Check 'asInvoker-non-admin' $elevOk $elevDetail
     }
 
+    # 1c. Short runtime outbound + write-root gate (also see tests\safety-runtime.ps1)
+    $rtOk = $false
+    $rtDetail = ''
+    if (-not $buildOk) {
+        Write-Check 'safety-runtime' $false 'skipped: build failed'
+    }
+    else {
+        try {
+            $rtScript = Join-Path $Root 'tests\safety-runtime.ps1'
+            if (-not (Test-Path -LiteralPath $rtScript)) { throw "missing $rtScript" }
+            # Child process so safety-runtime's exit code cannot end this smoke session.
+            $shell = (Get-Command pwsh -ErrorAction SilentlyContinue)
+            if (-not $shell) { $shell = Get-Command powershell }
+            $argList = @(
+                '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $rtScript,
+                '-Seconds', '45', '-ResultsDir', $ResultsDir, '-SkipBuild'
+            )
+            $p = Start-Process -FilePath $shell.Source -ArgumentList $argList -Wait -PassThru -NoNewWindow
+            if ($p.ExitCode -ne 0) {
+                $log = Join-Path $ResultsDir 'safety-runtime.log'
+                $tail = ''
+                if (Test-Path -LiteralPath $log) {
+                    $tail = (Get-Content -LiteralPath $log -Tail 8 | Out-String).Trim()
+                }
+                throw ("safety-runtime exit $($p.ExitCode) $tail")
+            }
+            $rtDetail = '45s gate; see safety-runtime.log'
+            $rtOk = $true
+        }
+        catch {
+            $rtDetail = $_.Exception.Message
+            if ($rtDetail.Length -gt 240) { $rtDetail = $rtDetail.Substring(0, 240) }
+        }
+        Write-Check 'safety-runtime' $rtOk $rtDetail
+    }
+
     # 2. Snapshot and review snapshot
     $snapOk = $false
     $snapDetail = ''

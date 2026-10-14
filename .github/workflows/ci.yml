@@ -28,7 +28,7 @@ jobs:
           .\tests\accuracy.ps1
           if ($LASTEXITCODE -ne 0) { throw "accuracy.ps1 failed with exit $LASTEXITCODE" }
 
-      - name: Upload vitals.png
+      - name: Upload vitals.png and safety log
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -36,6 +36,7 @@ jobs:
           path: |
             tests/results/vitals.png
             tests/results/accuracy/
+            tests/results/safety-runtime.log
           if-no-files-found: warn
 
   # Live soak + idle/edge stability on windows-latest (shorter than 2h; see SOAK_SECONDS).
@@ -136,6 +137,7 @@ jobs:
             tests/results/vitals.png
             tests/results/vitals.txt
             tests/results/accuracy/
+            tests/results/safety-runtime.log
           if-no-files-found: warn
 
   # Prebuilt exe + checksums for GitHub Release on tag v*.
