@@ -39,13 +39,22 @@ Hover over a line to see what a click will do:
 
 ## Install
 
+```powershell
+irm https://raw.githubusercontent.com/degconsultinggroup/desktop-vitals/main/install.ps1 | iex
+```
+
 You need Windows 10 or 11.
+
+### Install with your AI agent
+
+Paste https://github.com/degconsultinggroup/desktop-vitals into Claude Code, Codex, Cursor, or Gemini CLI and say "install and open this".
 
 ### Download the exe
 
 1. Open the latest [GitHub Release](https://github.com/degconsultinggroup/desktop-vitals/releases).
-2. Download `DesktopVitals.exe` (and `SHA256SUMS.txt` if you want to check the hash).
-3. Run the exe. No installer and no admin prompt.
+2. Download `DesktopVitals.exe` and `SHA256SUMS.txt`.
+3. Compare `Get-FileHash -Algorithm SHA256 .\DesktopVitals.exe` to the hash in `SHA256SUMS.txt`. Stop if they differ.
+4. Run the exe. No installer and no admin prompt.
 
 The exe is not code-signed yet. Windows SmartScreen may say "Windows protected your PC". Click **More info**, then **Run anyway**.
 
@@ -54,10 +63,10 @@ The exe is not code-signed yet. Windows SmartScreen may say "Windows protected y
 ```powershell
 git clone https://github.com/degconsultinggroup/desktop-vitals.git
 cd desktop-vitals
-powershell -ExecutionPolicy Bypass -File .\install.ps1
+powershell -ExecutionPolicy Bypass -File .\build.ps1
 ```
 
-`install.ps1` builds `bin\DesktopVitals.exe` and adds two shortcuts: one on the desktop, and one in the Start menu that opens with **Ctrl+Alt+P**. `build.ps1` builds without adding shortcuts. The build uses the C# compiler that ships with Windows, so there is nothing else to install.
+`build.ps1` builds `bin\DesktopVitals.exe`. The build uses the C# compiler that ships with Windows, so there is nothing else to install. `install.ps1` downloads the latest release instead of building.
 
 ## First run
 
@@ -87,10 +96,14 @@ Everything works without settings. To add your own Pinned or Bots lines, or an o
 ## Snapshot for scripts and AI agents
 
 ```powershell
+DesktopVitals.exe --version
+DesktopVitals.exe --json
 DesktopVitals.exe --snapshot C:\some\folder
 ```
 
-Add `--review` to picture the review screen instead, and `--width 1200` to picture a wider window. This takes a reading off screen, writes `vitals.txt` (a plain-text report) and `vitals.png` (a picture of the full window) to that folder, and exits. It takes about 5 seconds and doesn't disturb an open window. A chat bot or an AI agent can run it to answer "how's my PC doing?" with text or a screenshot.
+`--version` prints `0.1.1` and exits. `--json` prints UTF-8 JSON and exits: `strip` is the machine line (processor, memory, graphics, video memory, disk) and `lines` is every line on the board (`section`, `name`, `kind`, `state`, `cpu`, `ram_mb`, `vram_mb`, `folder`). If there is no console, `DesktopVitals.exe --json C:\some\folder\vitals.json` writes that file.
+
+Add `--review` to picture the review screen instead, and `--width 1200` to picture a wider window. `--snapshot` takes a reading off screen, writes `vitals.txt` (a plain-text report) and `vitals.png` (a picture of the full window) to that folder, and exits. It takes about 5 seconds and doesn't disturb an open window. A chat bot or an AI agent can run it to answer "how's my PC doing?" with text or a screenshot.
 
 In `vitals.txt`, bots are marked `[ok]`, `[QUIET]` (running but no sign of work for 5 minutes) or `[DOWN]` (not running).
 
