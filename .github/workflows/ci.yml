@@ -21,12 +21,21 @@ jobs:
           .\tests\smoke.ps1
           if ($LASTEXITCODE -ne 0) { throw "smoke.ps1 failed with exit $LASTEXITCODE" }
 
+      - name: Accuracy fixtures
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          .\tests\accuracy.ps1
+          if ($LASTEXITCODE -ne 0) { throw "accuracy.ps1 failed with exit $LASTEXITCODE" }
+
       - name: Upload vitals.png
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: vitals-png
-          path: tests/results/vitals.png
+          path: |
+            tests/results/vitals.png
+            tests/results/accuracy/
           if-no-files-found: warn
 
   # Live soak + idle/edge stability on windows-latest (shorter than 2h; see SOAK_SECONDS).
@@ -85,6 +94,13 @@ jobs:
           .\tests\smoke.ps1
           if ($LASTEXITCODE -ne 0) { throw "smoke.ps1 failed with exit $LASTEXITCODE" }
 
+      - name: Accuracy fixtures
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          .\tests\accuracy.ps1
+          if ($LASTEXITCODE -ne 0) { throw "accuracy.ps1 failed with exit $LASTEXITCODE" }
+
       - name: Core layout from vitals.txt
         if: always()
         shell: pwsh
@@ -119,6 +135,7 @@ jobs:
           path: |
             tests/results/vitals.png
             tests/results/vitals.txt
+            tests/results/accuracy/
           if-no-files-found: warn
 
   # Prebuilt exe + checksums for GitHub Release on tag v*.
