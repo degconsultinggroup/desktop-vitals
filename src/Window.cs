@@ -83,6 +83,8 @@ namespace DesktopVitals
         readonly DispatcherTimer timer = new DispatcherTimer(DispatcherPriority.Background);
         readonly string snapshotDir;
         bool live = true;
+        bool fixtureMode;
+        Board fixtureBoard;
         bool naming;
         TextBlock nameText, stripText, headlineText, stateLabel;
         TextBox nameEdit;
@@ -92,6 +94,14 @@ namespace DesktopVitals
         ScrollViewer scroll;
 
         public VitalsWindow() : this(null) { }
+
+        // Draw this board instead of reading the machine.
+        public void ShowFixture(Board board)
+        {
+            fixtureMode = true;
+            fixtureBoard = board ?? new Board();
+            Engine.Current = fixtureBoard;
+        }
 
         // With a folder, the window renders off screen, writes vitals.txt and vitals.png, and closes.
         public VitalsWindow(string snapshotDir)
@@ -132,24 +142,46 @@ namespace DesktopVitals
                 var done = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(250) };
                 done.Tick += delegate
                 {
+                    if (fixtureMode)
+                    {
+                        ShowBoard(fixtureBoard);
+                        Engine.Current = fixtureBoard;
+                        UpdateLayout();
+                        if ((DateTime.UtcNow - since).TotalSeconds < 0.4 && ActualHeight < 1) return;
+                        done.Stop();
+                        WriteSnapshot();
+                        Close();
+                        return;
+                    }
                     ShowBoard(Engine.Tick());
                     double sec = (DateTime.UtcNow - since).TotalSeconds;
                     if (sec < 2.5) return;
-                    if (!Engine.TasksReady && sec < 12) return;
-                    if (!Engine.ModelsReady && sec < 12) return;
+                    if (!Engine.ScansComplete && sec < 45) return;
                     done.Stop();
-                    ShowBoard(Engine.Tick());
+                    Board ready = Engine.Tick();
+                    ShowBoard(ready);
                     UpdateLayout();
                     WriteSnapshot();
+                    Engine.AcknowledgeImport(ready);
                     Close();
                 };
-                Loaded += delegate { Engine.Prime(); done.Start(); };
+                Loaded += delegate
+                {
+                    if (!fixtureMode) Engine.Prime();
+                    done.Start();
+                };
             }
 
             timer.Interval = TimeSpan.FromMilliseconds(1500);
-            timer.Tick += delegate { if (live && WindowState != WindowState.Minimized) ShowBoard(Engine.Tick()); };
+            timer.Tick += delegate
+            {
+                if (!live || fixtureMode || WindowState == WindowState.Minimized) return;
+                Board board = Engine.Tick();
+                ShowBoard(board);
+                Engine.AcknowledgeImport(board);
+            };
             SourceInitialized += delegate { if (snapshotDir == null) ApplyGlass(); };
-            if (snapshotDir == null) Loaded += delegate { Prime(); };
+            if (snapshotDir == null) Loaded += delegate { if (fixtureMode) ShowBoard(fixtureBoard); else Prime(); };
             StateChanged += delegate { UpdateRunning(); };
             Closing += delegate { if (snapshotDir == null) SavePlacement(); };
             KeyDown += delegate(object s, KeyEventArgs e) { if (e.Key == Key.Escape) Close(); };
@@ -290,6 +322,7 @@ namespace DesktopVitals
         // Readings run only while the switch is on and the window is showing.
         void UpdateRunning()
         {
+            if (fixtureMode) return;
             bool run = live && WindowState != WindowState.Minimized;
             if (run && !timer.IsEnabled) Prime();
             else if (!run && timer.IsEnabled)
@@ -303,14 +336,16 @@ namespace DesktopVitals
 
         void Prime()
         {
-            if (!live || WindowState == WindowState.Minimized) return;
+            if (fixtureMode || !live || WindowState == WindowState.Minimized) return;
             Engine.Prime();
             var once = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(350) };
             once.Tick += delegate
             {
                 once.Stop();
                 if (!live || WindowState == WindowState.Minimized) return;
-                ShowBoard(Engine.Tick());
+                Board board = Engine.Tick();
+                ShowBoard(board);
+                Engine.AcknowledgeImport(board);
                 timer.Start();
             };
             once.Start();

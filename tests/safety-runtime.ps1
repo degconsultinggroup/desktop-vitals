@@ -225,9 +225,9 @@ try {
             $p = Start-Process -FilePath $exe -ArgumentList @('--snapshot', $dir) -PassThru -WindowStyle Hidden
             $Children.Add($p) | Out-Null
             [void]$seenPids.Add([int]$p.Id)
-            if (-not $p.WaitForExit(40000)) {
+            if (-not $p.WaitForExit(70000)) {
                 try { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue } catch { }
-                throw "snapshot $snapCount exceeded 40 seconds"
+                throw "snapshot $snapCount exceeded 70 seconds"
             }
             if ($p.ExitCode -ne 0) { throw "snapshot $snapCount exit $($p.ExitCode)" }
             if (-not (Test-Path -LiteralPath (Join-Path $dir 'vitals.txt'))) { throw "snapshot $snapCount missing vitals.txt" }

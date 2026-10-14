@@ -138,9 +138,9 @@ function Invoke-Snapshot {
     New-Item -ItemType Directory -Force -Path $Dir | Out-Null
     $exe = Join-Path $Root 'bin\DesktopVitals.exe'
     $p = Start-Process -FilePath $exe -ArgumentList @('--snapshot', $Dir) -PassThru -WindowStyle Hidden
-    if (-not $p.WaitForExit(40000)) {
+    if (-not $p.WaitForExit(70000)) {
         try { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue } catch { }
-        throw 'snapshot exceeded 40 seconds'
+        throw 'snapshot exceeded 70 seconds'
     }
     if ($p.ExitCode -ne 0) { throw "snapshot exit $($p.ExitCode)" }
     $txt = Join-Path $Dir 'vitals.txt'

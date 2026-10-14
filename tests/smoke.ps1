@@ -129,9 +129,9 @@ function Invoke-Snapshot {
         else { Remove-Item Env:\DESKTOPVITALS_PRIVACY_TEST -ErrorAction SilentlyContinue }
         $p = Start-Process -FilePath $exe -ArgumentList $argList.ToArray() -PassThru -WindowStyle Hidden
         # ARM x64 emulation can need well over 20s for the first WPF cold start.
-        if (-not $p.WaitForExit(40000)) {
+        if (-not $p.WaitForExit(70000)) {
             try { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue } catch { }
-            throw 'snapshot exceeded 40 seconds'
+            throw 'snapshot exceeded 70 seconds'
         }
         if ($p.ExitCode -ne 0) { throw "snapshot exit $($p.ExitCode)" }
     }
@@ -595,9 +595,9 @@ Checked = something | check: http://example.com
         if (Test-Path -LiteralPath $defaultSnap) { Remove-Item -LiteralPath $defaultSnap -Recurse -Force }
         $exe = Join-Path $Root 'bin\DesktopVitals.exe'
         $p = Start-Process -FilePath $exe -ArgumentList @('--snapshot') -PassThru -WindowStyle Hidden
-        if (-not $p.WaitForExit(40000)) {
+        if (-not $p.WaitForExit(70000)) {
             try { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue } catch { }
-            throw 'default snapshot exceeded 40 seconds'
+            throw 'default snapshot exceeded 70 seconds'
         }
         if ($p.ExitCode -ne 0) { throw "default snapshot exit $($p.ExitCode)" }
         if (-not (Test-Path -LiteralPath (Join-Path $defaultSnap 'vitals.txt'))) { throw 'missing default vitals.txt' }

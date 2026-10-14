@@ -63,7 +63,7 @@ While live, it uses about 1-2% of a typical 4-core machine in CI soak (lower on 
 
 Zero config. The PC name, renames, hides, and pins live in `%APPDATA%\DesktopVitals\prefs.txt`.
 
-An agent can set the same things from the command line: `--name`, `--rename`, `--hide`, `--pin`, and `--unpin`.
+An agent can set the same things from the command line: `--name`, `--rename`, `--hide`, `--pin`, and `--unpin`. `--json` prints the board the window draws.
 
 ## Snapshot for scripts and AI agents
 
@@ -71,7 +71,9 @@ An agent can set the same things from the command line: `--name`, `--rename`, `-
 DesktopVitals.exe --snapshot C:\some\folder
 ```
 
-Add `--width 1200` to picture a wider window. This takes a reading off screen, writes `vitals.txt` and `vitals.png` to that folder, and exits. It takes a few seconds and doesn't disturb an open window.
+Add `--width 1200` to picture a wider window. This takes a reading off screen, writes `vitals.txt` and `vitals.png` to that folder, and exits. It waits until the task and model scans finish, then writes. It doesn't disturb an open window.
+
+`--fixture board.json` draws that board instead of the machine. With `--snapshot`, it writes `vitals.txt` and `vitals.png` for that board.
 
 ## Build notes
 

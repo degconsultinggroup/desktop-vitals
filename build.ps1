@@ -17,7 +17,7 @@ New-Item -ItemType Directory -Force -Path $bin | Out-Null
 Get-Process DesktopVitals -ErrorAction SilentlyContinue | Stop-Process -Force
 $refs = @(
     "$wpf\PresentationFramework.dll", "$wpf\PresentationCore.dll", "$wpf\WindowsBase.dll",
-    "$fw\System.Xaml.dll", "$fw\System.Drawing.dll", "$fw\System.dll", "$fw\System.Core.dll", "$fw\Microsoft.CSharp.dll"
+    "$fw\System.Xaml.dll", "$fw\System.Drawing.dll", "$fw\System.dll", "$fw\System.Xml.dll", "$fw\System.Core.dll", "$fw\Microsoft.CSharp.dll", "$fw\System.Runtime.Serialization.dll"
 ) | ForEach-Object { "/r:$_" }
 $cscOut = & $csc /nologo /target:winexe /optimize+ /warnaserror+ /platform:x64 `
     "/out:$bin\DesktopVitals.exe" "/win32icon:$d\assets\vitals.ico" "/win32manifest:$d\src\app.manifest" `

@@ -6,6 +6,7 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
+using System.Runtime.Serialization;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
@@ -570,9 +571,10 @@ namespace DesktopVitals
     static class TaskList
     {
         public static List<TaskInfo> Items = new List<TaskInfo>();
-        public static bool Ready { get { return read != DateTime.MinValue; } }
+        public static bool Ready { get { return finished; } }
         public static bool Failed;
         static bool busy;
+        static volatile bool finished;
         static DateTime read = DateTime.MinValue;
 
         // Read again on the next Refresh, without waiting out the 30 s.
@@ -597,6 +599,7 @@ namespace DesktopVitals
                 Items = found;
                 Failed = failed;
                 read = DateTime.Now;
+                finished = true;
                 busy = false;
                 if (done != null) done();
             });
@@ -763,49 +766,63 @@ namespace DesktopVitals
 
     // The board is the contract the window draws. Agents, quiet bots, ended work, and heavy other land here later.
 
-    class Board
+    [DataContract]
+    public class Board
     {
-        public string name = "";
-        public Strip strip = new Strip();
-        public Headline headline = new Headline();
-        public List<Group> groups = new List<Group>();
+        [DataMember(Order = 1)] public string name = "";
+        [DataMember(Order = 2)] public Strip strip = new Strip();
+        [DataMember(Order = 3)] public Headline headline = new Headline();
+        [DataMember(Order = 4)] public List<Group> groups = new List<Group>();
     }
 
-    class Strip
+    [DataContract]
+    public class Strip
     {
-        public double cpu, ram_used_gb, ram_total_gb, disk_free_gb, disk_total_gb;
-        public double? gpu, gpu_temp, vram_used_gb, vram_total_gb;
+        [DataMember(Order = 1)] public double cpu;
+        [DataMember(Order = 2)] public double ram_used_gb;
+        [DataMember(Order = 3)] public double ram_total_gb;
+        [DataMember(Order = 4, EmitDefaultValue = false)] public double? gpu;
+        [DataMember(Order = 5, EmitDefaultValue = false)] public double? gpu_temp;
+        [DataMember(Order = 6, EmitDefaultValue = false)] public double? vram_used_gb;
+        [DataMember(Order = 7, EmitDefaultValue = false)] public double? vram_total_gb;
+        [DataMember(Order = 8)] public double disk_free_gb;
+        [DataMember(Order = 9)] public double disk_total_gb;
     }
 
-    class Headline
+    [DataContract]
+    public class Headline
     {
-        public string text = "All good";
-        public bool needs_you;
+        [DataMember(Order = 1)] public string text = "All good";
+        [DataMember(Order = 2)] public bool needs_you;
     }
 
-    class Group
+    [DataContract]
+    public class Group
     {
-        public string title = "";
-        public string kind = "project";
-        public List<Thing> things = new List<Thing>();
+        [DataMember(Order = 1)] public string title = "";
+        [DataMember(Order = 2)] public string kind = "project";
+        [DataMember(Order = 3)] public List<Thing> things = new List<Thing>();
     }
 
-    class Thing
+    [DataContract]
+    public class Thing
     {
-        public string id = "";
-        public string name = "";
-        public string kind = "other";
-        public string state = "idle";
-        public string project;
-        public string branch;
-        public string folder;
-        public List<int> ports = new List<int>();
-        public double cpu, ram_mb, vram_mb;
-        public int count = 1;
-        public string since = "";
-        public string detail;
-        public string why = "";
-        public bool pinned;
+        [DataMember(Order = 1)] public string id = "";
+        [DataMember(Order = 2)] public string name = "";
+        [DataMember(Order = 3)] public string kind = "other";
+        [DataMember(Order = 4)] public string state = "idle";
+        [DataMember(Order = 5, EmitDefaultValue = false)] public string project;
+        [DataMember(Order = 6, EmitDefaultValue = false)] public string branch;
+        [DataMember(Order = 7, EmitDefaultValue = false)] public string folder;
+        [DataMember(Order = 8)] public List<int> ports = new List<int>();
+        [DataMember(Order = 9)] public double cpu;
+        [DataMember(Order = 10)] public double ram_mb;
+        [DataMember(Order = 11)] public double vram_mb;
+        [DataMember(Order = 12)] public int count = 1;
+        [DataMember(Order = 13)] public string since = "";
+        [DataMember(Order = 14, EmitDefaultValue = false)] public string detail;
+        [DataMember(Order = 15)] public string why = "";
+        [DataMember(Order = 16)] public bool pinned;
     }
 
     // Dedicated video memory per process. Off the UI thread, at most every 5 s.
@@ -849,7 +866,7 @@ namespace DesktopVitals
     static class ModelScan
     {
         public static List<InstalledModel> Items = new List<InstalledModel>();
-        public static bool Ready;
+        public static volatile bool Ready;
         static bool busy;
         static DateTime read = DateTime.MinValue;
 
@@ -986,6 +1003,17 @@ namespace DesktopVitals
         public static Board Current = Empty();
         public static bool TasksReady { get { return TaskList.Ready; } }
         public static bool ModelsReady { get { return ModelScan.Ready; } }
+        // Both background scans have finished a pass. Snapshot waits on this, not on a fixed delay.
+        public static bool ScansComplete { get { return TaskList.Ready && ModelScan.Ready; } }
+
+        // Drop the one-time import headline after the window or snapshot has actually shown it.
+        public static void AcknowledgeImport(Board board)
+        {
+            if (!Prefs.ImportNote || board == null || board.headline == null || board.headline.text == null) return;
+            if (board.headline.text.IndexOf("Imported hides and pins", StringComparison.Ordinal) < 0) return;
+            Prefs.ImportNote = false;
+            Prefs.Save();
+        }
 
         static Dictionary<int, Proc> prevProcs = new Dictionary<int, Proc>();
         static readonly Dictionary<string, string> cmds = new Dictionary<string, string>();
@@ -1416,12 +1444,9 @@ namespace DesktopVitals
             {
                 board.headline.text = "All good";
                 board.headline.needs_you = false;
-                if (Prefs.ImportNote)
-                {
+                // Wait until the task scan has finished. An earlier tick looks calm only because failures are not in yet.
+                if (Prefs.ImportNote && TaskList.Ready)
                     board.headline.text = "Imported hides and pins from your old watch.txt. Change them anytime with right-click.";
-                    Prefs.ImportNote = false;
-                    Prefs.Save();
-                }
             }
             else
             {

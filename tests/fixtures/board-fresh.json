@@ -1,0 +1,14 @@
+{
+  "name": "Laptop",
+  "strip": {
+    "cpu": 3,
+    "ram_used_gb": 5,
+    "ram_total_gb": 16,
+    "disk_free_gb": 210
+  },
+  "headline": {
+    "text": "Nothing of yours is running.",
+    "needs_you": false
+  },
+  "groups": []
+}

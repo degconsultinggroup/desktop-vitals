@@ -174,7 +174,7 @@ function Assert-NoNoise {
 }
 
 function Invoke-Snapshot {
-    param([string]$Dir, [int]$TimeoutMs = 60000)
+    param([string]$Dir, [int]$TimeoutMs = 90000)
     New-Item -ItemType Directory -Force -Path $Dir | Out-Null
     $exe = Join-Path $Root 'bin\DesktopVitals.exe'
     if (-not (Test-Path -LiteralPath $exe)) { throw "missing $exe" }

@@ -28,6 +28,20 @@ jobs:
           .\tests\accuracy.ps1
           if ($LASTEXITCODE -ne 0) { throw "accuracy.ps1 failed with exit $LASTEXITCODE" }
 
+      - name: Snapshot fixture boards
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $exe = Join-Path $PWD 'bin\DesktopVitals.exe'
+          if (-not (Test-Path -LiteralPath $exe)) { throw "missing $exe" }
+          $dev = Join-Path $PWD 'tests\results\board-dev'
+          $fresh = Join-Path $PWD 'tests\results\board-fresh'
+          New-Item -ItemType Directory -Force -Path $dev, $fresh | Out-Null
+          & $exe --fixture (Join-Path $PWD 'tests\fixtures\board-dev.json') --snapshot $dev
+          if ($LASTEXITCODE -ne 0) { throw "board-dev snapshot exit $LASTEXITCODE" }
+          & $exe --fixture (Join-Path $PWD 'tests\fixtures\board-fresh.json') --snapshot $fresh
+          if ($LASTEXITCODE -ne 0) { throw "board-fresh snapshot exit $LASTEXITCODE" }
+
       - name: Upload vitals.png and safety log
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -37,6 +51,22 @@ jobs:
             tests/results/vitals.png
             tests/results/accuracy/
             tests/results/safety-runtime.log
+          if-no-files-found: warn
+
+      - name: Upload board-dev
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: board-dev
+          path: tests/results/board-dev/vitals.png
+          if-no-files-found: warn
+
+      - name: Upload board-fresh
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: board-fresh
+          path: tests/results/board-fresh/vitals.png
           if-no-files-found: warn
 
   # Live soak + idle/edge stability on windows-latest (shorter than 2h; see SOAK_SECONDS).

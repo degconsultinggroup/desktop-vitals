@@ -1,0 +1,209 @@
+{
+  "name": "Studio PC",
+  "strip": {
+    "cpu": 6,
+    "ram_used_gb": 14,
+    "ram_total_gb": 32,
+    "gpu": 0,
+    "gpu_temp": 43,
+    "vram_used_gb": 10,
+    "vram_total_gb": 12,
+    "disk_free_gb": 258
+  },
+  "headline": {
+    "text": "1 agent waiting on you · 1 task failed",
+    "needs_you": true
+  },
+  "groups": [
+    {
+      "title": "AGENTS",
+      "kind": "agents",
+      "things": [
+        {
+          "id": "agent:claude-code:repo-b",
+          "name": "Claude Code",
+          "kind": "agent",
+          "state": "waiting",
+          "project": "repo-b",
+          "since": "6m",
+          "detail": "asked to run: git push",
+          "why": "agent is waiting on you",
+          "count": 1
+        },
+        {
+          "id": "agent:claude-code:repo-a",
+          "name": "Claude Code",
+          "kind": "agent",
+          "state": "working",
+          "project": "repo-a",
+          "since": "2h 10m",
+          "detail": "editing install.ps1 · 3 commits · 4 files changed",
+          "why": "agent is working in repo-a",
+          "count": 1
+        },
+        {
+          "id": "agent:cursor:repo-a",
+          "name": "Cursor agent",
+          "kind": "agent",
+          "state": "working",
+          "project": "repo-a",
+          "since": "14m",
+          "detail": "branch feature-x · running powershell",
+          "why": "model grok-4.7-high",
+          "count": 1
+        },
+        {
+          "id": "agent:codex",
+          "name": "Codex",
+          "kind": "agent",
+          "state": "idle",
+          "project": "no project",
+          "count": 2,
+          "since": "1h",
+          "why": "two idle sessions"
+        }
+      ]
+    },
+    {
+      "title": "bots-repo",
+      "kind": "project",
+      "things": [
+        {
+          "id": "bot:scanner",
+          "name": "scanner",
+          "kind": "bot",
+          "state": "running",
+          "project": "supervisor.py",
+          "since": "2h 47m",
+          "detail": "works every 30s",
+          "why": "long-lived bot",
+          "count": 1
+        },
+        {
+          "id": "bot:recorder",
+          "name": "recorder",
+          "kind": "bot",
+          "state": "running",
+          "project": "supervisor.py",
+          "since": "2h 47m",
+          "detail": "works every 30s",
+          "why": "long-lived bot",
+          "count": 1
+        },
+        {
+          "id": "bot:queue",
+          "name": "queue",
+          "kind": "bot",
+          "state": "quiet",
+          "project": "supervisor.py",
+          "since": "7m",
+          "why": "no activity for a while",
+          "count": 1
+        },
+        {
+          "id": "task:daily-report",
+          "name": "Daily report",
+          "kind": "task",
+          "state": "failed",
+          "project": "task",
+          "detail": "failed 06:00 · next in 20h",
+          "why": "last result was not success",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "title": "gateway",
+      "kind": "project",
+      "things": [
+        {
+          "id": "server:gateway",
+          "name": "gateway",
+          "kind": "server",
+          "state": "running",
+          "project": "node",
+          "ports": [
+            18789
+          ],
+          "ram_mb": 339,
+          "why": "listening on 18789",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "title": "voice",
+      "kind": "project",
+      "things": [
+        {
+          "id": "script:talk.py",
+          "name": "talk.py",
+          "kind": "script",
+          "state": "running",
+          "project": "Python · whisper-small",
+          "vram_mb": 751,
+          "why": "model runtime",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "title": "MODELS",
+      "kind": "models",
+      "things": [
+        {
+          "id": "model:qwen3-coder",
+          "name": "Qwen3-Coder IQ1_M",
+          "kind": "model",
+          "state": "running",
+          "vram_mb": 9800,
+          "detail": "loaded by server.exe · 9.8 GB VRAM",
+          "why": "weight file mapped by server.exe",
+          "count": 1
+        },
+        {
+          "id": "models:rest",
+          "name": "11 more on disk",
+          "kind": "model",
+          "state": "idle",
+          "detail": "150 GB",
+          "why": "unloaded models on disk",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "title": "OTHER",
+      "kind": "other",
+      "things": [
+        {
+          "id": "app:chrome",
+          "name": "Chrome",
+          "kind": "app",
+          "state": "running",
+          "count": 17,
+          "cpu": 9,
+          "ram_mb": 2100,
+          "detail": "9% · 2.1 GB",
+          "why": "heavy app"
+        }
+      ]
+    },
+    {
+      "title": "ENDED IN THE LAST HOUR",
+      "kind": "ended",
+      "things": [
+        {
+          "id": "ended:pytest:repo-a",
+          "name": "pytest",
+          "kind": "script",
+          "state": "ended",
+          "project": "repo-a",
+          "detail": "exit 0 · 12m ago",
+          "why": "exit 0",
+          "count": 1
+        }
+      ]
+    }
+  ]
+}

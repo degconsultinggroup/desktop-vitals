@@ -3,6 +3,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
+using System.Runtime.Serialization.Json;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
@@ -266,6 +267,76 @@ namespace DesktopVitals
         }
     }
 
+    static class BoardJson
+    {
+        static readonly DataContractJsonSerializer Ser = new DataContractJsonSerializer(typeof(Board));
+
+        public static Board Read(string path)
+        {
+            using (var fs = File.OpenRead(path))
+                return (Board)Ser.ReadObject(fs);
+        }
+
+        public static string Write(Board board)
+        {
+            using (var ms = new MemoryStream())
+            {
+                Ser.WriteObject(ms, Redacted(board));
+                return Encoding.UTF8.GetString(ms.ToArray());
+            }
+        }
+
+        static string Opt(string s) { return s == null ? null : Redact.Show(s); }
+
+        static Board Redacted(Board src)
+        {
+            var b = new Board();
+            if (src == null) return b;
+            b.name = Redact.Show(src.name);
+            b.strip = src.strip ?? new Strip();
+            b.headline = new Headline();
+            if (src.headline != null)
+            {
+                b.headline.text = Redact.Show(src.headline.text);
+                b.headline.needs_you = src.headline.needs_you;
+            }
+            if (src.groups == null) return b;
+            foreach (Group g in src.groups)
+            {
+                var ng = new Group();
+                ng.title = Redact.Show(g.title);
+                ng.kind = Redact.Show(g.kind);
+                if (g.things != null)
+                    foreach (Thing t in g.things) ng.things.Add(CopyThing(t));
+                b.groups.Add(ng);
+            }
+            return b;
+        }
+
+        static Thing CopyThing(Thing t)
+        {
+            var n = new Thing();
+            if (t == null) return n;
+            n.id = Redact.Show(t.id);
+            n.name = Redact.Show(t.name);
+            n.kind = Redact.Show(t.kind);
+            n.state = Redact.Show(t.state);
+            n.project = Opt(t.project);
+            n.branch = Opt(t.branch);
+            n.folder = Opt(t.folder);
+            if (t.ports != null) n.ports = new List<int>(t.ports);
+            n.cpu = t.cpu;
+            n.ram_mb = t.ram_mb;
+            n.vram_mb = t.vram_mb;
+            n.count = t.count;
+            n.since = Redact.Show(t.since);
+            n.detail = Opt(t.detail);
+            n.why = Redact.Show(t.why);
+            n.pinned = t.pinned;
+            return n;
+        }
+    }
+
     static class Program
     {
         [STAThread]
@@ -275,7 +346,30 @@ namespace DesktopVitals
             try { Prefs.Load(); Prefs.Migrate(); }
             catch (Exception ex) { ErrorLog.Write(ex); }
             bool changed = ApplyPrefArgs(args);
+            string fixturePath = ArgValue(args, "--fixture");
+            Board fixture = null;
+            if (fixturePath != null)
+            {
+                try { fixture = BoardJson.Read(fixturePath); }
+                catch (Exception ex)
+                {
+                    try { Console.Error.WriteLine("Fixture failed: " + ex.Message); } catch (Exception) { }
+                    Environment.Exit(1);
+                }
+            }
+            bool wantJson = Find(args, "--json") >= 0;
             int at = Find(args, "--snapshot");
+            if (wantJson && at < 0)
+            {
+                Board board = fixture != null ? fixture : ReadLiveBoard();
+                try
+                {
+                    Console.Out.WriteLine(BoardJson.Write(board));
+                    Console.Out.Flush();
+                }
+                catch (Exception) { Environment.Exit(1); }
+                return;
+            }
             if (at >= 0)
             {
                 string dir = at + 1 < args.Length && !args[at + 1].StartsWith("--")
@@ -284,6 +378,7 @@ namespace DesktopVitals
                 var snapApp = new Application { ShutdownMode = ShutdownMode.OnMainWindowClose };
                 snapApp.DispatcherUnhandledException += delegate(object s, System.Windows.Threading.DispatcherUnhandledExceptionEventArgs e) { ErrorLog.Write(e.Exception); e.Handled = true; };
                 var snapWin = new VitalsWindow(Path.GetFullPath(dir));
+                if (fixture != null) snapWin.ShowFixture(fixture);
                 int wAt = Find(args, "--width");
                 double w;
                 if (wAt >= 0 && wAt + 1 < args.Length && double.TryParse(args[wAt + 1], NumberStyles.Float, CultureInfo.InvariantCulture, out w))
@@ -291,7 +386,7 @@ namespace DesktopVitals
                 snapApp.Run(snapWin);
                 return;
             }
-            if (changed) return;
+            if (changed && fixture == null) return;
             bool created;
             using (var signal = new EventWaitHandle(false, EventResetMode.AutoReset, @"Local\DesktopVitals.Show", out created))
             {
@@ -299,9 +394,31 @@ namespace DesktopVitals
                 var app = new Application { ShutdownMode = ShutdownMode.OnMainWindowClose };
                 app.DispatcherUnhandledException += delegate(object s, System.Windows.Threading.DispatcherUnhandledExceptionEventArgs e) { ErrorLog.Write(e.Exception); e.Handled = true; };
                 var win = new VitalsWindow();
+                if (fixture != null) win.ShowFixture(fixture);
                 ThreadPool.RegisterWaitForSingleObject(signal, delegate { win.Dispatcher.BeginInvoke(new Action(win.Toggle)); }, null, -1, false);
                 app.Run(win);
             }
+        }
+
+        static Board ReadLiveBoard()
+        {
+            Engine.Prime();
+            var start = DateTime.UtcNow;
+            while (true)
+            {
+                Engine.Tick();
+                double sec = (DateTime.UtcNow - start).TotalSeconds;
+                if (sec >= 2.5 && (Engine.ScansComplete || sec >= 45)) break;
+                Thread.Sleep(250);
+            }
+            return Engine.Tick();
+        }
+
+        static string ArgValue(string[] args, string flag)
+        {
+            int at = Find(args, flag);
+            if (at < 0 || at + 1 >= args.Length || args[at + 1].StartsWith("--")) return null;
+            return args[at + 1];
         }
 
         static int Find(string[] args, string flag)
