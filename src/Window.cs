@@ -797,11 +797,23 @@ namespace DesktopVitals
         void BuildTitle(View v, Slot s)
         {
             NewRow();
-            var t = Theme.Label(s.Text ?? "", 11, Theme.Faint, FontWeights.SemiBold);
-            Typography.SetCharacterSpacing(t, 160);
+            var t = Tracked(s.Text ?? "", 11, 1.15);
             t.Margin = new Thickness(2, rowCursor == 0 ? 8 : 16, 0, 5);
-            v.Name = t;
             Add(t, 0, 4);
+        }
+
+        // WPF 4 has no character-spacing property. A hair of margin between letters is the same look.
+        static StackPanel Tracked(string text, double size, double gap)
+        {
+            var row = new StackPanel { Orientation = Orientation.Horizontal };
+            if (string.IsNullOrEmpty(text)) return row;
+            for (int i = 0; i < text.Length; i++)
+            {
+                var bit = Theme.Label(text.Substring(i, 1), size, Theme.Faint, FontWeights.SemiBold);
+                if (gap > 0 && i + 1 < text.Length && text[i] != ' ') bit.Margin = new Thickness(0, 0, gap, 0);
+                row.Children.Add(bit);
+            }
+            return row;
         }
 
         void BuildDataRow(View v)
@@ -1117,10 +1129,9 @@ namespace DesktopVitals
                 MenuRow pick = row;
                 bool quiet = pick.Header || pick.Dim || pick.Act == null;
                 var label = Theme.Label(pick.Label, pick.Header ? 11 : 13, quiet ? Theme.Faint : Theme.Text, pick.Header ? FontWeights.SemiBold : FontWeights.Normal);
-                if (pick.Header) Typography.SetCharacterSpacing(label, 140);
                 var item = new Border { Background = Brushes.Transparent, CornerRadius = new CornerRadius(8), Padding = new Thickness(10, pick.Header ? 3 : 6, 16, pick.Header ? 3 : 6), HorizontalAlignment = HorizontalAlignment.Stretch };
                 if (pick.Label == "Frontier Deployments") item.Margin = new Thickness(0, 6, 0, 0);
-                item.Child = label;
+                item.Child = pick.Header ? (UIElement)Tracked(pick.Label, 11, 1.05) : label;
                 if (pick.Act != null)
                 {
                     item.Cursor = Cursors.Hand;
