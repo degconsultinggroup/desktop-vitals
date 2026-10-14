@@ -2810,15 +2810,9 @@ namespace DesktopVitals
                 var t = Regex.Match(json, "\"cpu_temp_c\"\\s*:\\s*([0-9.]+)");
                 var w = Regex.Match(json, "\"cpu_pkg_power_w\"\\s*:\\s*([0-9.]+)");
                 var parts = new List<string>();
-<<<<<<< HEAD
                 if (t.Success) parts.Add(Theme.N(double.Parse(t.Groups[1].Value, CultureInfo.InvariantCulture), "0") + "\u00B0C");
                 if (w.Success) parts.Add(Theme.N(double.Parse(w.Groups[1].Value, CultureInfo.InvariantCulture), "0") + " W");
-                return string.Join(" \u00B7 ", parts);
-=======
-                if (t.Success) parts.Add(double.Parse(t.Groups[1].Value, CultureInfo.InvariantCulture).ToString("0") + "\u00B0C");
-                if (w.Success) parts.Add(double.Parse(w.Groups[1].Value, CultureInfo.InvariantCulture).ToString("0") + " W");
                 return parts.Count == 0 ? "temperature not readable" : string.Join(" \u00B7 ", parts);
->>>>>>> 65915f8 (Make first-run board and grey states human)
             }
             catch (Exception) { return "temperature not readable"; }
         }
