@@ -99,7 +99,8 @@ function Invoke-Snapshot {
     param(
         [string]$Dir,
         [switch]$Review,
-        [switch]$AcceptReview
+        [switch]$AcceptReview,
+        [switch]$PrivacyTest
     )
     New-Item -ItemType Directory -Force -Path $Dir | Out-Null
     $exe = Join-Path $Root 'bin\DesktopVitals.exe'
@@ -109,19 +110,34 @@ function Invoke-Snapshot {
     [void]$argList.Add($Dir)
     if ($Review) { [void]$argList.Add('--review') }
     if ($AcceptReview) { [void]$argList.Add('--accept-review') }
-    $p = Start-Process -FilePath $exe -ArgumentList $argList.ToArray() -PassThru -WindowStyle Hidden
-    # ARM x64 emulation can need well over 20s for the first WPF cold start.
-    if (-not $p.WaitForExit(40000)) {
-        try { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue } catch { }
-        throw 'snapshot exceeded 40 seconds'
+    $prevPriv = $env:DESKTOPVITALS_PRIVACY_TEST
+    try {
+        if ($PrivacyTest) { $env:DESKTOPVITALS_PRIVACY_TEST = '1' }
+        else { Remove-Item Env:\DESKTOPVITALS_PRIVACY_TEST -ErrorAction SilentlyContinue }
+        $p = Start-Process -FilePath $exe -ArgumentList $argList.ToArray() -PassThru -WindowStyle Hidden
+        # ARM x64 emulation can need well over 20s for the first WPF cold start.
+        if (-not $p.WaitForExit(40000)) {
+            try { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue } catch { }
+            throw 'snapshot exceeded 40 seconds'
+        }
+        if ($p.ExitCode -ne 0) { throw "snapshot exit $($p.ExitCode)" }
     }
-    if ($p.ExitCode -ne 0) { throw "snapshot exit $($p.ExitCode)" }
+    finally {
+        if ([string]::IsNullOrEmpty($prevPriv)) { Remove-Item Env:\DESKTOPVITALS_PRIVACY_TEST -ErrorAction SilentlyContinue }
+        else { $env:DESKTOPVITALS_PRIVACY_TEST = $prevPriv }
+    }
     $txt = Join-Path $Dir 'vitals.txt'
     $png = Join-Path $Dir 'vitals.png'
     if (-not (Test-Path -LiteralPath $txt)) { throw 'missing vitals.txt' }
     if (-not (Test-Path -LiteralPath $png)) { throw 'missing vitals.png' }
     if ($AcceptReview) { $null = Wait-ReviewFile -TimeoutSeconds 15 }
-    return @{ Txt = $txt; Png = $png; Text = [System.IO.File]::ReadAllText($txt) }
+    $priv = Join-Path $Dir 'privacy.txt'
+    return @{
+        Txt = $txt
+        Png = $png
+        Text = [System.IO.File]::ReadAllText($txt)
+        Privacy = $(if (Test-Path -LiteralPath $priv) { [System.IO.File]::ReadAllText($priv) } else { $null })
+    }
 }
 
 function Get-PythonCommand {
@@ -694,6 +710,68 @@ try {
         catch { }
     }
     Write-Check 'models-symlink-loop' $loopOk $loopDetail
+
+    # 14. Secrets in process args never appear in snapshot text, privacy tips, png bytes, or errors.log
+    $privOk = $false
+    $privDetail = ''
+    try {
+        $secrets = @(
+            'sk-dvsmokeTESTKEY0001',
+            'ghp_dvsmokeTESTTOKEN0123456789',
+            'dvsmokePass99',
+            'dvsmokeBearerTok99',
+            'dvsmokeUrlPass',
+            'dvsmokeEnv99'
+        )
+        $privScript = Join-Path $Work 'dv_smoke_priv.ps1'
+        Set-Content -LiteralPath $privScript -Value 'Start-Sleep -Seconds 60' -Encoding UTF8
+        $null = Start-Child -FilePath 'powershell.exe' -ArgumentList @(
+            '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $privScript,
+            '--api-key', 'sk-dvsmokeTESTKEY0001',
+            '--token', 'ghp_dvsmokeTESTTOKEN0123456789',
+            'password=dvsmokePass99',
+            'Bearer', 'dvsmokeBearerTok99',
+            'https://u:dvsmokeUrlPass@example.com/x',
+            'API_KEY=dvsmokeEnv99',
+            'dvsmokePrivMarker'
+        )
+        Set-ConfigText "PrivSmoke = dvsmokePrivMarker`n"
+        Start-Sleep -Seconds 2
+        $privSnap = Invoke-Snapshot -Dir (Join-Path $Work 'snap-privacy') -PrivacyTest
+        if ($privSnap.Text -notmatch 'PrivSmoke') { throw 'PrivSmoke watching row missing' }
+        if (-not $privSnap.Privacy) { throw 'missing privacy.txt' }
+        if ($privSnap.Privacy -notmatch '(?m)^show=') { throw 'privacy.txt missing show=' }
+        if ($privSnap.Privacy -notmatch '(?m)^log=') { throw 'privacy.txt missing log=' }
+        if ($privSnap.Privacy -notmatch 'Users\\<user>') { throw 'privacy.txt missing username-agnostic path' }
+        if ($privSnap.Privacy -notmatch '<redacted>') { throw 'privacy.txt missing <redacted>' }
+        $blobs = @(
+            $privSnap.Text,
+            $privSnap.Privacy,
+            [System.IO.File]::ReadAllText($privSnap.Txt),
+            [System.Text.Encoding]::ASCII.GetString([System.IO.File]::ReadAllBytes($privSnap.Png))
+        )
+        $logPath = Join-Path $ConfigDir 'errors.log'
+        if (Test-Path -LiteralPath $logPath) {
+            $blobs += [System.IO.File]::ReadAllText($logPath)
+        }
+        foreach ($secret in $secrets) {
+            foreach ($blob in $blobs) {
+                if ($blob.IndexOf($secret, [System.StringComparison]::Ordinal) -ge 0) {
+                    throw "secret leaked: $secret"
+                }
+            }
+        }
+        $privOk = $true
+        $privDetail = 'sample+tips redacted'
+    }
+    catch {
+        $privDetail = $_.Exception.Message
+    }
+    finally {
+        Stop-Children
+        Restore-Config
+    }
+    Write-Check 'privacy-secrets' $privOk $privDetail
 }
 finally {
     Stop-Children
