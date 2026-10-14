@@ -710,17 +710,22 @@ namespace DesktopVitals
             }
         }
 
-        // One folder of weights as one model, or null when it holds none.
+        // One folder of weights as one model, or null when it holds none. BFS skips reparse points (no symlink hang).
         static InstalledModel FolderModel(DirectoryInfo sub, string root)
         {
-            var weights = new List<FileInfo>();
-            long bytes = 0;
-            int n = 0;
-            foreach (var f in sub.EnumerateFiles("*", SearchOption.AllDirectories))
+            var weights = new List<FileInfo>(); long bytes = 0; int n = 0;
+            var q = new Queue<DirectoryInfo>(); var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            for (q.Enqueue(sub); q.Count > 0 && n <= 20000; )
             {
-                bytes += f.Length;
-                if (IsWeights(f)) weights.Add(f);
-                if (++n > 20000) break;
+                var dir = q.Dequeue(); string full; try { full = dir.FullName; } catch (Exception) { continue; }
+                if (!seen.Add(full)) continue;
+                try
+                {
+                    foreach (var f in dir.EnumerateFiles()) { bytes += f.Length; if (IsWeights(f)) weights.Add(f); if (++n > 20000) break; }
+                    if (n <= 20000) foreach (var c in dir.EnumerateDirectories())
+                        if ((c.Attributes & FileAttributes.ReparsePoint) == 0 && !c.Name.StartsWith(".")) q.Enqueue(c);
+                }
+                catch (Exception) { }
             }
             if (weights.Count == 0) return null;
             // "push-to-talk\model" is better called push-to-talk.
@@ -737,7 +742,7 @@ namespace DesktopVitals
         static bool IsShelf(DirectoryInfo d)
         {
             if (d.EnumerateFiles().Any(IsWeights)) return false;
-            var subs = d.EnumerateDirectories().Where(s => !s.Name.StartsWith(".")).Take(200).ToList();
+            var subs = d.EnumerateDirectories().Where(s => !s.Name.StartsWith(".") && (s.Attributes & FileAttributes.ReparsePoint) == 0).Take(200).ToList();
             return subs.Count > 0 && subs.All(s => s.EnumerateFiles().Any(IsWeights));
         }
 
@@ -1344,25 +1349,10 @@ namespace DesktopVitals
             return t;
         }
 
-        public static string Gb(double bytes)
-        {
-            double gb = bytes / 1073741824.0;
-            return gb >= 100 ? gb.ToString("0", CultureInfo.InvariantCulture) : gb.ToString("0.0", CultureInfo.InvariantCulture);
-        }
-
-        public static string Mem(long bytes)
-        {
-            double mb = bytes / 1048576.0;
-            if (mb >= 1024) return (mb / 1024).ToString("0.0", CultureInfo.InvariantCulture) + " GB";
-            return mb.ToString("0", CultureInfo.InvariantCulture) + " MB";
-        }
-
-        public static string Pct(double v)
-        {
-            if (v < 0.05) return "0%";
-            if (v < 10) return v.ToString("0.0", CultureInfo.InvariantCulture) + "%";
-            return v.ToString("0", CultureInfo.InvariantCulture) + "%";
-        }
+        public static string N(double v, string fmt) { return v.ToString(fmt, CultureInfo.InvariantCulture); }
+        public static string Gb(double bytes) { double gb = bytes / 1073741824.0; return gb >= 100 ? N(gb, "0") : N(gb, "0.0"); }
+        public static string Mem(long bytes) { double mb = bytes / 1048576.0; return mb >= 1024 ? N(mb / 1024, "0.0") + " GB" : N(mb, "0") + " MB"; }
+        public static string Pct(double v) { return v < 0.05 ? "0%" : v < 10 ? N(v, "0.0") + "%" : N(v, "0") + "%"; }
     }
 
     // A thin bar that eases to its new length.
@@ -2238,10 +2228,10 @@ namespace DesktopVitals
             {
                 var bits = new List<string> { Nvml.Name ?? "GPU" };
                 if (gt >= 0) bits.Add(gt + "\u00B0C");
-                if (gw >= 0) bits.Add(gw.ToString("0") + " W");
+                if (gw >= 0) bits.Add(Theme.N(gw, "0") + " W");
                 gpuRow.Set(string.Join(" \u00B7 ", bits), gu >= 0 ? Theme.Pct(gu) : "", gu >= 0 ? gu / 100 : 0);
-                if (vt > 0) vramRow.Set(vu.ToString("0.0") + " of " + vt.ToString("0") + " GB", Theme.Pct(100 * vu / vt), vu / vt);
-                else if (vu >= 0) vramRow.Set(vu.ToString("0.0") + " GB", "", 0);
+                if (vt > 0) vramRow.Set(Theme.N(vu, "0.0") + " of " + Theme.N(vt, "0") + " GB", Theme.Pct(100 * vu / vt), vu / vt);
+                else if (vu >= 0) vramRow.Set(Theme.N(vu, "0.0") + " GB", "", 0);
                 else vramRow.Set("not available", "", 0);
             }
             else
@@ -2251,7 +2241,7 @@ namespace DesktopVitals
                 {
                     gpuRow.Set(GpuCounters.Name ?? "GPU", GpuCounters.UtilReady ? Theme.Pct(GpuCounters.Util) : "", GpuCounters.UtilReady ? GpuCounters.Util / 100 : 0);
                     double t = GpuCounters.TotalGb, u = GpuCounters.UsedGb;
-                    vramRow.Set(t > 0 ? u.ToString("0.0") + " of " + t.ToString("0") + " GB" : u.ToString("0.0") + " GB", t > 0 ? Theme.Pct(100 * u / t) : "", t > 0 ? u / t : 0);
+                    vramRow.Set(t > 0 ? Theme.N(u, "0.0") + " of " + Theme.N(t, "0") + " GB" : Theme.N(u, "0.0") + " GB", t > 0 ? Theme.Pct(100 * u / t) : "", t > 0 ? u / t : 0);
                 }
                 else
                 {
@@ -2819,8 +2809,8 @@ namespace DesktopVitals
                 var t = Regex.Match(json, "\"cpu_temp_c\"\\s*:\\s*([0-9.]+)");
                 var w = Regex.Match(json, "\"cpu_pkg_power_w\"\\s*:\\s*([0-9.]+)");
                 var parts = new List<string>();
-                if (t.Success) parts.Add(double.Parse(t.Groups[1].Value, CultureInfo.InvariantCulture).ToString("0") + "\u00B0C");
-                if (w.Success) parts.Add(double.Parse(w.Groups[1].Value, CultureInfo.InvariantCulture).ToString("0") + " W");
+                if (t.Success) parts.Add(Theme.N(double.Parse(t.Groups[1].Value, CultureInfo.InvariantCulture), "0") + "\u00B0C");
+                if (w.Success) parts.Add(Theme.N(double.Parse(w.Groups[1].Value, CultureInfo.InvariantCulture), "0") + " W");
                 return string.Join(" \u00B7 ", parts);
             }
             catch (Exception) { return ""; }
@@ -3012,14 +3002,14 @@ namespace DesktopVitals
                     var next = new Dictionary<int, long>();
                     try
                     {
-                        var data = new PerformanceCounterCategory("GPU Process Memory").ReadCategory();
-                        var usage = data["Local Usage"];
+                        var data = new PerformanceCounterCategory(GpuCounters.PerfName("GPU Process Memory")).ReadCategory();
+                        var usage = data[GpuCounters.PerfName("Local Usage")];
                         if (usage != null)
                             foreach (InstanceData d in usage.Values)
                             {
                                 var m = Regex.Match(d.InstanceName, "^pid_(\\d+)_");
                                 if (!m.Success || d.RawValue <= 0) continue;
-                                int pid = int.Parse(m.Groups[1].Value);
+                                int pid = int.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture);
                                 long have;
                                 next.TryGetValue(pid, out have);
                                 next[pid] = have + d.RawValue;

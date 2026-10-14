@@ -454,6 +454,60 @@ try {
         $logDetail = $_.Exception.Message
     }
     Write-Check 'errors-log' $logOk $logDetail
+
+    # 12. Perflib locale map (fixture de-DE/ja-JP + live registry + PerfName source gate)
+    $localeOk = $false
+    $localeDetail = ''
+    try {
+        $localeScript = Join-Path $Root 'tests\locale-perflib.ps1'
+        $localeOut = & $localeScript 2>&1 | Out-String
+        if ($LASTEXITCODE -ne 0) { throw ("exit $LASTEXITCODE; " + ($localeOut -replace '\s+', ' ').Trim()) }
+        $localeOk = $true
+        $localeDetail = (($localeOut -split "`r?`n" | Where-Object { $_ -match '^PASS ' } | Measure-Object).Count).ToString() + ' subchecks'
+    }
+    catch {
+        $localeDetail = $_.Exception.Message
+    }
+    Write-Check 'locale-perflib' $localeOk $localeDetail
+
+    # 13. Models scan must not hang on a junction/symlink loop (BFS + reparse skip)
+    $loopOk = $false
+    $loopDetail = ''
+    $loopRoot = Join-Path $Work 'models-loop'
+    try {
+        New-Item -ItemType Directory -Force -Path $loopRoot | Out-Null
+        $a = Join-Path $loopRoot 'a'
+        $b = Join-Path $loopRoot 'b'
+        New-Item -ItemType Directory -Force -Path $a, $b | Out-Null
+        # Directory junctions (no admin). a\to-b -> b, b\to-a -> a.
+        cmd.exe /c "mklink /J `"$a\to-b`" `"$b`"" | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "mklink a->b exit $LASTEXITCODE" }
+        cmd.exe /c "mklink /J `"$b\to-a`" `"$a`"" | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "mklink b->a exit $LASTEXITCODE" }
+        # No weight files needed: the hang risk is walking the junction cycle.
+        Set-ConfigText ("@models = {0}`n" -f $loopRoot)
+        $sw = [System.Diagnostics.Stopwatch]::StartNew()
+        $null = Invoke-Snapshot -Dir (Join-Path $Work 'snap-models-loop')
+        $sw.Stop()
+        $loopOk = $true
+        $loopDetail = ("{0} ms" -f $sw.ElapsedMilliseconds)
+    }
+    catch {
+        $loopDetail = $_.Exception.Message
+    }
+    finally {
+        Restore-Config
+        try {
+            # Remove junctions before recursive delete.
+            $j1 = Join-Path $loopRoot 'a\to-b'
+            $j2 = Join-Path $loopRoot 'b\to-a'
+            if (Test-Path -LiteralPath $j1) { cmd.exe /c "rmdir `"$j1`"" | Out-Null }
+            if (Test-Path -LiteralPath $j2) { cmd.exe /c "rmdir `"$j2`"" | Out-Null }
+            Remove-Item -LiteralPath $loopRoot -Recurse -Force -ErrorAction SilentlyContinue
+        }
+        catch { }
+    }
+    Write-Check 'models-symlink-loop' $loopOk $loopDetail
 }
 finally {
     Stop-Children
