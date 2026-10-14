@@ -11,15 +11,22 @@ $ResultsDir = Join-Path $Root 'tests\results'
 $ConfigDir = Join-Path $env:APPDATA 'DesktopVitals'
 $ConfigFile = Join-Path $ConfigDir 'watch.txt'
 $ReviewFile = Join-Path $ConfigDir 'review.txt'
+$PrefsFile = Join-Path $ConfigDir 'prefs.txt'
 $ConfigBackup = Join-Path $Work 'watch.txt.bak'
 $ReviewBackup = Join-Path $Work 'review.txt.bak'
+$PrefsBackup = Join-Path $Work 'prefs.txt.bak'
 $HadConfig = $false
 $HadReview = $false
+$HadPrefs = $false
 
 function Write-Check {
     param([string]$Name, [bool]$Ok, [string]$Detail = '')
     $tag = if ($Ok) { 'PASS' } else { 'FAIL' }
-    if (-not $Ok) { $script:FailCount++ }
+    if (-not $Ok) {
+        $script:FailCount++
+        $flat = if ($Detail) { $Detail -replace '[\r\n]+', ' ' } else { 'failed' }
+        Write-Host ("::error::{0}: {1}" -f $Name, $flat)
+    }
     if ($Detail) { Write-Host ("{0} {1} ({2})" -f $tag, $Name, $Detail) }
     else { Write-Host ("{0} {1}" -f $tag, $Name) }
 }
@@ -33,6 +40,10 @@ function Save-Config {
     if (Test-Path -LiteralPath $ReviewFile) {
         $script:HadReview = $true
         Copy-Item -LiteralPath $ReviewFile -Destination $ReviewBackup -Force
+    }
+    if (Test-Path -LiteralPath $PrefsFile) {
+        $script:HadPrefs = $true
+        Copy-Item -LiteralPath $PrefsFile -Destination $PrefsBackup -Force
     }
 }
 
@@ -49,6 +60,12 @@ function Restore-Config {
     }
     elseif (Test-Path -LiteralPath $ReviewFile) {
         Remove-Item -LiteralPath $ReviewFile -Force
+    }
+    if ($script:HadPrefs -and (Test-Path -LiteralPath $PrefsBackup)) {
+        Copy-Item -LiteralPath $PrefsBackup -Destination $PrefsFile -Force
+    }
+    elseif (Test-Path -LiteralPath $PrefsFile) {
+        Remove-Item -LiteralPath $PrefsFile -Force
     }
 }
 
@@ -98,8 +115,6 @@ function Wait-ReviewFile {
 function Invoke-Snapshot {
     param(
         [string]$Dir,
-        [switch]$Review,
-        [switch]$AcceptReview,
         [switch]$PrivacyTest
     )
     New-Item -ItemType Directory -Force -Path $Dir | Out-Null
@@ -108,8 +123,6 @@ function Invoke-Snapshot {
     $argList = [System.Collections.Generic.List[string]]::new()
     [void]$argList.Add('--snapshot')
     [void]$argList.Add($Dir)
-    if ($Review) { [void]$argList.Add('--review') }
-    if ($AcceptReview) { [void]$argList.Add('--accept-review') }
     $prevPriv = $env:DESKTOPVITALS_PRIVACY_TEST
     try {
         if ($PrivacyTest) { $env:DESKTOPVITALS_PRIVACY_TEST = '1' }
@@ -130,7 +143,6 @@ function Invoke-Snapshot {
     $png = Join-Path $Dir 'vitals.png'
     if (-not (Test-Path -LiteralPath $txt)) { throw 'missing vitals.txt' }
     if (-not (Test-Path -LiteralPath $png)) { throw 'missing vitals.png' }
-    if ($AcceptReview) { $null = Wait-ReviewFile -TimeoutSeconds 15 }
     $priv = Join-Path $Dir 'privacy.txt'
     return @{
         Txt = $txt
@@ -172,7 +184,7 @@ function Invoke-SafetyStaticChecks {
     $manifest = [System.IO.File]::ReadAllText($manifestPath)
     $srcLines = $src -split "`r?`n"
 
-    # Process.Start only at editor / Explorer / notepad sites.
+    # Process.Start only at editor, Explorer, and loopback port sites.
     $startHits = @()
     for ($i = 0; $i -lt $srcLines.Length; $i++) {
         if ($srcLines[$i] -match 'Process\.Start\s*\(') {
@@ -180,12 +192,12 @@ function Invoke-SafetyStaticChecks {
         }
     }
     if ($startHits.Count -ne 3) {
-        throw ("Process.Start count {0} (want 3 editor/Explorer/notepad): {1}" -f $startHits.Count, (($startHits | ForEach-Object { "$($_.Line):$($_.Text)" }) -join ' | '))
+        throw ("Process.Start count {0} (want 3 editor/Explorer/loopback): {1}" -f $startHits.Count, (($startHits | ForEach-Object { "$($_.Line):$($_.Text)" }) -join ' | '))
     }
     $joined = ($startHits | ForEach-Object { $_.Text }) -join "`n"
     if ($joined -notmatch 'ProcessStartInfo\(Editor\[0\]') { throw 'missing editor Process.Start' }
     if ($joined -notmatch 'ProcessStartInfo\(explorer') { throw 'missing explorer Process.Start' }
-    if ($joined -notmatch 'ProcessStartInfo\("notepad\.exe"') { throw 'missing notepad Process.Start' }
+    if ($joined -notmatch 'ProcessStartInfo\("http://127\.0\.0\.1:"') { throw 'missing loopback port Process.Start' }
     $editorLine = ($startHits | Where-Object { $_.Text -match 'Editor\[0\]' } | Select-Object -First 1).Text
     $explorerLine = ($startHits | Where-Object { $_.Text -match 'ProcessStartInfo\(explorer' } | Select-Object -First 1).Text
     if ($editorLine -notmatch 'UseShellExecute\s*=\s*false') { throw 'editor Process.Start must UseShellExecute=false' }
@@ -217,7 +229,7 @@ function Invoke-SafetyStaticChecks {
     }
     if ($src -notmatch 'OpenSubKey\s*\(') { throw 'expected registry OpenSubKey reads' }
 
-    # Network: only HttpWebRequest/WebRequest after IsLoopback; no sockets/clients/other HTTP stacks.
+    # No sockets, HTTP clients, or name lookups. Loopback opens go through the shell, not a client.
     foreach ($pat in @(
             'System\.Net\.Sockets',
             '\bTcpClient\b',
@@ -226,15 +238,12 @@ function Invoke-SafetyStaticChecks {
             '\bHttpClient\b',
             '\bWebClient\b',
             '\bDns\.GetHost',
-            'FtpWebRequest'
+            'FtpWebRequest',
+            'HttpWebRequest',
+            'WebRequest\.Create'
         )) {
         if ($src -match $pat) { throw "forbidden network API: $pat" }
     }
-    $httpHits = [regex]::Matches($src, 'HttpWebRequest|WebRequest\.Create')
-    if ($httpHits.Count -lt 1) { throw 'expected HttpWebRequest for local bot checks' }
-    if ($src -notmatch 'uri\.IsLoopback') { throw 'ReadHttp must require uri.IsLoopback' }
-    if ($src -notmatch 'AllowAutoRedirect\s*=\s*false') { throw 'ReadHttp must disable redirects' }
-    if ($src -notmatch 'string\.Equals\(uri\.Scheme,\s*"http"') { throw 'ReadHttp must allow only http scheme' }
 
     # No hardcoded outbound product URLs. RFC 2606 example.* (and loopback) may appear in
     # privacy/redaction sample strings; those are not network destinations.
@@ -275,7 +284,7 @@ function Invoke-SafetyStaticChecks {
     if ($manifest -match 'requireAdministrator') { throw 'app.manifest must not requireAdministrator' }
     if ($manifest -notmatch 'uiAccess="false"') { throw 'app.manifest uiAccess must be false' }
 
-    return ("starts={0}; http+loopback; registry-read; asInvoker" -f $startHits.Count)
+    return ("starts={0}; registry-read; asInvoker" -f $startHits.Count)
 }
 
 New-Item -ItemType Directory -Force -Path $Work, $ResultsDir | Out-Null
@@ -371,18 +380,16 @@ try {
         Write-Check 'safety-runtime' $rtOk $rtDetail
     }
 
-    # 2. Snapshot and review snapshot
+    # 2. Snapshot writes vitals.txt and vitals.png
     $snapOk = $false
     $snapDetail = ''
     try {
         $snapDir = Join-Path $Work 'snap-basic'
         $basic = Invoke-Snapshot -Dir $snapDir
-        $reviewDir = Join-Path $Work 'snap-review'
-        $review = Invoke-Snapshot -Dir $reviewDir -Review
+        if ($basic.Text -notmatch 'Desktop Vitals') { throw 'vitals.txt missing product name' }
+        if ((Get-Item -LiteralPath $basic.Png).Length -lt 32) { throw 'vitals.png is empty' }
         Copy-Item -LiteralPath $basic.Png -Destination (Join-Path $ResultsDir 'vitals.png') -Force
         Copy-Item -LiteralPath $basic.Txt -Destination (Join-Path $ResultsDir 'vitals.txt') -Force
-        Copy-Item -LiteralPath $review.Png -Destination (Join-Path $ResultsDir 'review.png') -Force
-        Copy-Item -LiteralPath $review.Txt -Destination (Join-Path $ResultsDir 'review.txt') -Force
         $snapOk = $true
     }
     catch {
@@ -415,22 +422,8 @@ try {
 
         Start-Sleep -Seconds 2
         $scriptsSnap = Invoke-Snapshot -Dir (Join-Path $Work 'snap-scripts')
-        $sectionLines = New-Object System.Collections.Generic.List[string]
-        $inScripts = $false
-        foreach ($line in ($scriptsSnap.Text -split "`r?`n")) {
-            if (-not $inScripts) {
-                if ($line -eq 'Scripts') { $inScripts = $true }
-                elseif ($line -like 'Scripts:*') { throw 'Scripts section empty' }
-                continue
-            }
-            if ($line.Length -eq 0) { break }
-            if ($line -notmatch '^\s') { break }
-            [void]$sectionLines.Add($line)
-        }
-        if (-not $inScripts) { throw 'Scripts section missing' }
-        $section = [string]::Join("`n", $sectionLines)
         foreach ($name in $expect) {
-            if ($section -notmatch [regex]::Escape($name)) { throw "missing $name under Scripts" }
+            if ($scriptsSnap.Text -notmatch [regex]::Escape($name)) { throw "missing $name" }
         }
         $scriptsOk = $true
     }
@@ -468,15 +461,10 @@ try {
     }
     Write-Check 'no-calc-injection' $injOk $injDetail
 
-    # 5. Non-loopback http check is invalid and makes no outbound TCP
+    # 5. A normal snapshot makes no outbound TCP to example.com
     $httpOk = $false
     $httpDetail = ''
     try {
-        $httpScript = Join-Path $Work 'dv_smoke_http.ps1'
-        Set-Content -LiteralPath $httpScript -Value 'Start-Sleep -Seconds 60' -Encoding UTF8
-        $null = Start-Child -FilePath 'powershell.exe' -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $httpScript)
-        Set-ConfigText "SmokeHttp = dv_smoke_http.ps1 | check: http://example.com`n"
-
         $exampleIps = @()
         try {
             $exampleIps = @([System.Net.Dns]::GetHostAddresses('example.com') | ForEach-Object { $_.IPAddressToString })
@@ -507,9 +495,6 @@ try {
         Remove-Job $monitor -Force -ErrorAction SilentlyContinue
         $direct = @($jobHits | Where-Object { $_ -and "$_".Length -gt 0 } | ForEach-Object { "$_" })
 
-        if ($httpSnap.Text -notmatch 'check must be a local address') {
-            throw 'snapshot missing invalid-check message'
-        }
         if ($direct.Count -gt 0) {
             throw ("outbound TCP to example.com: " + ($direct -join ', '))
         }
@@ -524,16 +509,18 @@ try {
     }
     Write-Check 'http-local-only' $httpOk $httpDetail
 
-    # 6. watch.txt over 1 MB is skipped; snapshot still works
+    # 6. prefs.txt over 1 MB is left alone; snapshot still works
     $hugeOk = $false
     $hugeDetail = ''
     try {
         $junk = New-Object byte[] (1MB + 1)
         (New-Object Random).NextBytes($junk)
         New-Item -ItemType Directory -Force -Path $ConfigDir | Out-Null
-        [System.IO.File]::WriteAllBytes($ConfigFile, $junk)
-        $hugeSnap = Invoke-Snapshot -Dir (Join-Path $Work 'snap-huge-watch')
-        if ($hugeSnap.Text -notmatch 'settings file too large') { throw 'missing too-large message' }
+        [System.IO.File]::WriteAllBytes($PrefsFile, $junk)
+        $hugeSnap = Invoke-Snapshot -Dir (Join-Path $Work 'snap-huge-prefs')
+        if ($hugeSnap.Text -notmatch 'Desktop Vitals') { throw 'snapshot text missing' }
+        $after = (Get-Item -LiteralPath $PrefsFile).Length
+        if ($after -le 1MB) { throw "prefs.txt shrank to $after" }
         $hugeOk = $true
     }
     catch {
@@ -544,37 +531,61 @@ try {
     }
     Write-Check 'huge-watch-txt' $hugeOk $hugeDetail
 
-    # 7. Accept-review leaves a 250-line UTF-8 BOM watch.txt byte-for-byte unchanged
+    # 7. One snapshot copies hides and pins out of watch.txt, then renames it
     $watchOk = $false
     $watchDetail = ''
+    $migWatch = Join-Path $ConfigDir 'watch.txt.migrated'
+    $migReview = Join-Path $ConfigDir 'review.txt.migrated'
+    $stashWatch = $null
+    $stashReview = $null
     try {
-        if (Test-Path -LiteralPath $ReviewFile) { Remove-Item -LiteralPath $ReviewFile -Force }
-        $lines = New-Object System.Collections.Generic.List[string]
-        $lines.Add('First = first.exe')
-        $long = 'Long = ' + ('x' * 600)
-        $lines.Add($long)
-        for ($i = 3; $i -le 250; $i++) { $lines.Add(("Line{0} = line{0}.exe" -f $i)) }
-        $utf8Bom = New-Object System.Text.UTF8Encoding $true
         New-Item -ItemType Directory -Force -Path $ConfigDir | Out-Null
-        [System.IO.File]::WriteAllLines($ConfigFile, $lines, $utf8Bom)
-        $before = [System.IO.File]::ReadAllBytes($ConfigFile)
-        $null = Invoke-Snapshot -Dir (Join-Path $Work 'snap-watch-intact') -AcceptReview
-        $reviewText = Wait-ReviewFile -TimeoutSeconds 15
-        $after = [System.IO.File]::ReadAllBytes($ConfigFile)
-        if ($before.Length -ne $after.Length) { throw "length $($before.Length) -> $($after.Length)" }
-        for ($i = 0; $i -lt $before.Length; $i++) {
-            if ($before[$i] -ne $after[$i]) { throw "byte $i changed" }
+        if (Test-Path -LiteralPath $PrefsFile) { Remove-Item -LiteralPath $PrefsFile -Force }
+        if (Test-Path -LiteralPath $migWatch) {
+            $stashWatch = Join-Path $Work 'watch.migrated.stash'
+            Move-Item -LiteralPath $migWatch -Destination $stashWatch -Force
         }
-        if ($reviewText -notmatch '@reviewed\s*=') { throw 'review.txt missing @reviewed' }
+        if (Test-Path -LiteralPath $migReview) {
+            $stashReview = Join-Path $Work 'review.migrated.stash'
+            Move-Item -LiteralPath $migReview -Destination $stashReview -Force
+        }
+        $sample = @"
+@hide = HiddenSmoke
+KeepMe = notepad.exe
+Checked = something | check: http://example.com
+@kind = HiddenSmoke | Agent
+@temperature-file = C:\not-a-sensor.json
+@reviewed = 2020-01-01
+@models = C:\no-extra-models
+"@
+        [System.IO.File]::WriteAllText($ConfigFile, $sample, [System.Text.UTF8Encoding]::new($false))
+        $migSnap = Invoke-Snapshot -Dir (Join-Path $Work 'snap-migrate')
+        if (-not (Test-Path -LiteralPath $PrefsFile)) { throw 'prefs.txt was not written' }
+        $prefsText = [System.IO.File]::ReadAllText($PrefsFile)
+        if ($prefsText -notmatch '(?m)^hide=HiddenSmoke\s*$') { throw 'hide was not copied' }
+        if ($prefsText -notmatch 'KeepMe' -or $prefsText -notmatch 'notepad\.exe') { throw 'pin was not copied' }
+        if ($prefsText -notmatch 'migratedFromWatch=1') { throw 'migrated flag missing' }
+        foreach ($bad in @('temperature', 'reviewed', 'example.com', 'check:', '@kind', '@models')) {
+            if ($prefsText.IndexOf($bad, [StringComparison]::OrdinalIgnoreCase) -ge 0) { throw "prefs stored $bad" }
+        }
+        if (Test-Path -LiteralPath $ConfigFile) { throw 'watch.txt was not renamed' }
+        if (-not (Test-Path -LiteralPath $migWatch)) { throw 'watch.txt.migrated missing' }
+        $shown = $migSnap.Text -match 'Imported hides and pins'
+        $kept = $prefsText -match 'importNote=1'
+        if (-not $shown -and -not $kept) { throw 'import note was not shown or kept' }
         $watchOk = $true
     }
     catch {
         $watchDetail = $_.Exception.Message
     }
     finally {
+        if (Test-Path -LiteralPath $migWatch) { Remove-Item -LiteralPath $migWatch -Force -ErrorAction SilentlyContinue }
+        if (Test-Path -LiteralPath $migReview) { Remove-Item -LiteralPath $migReview -Force -ErrorAction SilentlyContinue }
+        if ($stashWatch -and (Test-Path -LiteralPath $stashWatch)) { Move-Item -LiteralPath $stashWatch -Destination $migWatch -Force }
+        if ($stashReview -and (Test-Path -LiteralPath $stashReview)) { Move-Item -LiteralPath $stashReview -Destination $migReview -Force }
         Restore-Config
     }
-    Write-Check 'watch-txt-intact' $watchOk $watchDetail
+    Write-Check 'migration-once' $watchOk $watchDetail
 
     # 8. Default --snapshot folder creates vitals.txt and vitals.png on a fresh path
     $freshOk = $false
@@ -598,18 +609,16 @@ try {
     }
     Write-Check 'snapshot-fresh-profile' $freshOk $freshDetail
 
-    # 9. check: http://[::1]:... is accepted as loopback (not "must be a local address")
+    # 9. A script file shows up without a watch.txt label
     $v6Ok = $false
     $v6Detail = ''
     try {
         $v6Script = Join-Path $Work 'dv_smoke_v6.ps1'
         Set-Content -LiteralPath $v6Script -Value 'Start-Sleep -Seconds 60' -Encoding UTF8
         $null = Start-Child -FilePath 'powershell.exe' -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $v6Script)
-        Set-ConfigText "SmokeV6 = dv_smoke_v6.ps1 | check: http://[::1]:18765/health`n"
         Start-Sleep -Seconds 1
         $v6Snap = Invoke-Snapshot -Dir (Join-Path $Work 'snap-v6')
-        if ($v6Snap.Text -match 'check must be a local address') { throw 'IPv6 loopback rejected' }
-        if ($v6Snap.Text -notmatch 'SmokeV6') { throw 'SmokeV6 bot row missing' }
+        if ($v6Snap.Text -notmatch 'dv_smoke_v6\.ps1') { throw 'dv_smoke_v6.ps1 missing' }
         $v6Ok = $true
     }
     catch {
@@ -621,16 +630,17 @@ try {
     }
     Write-Check 'http-ipv6-loopback' $v6Ok $v6Detail
 
-    # 10. Long command lines (about 20k chars) are still visible to Watching
+    # 10. A long argument still leaves the script name visible
     $cmdOk = $false
     $cmdDetail = ''
     try {
-        $marker = 'dvsmokeLongCmd' + ('Z' * 20000)
-        $null = Start-Child -FilePath 'powershell.exe' -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', "Start-Sleep -Seconds 60 # $marker")
-        Set-ConfigText "LongCmd = dvsmokeLongCmd`n"
+        $longScript = Join-Path $Work 'dvsmokeLongCmd.ps1'
+        Set-Content -LiteralPath $longScript -Value 'Start-Sleep -Seconds 60' -Encoding UTF8
+        $marker = 'Z' * 20000
+        $null = Start-Child -FilePath 'powershell.exe' -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $longScript, $marker)
         Start-Sleep -Seconds 2
         $cmdSnap = Invoke-Snapshot -Dir (Join-Path $Work 'snap-longcmd')
-        if ($cmdSnap.Text -notmatch 'LongCmd') { throw 'LongCmd watching row missing' }
+        if ($cmdSnap.Text -notmatch 'dvsmokeLongCmd') { throw 'dvsmokeLongCmd missing' }
         $cmdOk = $true
     }
     catch {
@@ -684,7 +694,8 @@ try {
     # 13. Models scan must not hang on a junction/symlink loop (BFS + reparse skip)
     $loopOk = $false
     $loopDetail = ''
-    $loopRoot = Join-Path $Work 'models-loop'
+    $modelsHome = Join-Path $env:USERPROFILE 'models'
+    $loopRoot = Join-Path $modelsHome ('dv-smoke-loop-' + [guid]::NewGuid().ToString('N'))
     try {
         New-Item -ItemType Directory -Force -Path $loopRoot | Out-Null
         $a = Join-Path $loopRoot 'a'
@@ -695,8 +706,6 @@ try {
         if ($LASTEXITCODE -ne 0) { throw "mklink a->b exit $LASTEXITCODE" }
         cmd.exe /c "mklink /J `"$b\to-a`" `"$a`"" | Out-Null
         if ($LASTEXITCODE -ne 0) { throw "mklink b->a exit $LASTEXITCODE" }
-        # No weight files needed: the hang risk is walking the junction cycle.
-        Set-ConfigText ("@models = {0}`n" -f $loopRoot)
         $sw = [System.Diagnostics.Stopwatch]::StartNew()
         $null = Invoke-Snapshot -Dir (Join-Path $Work 'snap-models-loop')
         $sw.Stop()
@@ -707,14 +716,13 @@ try {
         $loopDetail = $_.Exception.Message
     }
     finally {
-        Restore-Config
         try {
-            # Remove junctions before recursive delete.
+            # Remove junctions before the subfolder. Leave the models folder itself.
             $j1 = Join-Path $loopRoot 'a\to-b'
             $j2 = Join-Path $loopRoot 'b\to-a'
             if (Test-Path -LiteralPath $j1) { cmd.exe /c "rmdir `"$j1`"" | Out-Null }
             if (Test-Path -LiteralPath $j2) { cmd.exe /c "rmdir `"$j2`"" | Out-Null }
-            Remove-Item -LiteralPath $loopRoot -Recurse -Force -ErrorAction SilentlyContinue
+            if (Test-Path -LiteralPath $loopRoot) { Remove-Item -LiteralPath $loopRoot -Recurse -Force -ErrorAction SilentlyContinue }
         }
         catch { }
     }
@@ -736,18 +744,17 @@ try {
         Set-Content -LiteralPath $privScript -Value 'Start-Sleep -Seconds 60' -Encoding UTF8
         $null = Start-Child -FilePath 'powershell.exe' -ArgumentList @(
             '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $privScript,
+            'dvsmokePrivMarker',
             '--api-key', 'sk-dvsmokeTESTKEY0001',
             '--token', 'ghp_dvsmokeTESTTOKEN0123456789',
             'password=dvsmokePass99',
             'Bearer', 'dvsmokeBearerTok99',
             'https://u:dvsmokeUrlPass@example.com/x',
-            'API_KEY=dvsmokeEnv99',
-            'dvsmokePrivMarker'
+            'API_KEY=dvsmokeEnv99'
         )
-        Set-ConfigText "PrivSmoke = dvsmokePrivMarker`n"
         Start-Sleep -Seconds 2
         $privSnap = Invoke-Snapshot -Dir (Join-Path $Work 'snap-privacy') -PrivacyTest
-        if ($privSnap.Text -notmatch 'PrivSmoke') { throw 'PrivSmoke watching row missing' }
+        if ($privSnap.Text -notmatch 'dv_smoke_priv\.ps1' -and $privSnap.Text -notmatch 'dvsmokePrivMarker') { throw 'privacy script missing' }
         if (-not $privSnap.Privacy) { throw 'missing privacy.txt' }
         if ($privSnap.Privacy -notmatch '(?m)^show=') { throw 'privacy.txt missing show=' }
         if ($privSnap.Privacy -notmatch '(?m)^log=') { throw 'privacy.txt missing log=' }

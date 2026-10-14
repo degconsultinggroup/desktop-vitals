@@ -1,4 +1,4 @@
-# Accuracy fixtures for Desktop Vitals: Scripts, Scheduled, Starts, AI models.
+# Accuracy fixtures for Desktop Vitals: scripts, scheduled tasks, startup noise, models.
 # Workload lives under %USERPROFILE% (not Temp: Scripts skips Temp). Cleans up in finally.
 # Run: pwsh -File tests\accuracy.ps1
 $ErrorActionPreference = 'Stop'
@@ -27,10 +27,13 @@ $HttpPort = 0
 $ConfigDir = Join-Path $env:APPDATA 'DesktopVitals'
 $ConfigFile = Join-Path $ConfigDir 'watch.txt'
 $ReviewFile = Join-Path $ConfigDir 'review.txt'
+$PrefsFile = Join-Path $ConfigDir 'prefs.txt'
 $ConfigBackup = Join-Path $Work 'watch.txt.bak'
 $ReviewBackup = Join-Path $Work 'review.txt.bak'
+$PrefsBackup = Join-Path $Work 'prefs.txt.bak'
 $HadConfig = $false
 $HadReview = $false
+$HadPrefs = $false
 $NoisePatterns = @(
     '(?i)\bsvchost\b',
     '(?i)\bmsedge(\.exe)?\b',
@@ -45,7 +48,13 @@ $NoisePatterns = @(
 function Write-Check {
     param([string]$Name, [bool]$Ok, [string]$Detail = '')
     $tag = if ($Ok) { 'PASS' } else { 'FAIL' }
-    if (-not $Ok) { $script:FailCount++ }
+    if (-not $Ok) {
+        $script:FailCount++
+        $flat = $Detail
+        if (-not $flat) { $flat = ((@($script:Fn) + @($script:Fp)) -join '; ') }
+        if (-not $flat) { $flat = 'failed' }
+        Write-Host ("::error::{0}: {1}" -f $Name, ($flat -replace '[\r\n]+', ' '))
+    }
     if ($Detail) { Write-Host ("{0} {1} ({2})" -f $tag, $Name, $Detail) }
     else { Write-Host ("{0} {1}" -f $tag, $Name) }
 }
@@ -59,6 +68,10 @@ function Save-Config {
     if (Test-Path -LiteralPath $ReviewFile) {
         $script:HadReview = $true
         Copy-Item -LiteralPath $ReviewFile -Destination $ReviewBackup -Force
+    }
+    if (Test-Path -LiteralPath $PrefsFile) {
+        $script:HadPrefs = $true
+        Copy-Item -LiteralPath $PrefsFile -Destination $PrefsBackup -Force
     }
 }
 
@@ -75,6 +88,12 @@ function Restore-Config {
     }
     elseif (Test-Path -LiteralPath $ReviewFile) {
         Remove-Item -LiteralPath $ReviewFile -Force -ErrorAction SilentlyContinue
+    }
+    if ($script:HadPrefs -and (Test-Path -LiteralPath $PrefsBackup)) {
+        Copy-Item -LiteralPath $PrefsBackup -Destination $PrefsFile -Force
+    }
+    elseif (Test-Path -LiteralPath $PrefsFile) {
+        Remove-Item -LiteralPath $PrefsFile -Force -ErrorAction SilentlyContinue
     }
 }
 
@@ -330,76 +349,55 @@ try {
     [void]$report.Add('----- vitals.txt -----')
     [void]$report.Add(($text -replace '(?m)^(Desktop Vitals)\s+\S+', '$1 <redacted>'))
 
-    $ai = Get-Section $text 'AI'
-    $scripts = Get-Section $text 'Scripts'
-    $starts = Get-Section $text 'Starts with Windows'
-    $sched = Get-Section $text 'Scheduled'
-
-    # Scripts expectations
+    # Script names anywhere on the board, with no Windows noise in the text.
     $scriptsOk = $true
-    if ($null -eq $scripts) { $scriptsOk = $false; [void]$script:Fn.Add('Scripts section missing') }
-    else {
-        if ($py) {
-            if (-not (Assert-InSection 'Scripts' $scripts 'dv_acc_py.py' 'Scripts')) { $scriptsOk = $false }
-            if (-not (Assert-InSection 'Scripts' $scripts 'http.server' 'Scripts')) { $scriptsOk = $false }
-        }
-        else { [void]$report.Add('SKIP python fixtures (no python)') }
-        if ($node) {
-            if (-not (Assert-InSection 'Scripts' $scripts 'dv_acc_node.js' 'Scripts')) { $scriptsOk = $false }
-        }
-        else { [void]$report.Add('SKIP node fixture (no node)') }
-        if (-not (Assert-InSection 'Scripts' $scripts 'dv_acc_ps.ps1' 'Scripts')) { $scriptsOk = $false }
-        if (-not (Assert-InSection 'Scripts' $scripts 'dv_acc_bat.bat' 'Scripts')) { $scriptsOk = $false }
+    if ($py) {
+        if ($text -notmatch 'dv_acc_py\.py') { $scriptsOk = $false; [void]$script:Fn.Add('missing dv_acc_py.py') }
+        if ($text -notmatch 'http\.server') { $scriptsOk = $false; [void]$script:Fn.Add('missing http.server') }
     }
-    if (-not (Assert-NoNoise 'Scripts' $scripts)) { $scriptsOk = $false }
+    else { [void]$report.Add('SKIP python fixtures (no python)') }
+    if ($node) {
+        if ($text -notmatch 'dv_acc_node\.js') { $scriptsOk = $false; [void]$script:Fn.Add('missing dv_acc_node.js') }
+    }
+    else { [void]$report.Add('SKIP node fixture (no node)') }
+    if ($text -notmatch 'dv_acc_ps\.ps1') { $scriptsOk = $false; [void]$script:Fn.Add('missing dv_acc_ps.ps1') }
+    if ($text -notmatch 'dv_acc_bat\.bat') { $scriptsOk = $false; [void]$script:Fn.Add('missing dv_acc_bat.bat') }
+    $scriptLines = @($text -split "`r?`n" | Where-Object { $_ -match 'dv_acc_(py\.py|node\.js|ps1|bat\.bat)|http\.server' })
+    if (-not (Assert-NoNoise 'scripts' ($scriptLines -join "`n"))) { $scriptsOk = $false }
     Write-Check 'scripts-cards' $scriptsOk
 
-    # Scheduled: running + failed
+    # Scheduled task names, with running or failed on that line.
     $schedOk = $true
-    if ($null -eq $sched) { $schedOk = $false; [void]$script:Fn.Add('Scheduled section missing') }
-    else {
-        if (-not (Assert-InSection 'Scheduled' $sched $TaskRun 'Scheduled')) { $schedOk = $false }
-        if (-not (Assert-InSection 'Scheduled' $sched $TaskFail 'Scheduled')) { $schedOk = $false }
-        if ($sched -notmatch '(?i)running') { $schedOk = $false; [void]$script:Fn.Add('Scheduled FN: no running result') }
-        if ($sched -notmatch '(?i)failed') { $schedOk = $false; [void]$script:Fn.Add('Scheduled FN: no failed result') }
-    }
-    if (-not (Assert-NoNoise 'Scheduled' $sched)) { $schedOk = $false }
+    $runLine = @($text -split "`r?`n" | Where-Object { $_ -match [regex]::Escape($TaskRun) } | Select-Object -First 1)
+    $failLine = @($text -split "`r?`n" | Where-Object { $_ -match [regex]::Escape($TaskFail) } | Select-Object -First 1)
+    if (-not $runLine) { $schedOk = $false; [void]$script:Fn.Add("missing $TaskRun") }
+    elseif ($runLine -notmatch '(?i)running') { $schedOk = $false; [void]$script:Fn.Add("$TaskRun line is not running") }
+    if (-not $failLine) { $schedOk = $false; [void]$script:Fn.Add("missing $TaskFail") }
+    elseif ($failLine -notmatch '(?i)failed') { $schedOk = $false; [void]$script:Fn.Add("$TaskFail line is not failed") }
+    $taskText = (@($runLine) + @($failLine)) -join "`n"
+    if (-not (Assert-NoNoise 'tasks' $taskText)) { $schedOk = $false }
     Write-Check 'scheduled-cards' $schedOk
 
-    # Starts: shortcut present; disabled absent
+    # Disabled startup name stays off the board. The shortcut is still created and cleaned up.
     $startsOk = $true
-    $startName = "DVAccStart$Stamp"
-    if ($null -eq $starts) {
-        # Empty Starts is allowed only if shortcut missing; treat as FN for our shortcut.
+    if ($text -match [regex]::Escape($DisabledName)) {
         $startsOk = $false
-        [void]$script:Fn.Add('Starts with Windows section missing')
+        [void]$script:Fp.Add("disabled $DisabledName shown")
     }
-    else {
-        if (-not (Assert-InSection 'Starts' $starts $startName 'Starts')) { $startsOk = $false }
-        if ($starts -match [regex]::Escape($DisabledName)) {
-            $startsOk = $false
-            [void]$script:Fp.Add("Starts FP: disabled $DisabledName shown")
-        }
-    }
-    if (-not (Assert-NoNoise 'Starts' $starts)) { $startsOk = $false }
     Write-Check 'starts-cards' $startsOk
 
-    # AI: fake model name stem
+    # Fake model stem, or the collapsed on-disk line.
     $modelStem = "dv-acc-fake-$Stamp"
     $aiOk = $true
-    if ($null -eq $ai -or $ai -eq '') {
+    if ($text -notmatch [regex]::Escape($modelStem) -and $text -notmatch 'on disk') {
         $aiOk = $false
-        [void]$script:Fn.Add("AI FN: missing model $modelStem")
+        [void]$script:Fn.Add("missing model $modelStem")
     }
-    elseif ($ai -notmatch [regex]::Escape($modelStem)) {
-        $aiOk = $false
-        [void]$script:Fn.Add("AI FN: missing model $modelStem")
+    if ($ollama -and $text -notmatch '(?i)ollama') {
+        [void]$report.Add('NOTE ollama started but not labeled (may need serve settle)')
     }
-    if ($ollama -and $ai -notmatch '(?i)ollama') {
-        [void]$report.Add('NOTE ollama started but not labeled in AI (may need serve settle)')
-    }
-    if ($llama -and $ai -notmatch '(?i)llama') {
-        [void]$report.Add('NOTE llama-server started but not labeled in AI')
+    if ($llama -and $text -notmatch '(?i)llama') {
+        [void]$report.Add('NOTE llama-server started but not labeled')
     }
     Write-Check 'ai-model' $aiOk
 

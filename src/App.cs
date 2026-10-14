@@ -1,133 +1,17 @@
-// Entry, command line, and settings files.
+// Entry, command line, and prefs.
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Globalization;
 using System.IO;
-using System.Linq;
-using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Windows;
-using System.Windows.Controls;
-using System.Windows.Input;
-using System.Windows.Interop;
-using System.Windows.Media;
-using System.Windows.Media.Animation;
-using System.Windows.Media.Imaging;
-using System.Windows.Shapes;
-using System.Windows.Shell;
-using System.Windows.Threading;
 
 namespace DesktopVitals
 {
-    class WatchRule
-    {
-        public string Label;
-        public string Match;
-        public bool ByExe;
-        public string Check;      // a file, folder or http address that shows the bot is working
-        public string Code;       // the bot's folder, opened in your editor on click
-        public bool Ai;           // shown in the AI card: "| ai", or the match names a known AI program
-        public string Kind;       // "| kind: Agent" overrides what the line is called in the AI card
-        public string Raw;        // the line as written, so the review screen can change it in place
-        public bool IsBot { get { return Check != null; } }
-
-        static readonly string[] AiWords = { "claude", "openclaw", "codex", "gemini", "chatgpt", "openai", "anthropic", "grok", "cursor", "windsurf", "copilot", "aider", "ollama", "llama", "lm studio", "koboldcpp", "vllm", "perplexity", "meetily" };
-        public static bool SoundsLikeAi(string s) { return AiWords.Any(w => s.IndexOf(w, StringComparison.OrdinalIgnoreCase) >= 0); }
-
-        // watch.txt and review.txt live under %APPDATA%\DesktopVitals.
-        public static string ConfigFile()
-        {
-            return System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "DesktopVitals", "watch.txt");
-        }
-        public static string ReviewFile()
-        {
-            return System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "DesktopVitals", "review.txt");
-        }
-
-        public static bool ConfigTooLarge;
-
-        // File.ReadAllLines keeps BOM and UTF-16. Skip files over 1 MB.
-        public static List<string> ReadLines(string file)
-        {
-            var list = new List<string>();
-            if (!File.Exists(file)) return list;
-            try
-            {
-                if (new FileInfo(file).Length > 1024 * 1024) { ConfigTooLarge = true; return list; }
-                list.AddRange(File.ReadAllLines(file));
-            }
-            catch (Exception) { }
-            return list;
-        }
-
-        public static Dictionary<string, string> ParseSettings(List<string> lines)
-        {
-            var d = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            foreach (string raw in lines)
-            {
-                string line = raw.Trim();
-                int eq = line.IndexOf('=');
-                if (!line.StartsWith("@") || eq < 2) continue;
-                d[line.Substring(1, eq - 1).Trim()] = line.Substring(eq + 1).Trim();
-            }
-            return d;
-        }
-
-        public static List<string> ParseMany(List<string> lines, string key)
-        {
-            var list = new List<string>();
-            foreach (string raw in lines)
-            {
-                string line = raw.Trim();
-                int eq = line.IndexOf('=');
-                if (line.StartsWith("@") && eq > 1 && line.Substring(1, eq - 1).Trim().Equals(key, StringComparison.OrdinalIgnoreCase))
-                    list.Add(line.Substring(eq + 1).Trim());
-            }
-            return list;
-        }
-
-        public static List<WatchRule> ParseRules(List<string> lines)
-        {
-            var rules = new List<WatchRule>();
-            foreach (string raw in lines)
-            {
-                string line = raw.Trim();
-                if (line.Length == 0 || line.StartsWith("#") || line.StartsWith("@")) continue;
-                int eq = line.IndexOf('=');
-                if (eq <= 0) continue;
-                var r = new WatchRule();
-                r.Label = line.Substring(0, eq).Trim();
-                var parts = line.Substring(eq + 1).Split('|');
-                r.Match = parts[0].Trim();
-                foreach (var part in parts.Skip(1))
-                {
-                    string x = part.Trim();
-                    if (x.StartsWith("check:", StringComparison.OrdinalIgnoreCase)) r.Check = x.Substring(6).Trim();
-                    else if (x.StartsWith("code:", StringComparison.OrdinalIgnoreCase)) r.Code = x.Substring(5).Trim();
-                    else if (x.Equals("ai", StringComparison.OrdinalIgnoreCase)) r.Ai = true;
-                    else if (x.StartsWith("kind:", StringComparison.OrdinalIgnoreCase)) r.Kind = Theme.Kinds.Keys.FirstOrDefault(k => k.Equals(x.Substring(5).Trim(), StringComparison.OrdinalIgnoreCase));
-                }
-                r.Raw = raw;
-                if (r.Kind != null && Theme.AiKinds.Contains(r.Kind)) r.Ai = true;
-                if (SoundsLikeAi(r.Label + " " + r.Match)) r.Ai = true;
-                r.ByExe = r.Match.EndsWith(".exe", StringComparison.OrdinalIgnoreCase);
-                if (r.Match.Length > 0) rules.Add(r);
-            }
-            return rules;
-        }
-
-        public bool Hit(Proc p)
-        {
-            if (ByExe) return string.Equals(p.Exe, Match, StringComparison.OrdinalIgnoreCase);
-            return p.Cmd.IndexOf(Match, StringComparison.OrdinalIgnoreCase) >= 0;
-        }
-    }
-
-    // Scrub secrets and user folder names for tips, vitals.txt, errors.log. Matching still uses raw Cmd.
-    static class Privacy
+    // Scrub secrets and user folder names for the board, vitals.txt, and errors.log.
+    static class Redact
     {
         static readonly Regex Secret = new Regex(@"(?i)(?:--?(?:api[_-]?key|token|access[_-]?token|secret|password|passwd|pwd)\b\s*[=:]?\s*)\S+|(?:(?:api[_-]?key|token|password|passwd|secret)\s*=\s*)\S+|\b(?:sk-[A-Za-z0-9_\-]{8,}|ghp_[A-Za-z0-9]{20,}|gho_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|xox[baprs]-[A-Za-z0-9\-]{10,})\b|\bBearer\s+\S+|(?:https?|ftp)://[^/\s:@]+:[^/\s:@]+@[^\s]+", RegexOptions.Compiled);
         static readonly Regex UserDir = new Regex(@"(?i)([A-Za-z]:\\|\\\\)Users([/\\])[^/\\]+", RegexOptions.Compiled);
@@ -140,7 +24,7 @@ namespace DesktopVitals
 
     static class ErrorLog
     {
-        const string Ver = "1.0";
+        const string Ver = "2.0";
         const int Cap = 256 * 1024;
 
         public static void Write(Exception ex)
@@ -148,14 +32,14 @@ namespace DesktopVitals
             if (ex == null) return;
             try
             {
-                string dir = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "DesktopVitals");
+                string dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "DesktopVitals");
                 Directory.CreateDirectory(dir);
-                string file = System.IO.Path.Combine(dir, "errors.log");
+                string file = Path.Combine(dir, "errors.log");
                 var sb = new StringBuilder();
                 sb.Append(DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture)).Append(" ver=").Append(Ver);
                 sb.Append(" type=").Append(ex.GetType().FullName);
-                sb.Append(" msg=").Append(Privacy.Log(ex.Message)).Append('\n');
-                if (ex.StackTrace != null) sb.Append(Privacy.Log(ex.StackTrace)).Append('\n');
+                sb.Append(" msg=").Append(Redact.Log(ex.Message)).Append('\n');
+                if (ex.StackTrace != null) sb.Append(Redact.Log(ex.StackTrace)).Append('\n');
                 sb.Append('\n');
                 byte[] add = Encoding.UTF8.GetBytes(sb.ToString());
                 byte[] prior = File.Exists(file) ? File.ReadAllBytes(file) : new byte[0];
@@ -177,41 +61,297 @@ namespace DesktopVitals
         }
     }
 
+    class PinRule
+    {
+        public string Id;
+        public string Label;
+        public string Match;
+        public bool ByExe;
+    }
+
+    // %APPDATA%\DesktopVitals\prefs.txt. One-time copy of hides and pins from watch.txt.
+    static class Prefs
+    {
+        public static string Name = "";
+        public static readonly Dictionary<string, string> Rename = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        public static readonly HashSet<string> Hides = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        public static readonly HashSet<string> PinIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        public static readonly List<PinRule> PinRules = new List<PinRule>();
+        public static bool Migrated;
+        public static bool ImportNote;
+        public static bool Readable = true;
+        public static bool TooLarge;
+
+        public static string Dir()
+        {
+            return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "DesktopVitals");
+        }
+
+        public static string FilePath() { return Path.Combine(Dir(), "prefs.txt"); }
+
+        public static void Load()
+        {
+            Readable = true;
+            TooLarge = false;
+            Migrated = false;
+            ImportNote = false;
+            Name = "";
+            Rename.Clear();
+            Hides.Clear();
+            PinIds.Clear();
+            PinRules.Clear();
+            string path = FilePath();
+            if (!File.Exists(path)) return;
+            try
+            {
+                byte[] bytes = File.ReadAllBytes(path);
+                if (bytes.Length > 1024 * 1024) { TooLarge = true; return; }
+                for (int i = 0; i < bytes.Length; i++) if (bytes[i] == 0) { Readable = false; return; }
+                string text = Encoding.UTF8.GetString(bytes);
+                if (text.Length > 0 && text[0] == '\uFEFF') text = text.Substring(1);
+                string[] lines = text.Split(new[] { "\r\n", "\n" }, StringSplitOptions.None);
+                foreach (string raw in lines)
+                {
+                    string line = raw.Trim();
+                    int eq = line.IndexOf('=');
+                    if (eq <= 0) continue;
+                    string key = line.Substring(0, eq).Trim();
+                    string val = line.Substring(eq + 1);
+                    if (key.Equals("name", StringComparison.OrdinalIgnoreCase)) Name = val.Trim();
+                    else if (key.Equals("rename", StringComparison.OrdinalIgnoreCase))
+                    {
+                        string[] parts = val.Split(new[] { '|' }, 2);
+                        if (parts.Length == 2 && parts[0].Length > 0) Rename[parts[0]] = parts[1];
+                    }
+                    else if (key.Equals("hide", StringComparison.OrdinalIgnoreCase))
+                    {
+                        string hide = val.Trim();
+                        if (hide.Length > 0) Hides.Add(hide);
+                    }
+                    else if (key.Equals("pin", StringComparison.OrdinalIgnoreCase))
+                    {
+                        string id = val.Trim();
+                        if (id.Length > 0) PinIds.Add(id);
+                    }
+                    else if (key.Equals("pinmatch", StringComparison.OrdinalIgnoreCase))
+                    {
+                        string[] parts = val.Split(new[] { '|' }, 3);
+                        if (parts.Length == 3 && parts[1].Trim().Length > 0 && parts[2].Length > 0)
+                        {
+                            var rule = new PinRule();
+                            rule.Label = parts[1].Trim();
+                            rule.Match = parts[2];
+                            rule.ByExe = parts[0].Trim() == "1" || rule.Match.EndsWith(".exe", StringComparison.OrdinalIgnoreCase);
+                            rule.Id = "pin:" + rule.Label;
+                            PinRules.Add(rule);
+                        }
+                    }
+                    else if (key.Equals("migratedFromWatch", StringComparison.OrdinalIgnoreCase)) Migrated = val.Trim() == "1";
+                    else if (key.Equals("importNote", StringComparison.OrdinalIgnoreCase)) ImportNote = val.Trim() == "1";
+                }
+            }
+            catch (Exception) { Readable = false; }
+        }
+
+        public static bool Save()
+        {
+            if (!Readable || TooLarge) return false;
+            try
+            {
+                var sb = new StringBuilder();
+                if (!string.IsNullOrEmpty(Name)) sb.Append("name=").Append(Name).Append('\n');
+                foreach (var kv in Rename) sb.Append("rename=").Append(kv.Key).Append('|').Append(kv.Value).Append('\n');
+                foreach (string h in Hides) sb.Append("hide=").Append(h).Append('\n');
+                foreach (string id in PinIds) sb.Append("pin=").Append(id).Append('\n');
+                foreach (PinRule rule in PinRules)
+                    sb.Append("pinmatch=").Append(rule.ByExe ? "1" : "0").Append('|').Append(rule.Label).Append('|').Append(rule.Match).Append('\n');
+                if (Migrated) sb.Append("migratedFromWatch=1\n");
+                if (ImportNote) sb.Append("importNote=1\n");
+                Directory.CreateDirectory(Dir());
+                File.WriteAllText(FilePath(), sb.ToString(), new UTF8Encoding(false));
+                return true;
+            }
+            catch (Exception) { return false; }
+        }
+
+        public static void Migrate()
+        {
+            if (!Readable || TooLarge || Migrated) return;
+            try
+            {
+                string watch = Path.Combine(Dir(), "watch.txt");
+                string review = Path.Combine(Dir(), "review.txt");
+                bool haveWatch = File.Exists(watch);
+                bool haveReview = File.Exists(review);
+                if (!haveWatch && !haveReview) return;
+                var lines = new List<string>();
+                bool huge = false;
+                if (haveWatch && !ReadSource(watch, lines, ref huge)) return;
+                if (haveReview && !ReadSource(review, lines, ref huge)) return;
+                if (huge) return;
+                bool imported = false;
+                foreach (string raw in lines)
+                {
+                    string line = raw.Trim();
+                    if (line.Length == 0 || line.StartsWith("#")) continue;
+                    int eq = line.IndexOf('=');
+                    if (eq <= 0) continue;
+                    if (line.StartsWith("@"))
+                    {
+                        string key = line.Substring(1, eq - 1).Trim();
+                        string val = line.Substring(eq + 1).Trim();
+                        if (key.Equals("hide", StringComparison.OrdinalIgnoreCase) && val.Length > 0)
+                        {
+                            Hides.Add(val);
+                            imported = true;
+                        }
+                        continue;
+                    }
+                    string label = line.Substring(0, eq).Trim();
+                    string rest = line.Substring(eq + 1);
+                    string[] parts = rest.Split('|');
+                    string match = parts.Length == 0 ? "" : parts[0].Trim();
+                    if (label.Length == 0 || match.Length == 0) continue;
+                    if (HavePin(label)) continue;
+                    var rule = new PinRule();
+                    rule.Label = label;
+                    rule.Match = match;
+                    rule.ByExe = match.EndsWith(".exe", StringComparison.OrdinalIgnoreCase);
+                    rule.Id = "pin:" + label;
+                    PinRules.Add(rule);
+                    imported = true;
+                }
+                Migrated = true;
+                ImportNote = imported;
+                if (!Save()) return;
+                Archive(watch);
+                Archive(review);
+            }
+            catch (Exception) { }
+        }
+
+        static bool HavePin(string label)
+        {
+            foreach (PinRule rule in PinRules)
+                if (rule.Label != null && rule.Label.Equals(label, StringComparison.OrdinalIgnoreCase)) return true;
+            return false;
+        }
+
+        static bool ReadSource(string path, List<string> lines, ref bool huge)
+        {
+            try
+            {
+                var fi = new FileInfo(path);
+                if (fi.Length > 1024 * 1024) { huge = true; return true; }
+                byte[] bytes = File.ReadAllBytes(path);
+                for (int i = 0; i < bytes.Length; i++) if (bytes[i] == 0) return false;
+                string text = Encoding.UTF8.GetString(bytes);
+                if (text.Length > 0 && text[0] == '\uFEFF') text = text.Substring(1);
+                lines.AddRange(text.Split(new[] { "\r\n", "\n" }, StringSplitOptions.None));
+                return true;
+            }
+            catch (Exception) { return false; }
+        }
+
+        static void Archive(string path)
+        {
+            try
+            {
+                if (!File.Exists(path)) return;
+                string dest = path + ".migrated";
+                if (File.Exists(dest)) return;
+                File.Move(path, dest);
+            }
+            catch (Exception) { }
+        }
+    }
+
     static class Program
     {
         [STAThread]
         static void Main(string[] args)
         {
-            AppDomain.CurrentDomain.UnhandledException += (s, e) => { ErrorLog.Write(e.ExceptionObject as Exception); };
-            int at = Array.FindIndex(args, a => a.Equals("--snapshot", StringComparison.OrdinalIgnoreCase));
+            AppDomain.CurrentDomain.UnhandledException += delegate(object s, UnhandledExceptionEventArgs e) { ErrorLog.Write(e.ExceptionObject as Exception); };
+            try { Prefs.Load(); Prefs.Migrate(); }
+            catch (Exception ex) { ErrorLog.Write(ex); }
+            bool changed = ApplyPrefArgs(args);
+            int at = Find(args, "--snapshot");
             if (at >= 0)
             {
-                string dir = at + 1 < args.Length && !args[at + 1].StartsWith("--") ? args[at + 1] : System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "DesktopVitals", "snapshot");
+                string dir = at + 1 < args.Length && !args[at + 1].StartsWith("--")
+                    ? args[at + 1]
+                    : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "DesktopVitals", "snapshot");
                 var snapApp = new Application { ShutdownMode = ShutdownMode.OnMainWindowClose };
-                snapApp.DispatcherUnhandledException += (s, e) => { ErrorLog.Write(e.Exception); e.Handled = true; };
-                // "--review" pictures the review screen; "--accept-review" writes review.txt without touching watch.txt.
-                bool review = args.Any(a => a.Equals("--review", StringComparison.OrdinalIgnoreCase));
-                bool accept = args.Any(a => a.Equals("--accept-review", StringComparison.OrdinalIgnoreCase));
-                var snapWin = new VitalsWindow(System.IO.Path.GetFullPath(dir), review, accept);
-                // "--width 1200" pictures a widened window.
-                int wAt = Array.FindIndex(args, a => a.Equals("--width", StringComparison.OrdinalIgnoreCase));
+                snapApp.DispatcherUnhandledException += delegate(object s, System.Windows.Threading.DispatcherUnhandledExceptionEventArgs e) { ErrorLog.Write(e.Exception); e.Handled = true; };
+                var snapWin = new VitalsWindow(Path.GetFullPath(dir));
+                int wAt = Find(args, "--width");
                 double w;
-                if (wAt >= 0 && wAt + 1 < args.Length && double.TryParse(args[wAt + 1], NumberStyles.Float, CultureInfo.InvariantCulture, out w)) snapWin.Width = Math.Max(snapWin.MinWidth, w);
+                if (wAt >= 0 && wAt + 1 < args.Length && double.TryParse(args[wAt + 1], NumberStyles.Float, CultureInfo.InvariantCulture, out w))
+                    snapWin.Width = Math.Max(snapWin.MinWidth, w);
                 snapApp.Run(snapWin);
                 return;
             }
+            if (changed) return;
             bool created;
             using (var signal = new EventWaitHandle(false, EventResetMode.AutoReset, @"Local\DesktopVitals.Show", out created))
             {
                 if (!created) { signal.Set(); return; }
                 var app = new Application { ShutdownMode = ShutdownMode.OnMainWindowClose };
-                // One bad reading (an odd process, a driver hiccup) should skip a refresh, not close the window.
-                app.DispatcherUnhandledException += (s, e) => { ErrorLog.Write(e.Exception); e.Handled = true; };
+                app.DispatcherUnhandledException += delegate(object s, System.Windows.Threading.DispatcherUnhandledExceptionEventArgs e) { ErrorLog.Write(e.Exception); e.Handled = true; };
                 var win = new VitalsWindow();
                 ThreadPool.RegisterWaitForSingleObject(signal, delegate { win.Dispatcher.BeginInvoke(new Action(win.Toggle)); }, null, -1, false);
                 app.Run(win);
             }
         }
-    }
 
+        static int Find(string[] args, string flag)
+        {
+            if (args == null) return -1;
+            for (int i = 0; i < args.Length; i++)
+                if (args[i].Equals(flag, StringComparison.OrdinalIgnoreCase)) return i;
+            return -1;
+        }
+
+        static bool ApplyPrefArgs(string[] args)
+        {
+            if (args == null || args.Length == 0) return false;
+            bool changed = false;
+            for (int i = 0; i < args.Length; i++)
+            {
+                string a = args[i];
+                if (a.Equals("--name", StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length && !args[i + 1].StartsWith("--"))
+                {
+                    Prefs.Name = args[++i];
+                    changed = true;
+                }
+                else if (a.Equals("--rename", StringComparison.OrdinalIgnoreCase) && i + 2 < args.Length)
+                {
+                    string id = args[++i];
+                    string name = args[++i];
+                    if (id.Length > 0) { Prefs.Rename[id] = name; changed = true; }
+                }
+                else if (a.Equals("--hide", StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length && !args[i + 1].StartsWith("--"))
+                {
+                    Prefs.Hides.Add(args[++i]);
+                    changed = true;
+                }
+                else if (a.Equals("--pin", StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length && !args[i + 1].StartsWith("--"))
+                {
+                    Prefs.PinIds.Add(args[++i]);
+                    changed = true;
+                }
+                else if (a.Equals("--unpin", StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length && !args[i + 1].StartsWith("--"))
+                {
+                    string id = args[++i];
+                    Prefs.PinIds.Remove(id);
+                    for (int p = Prefs.PinRules.Count - 1; p >= 0; p--)
+                        if (Prefs.PinRules[p].Id == id || string.Equals(Prefs.PinRules[p].Label, id, StringComparison.OrdinalIgnoreCase))
+                            Prefs.PinRules.RemoveAt(p);
+                    changed = true;
+                }
+            }
+            if (changed) Prefs.Save();
+            return changed;
+        }
+    }
 }

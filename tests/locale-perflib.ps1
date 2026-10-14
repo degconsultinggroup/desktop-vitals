@@ -7,7 +7,11 @@ $script:FailCount = 0
 function Write-Check {
     param([string]$Name, [bool]$Ok, [string]$Detail = '')
     $tag = if ($Ok) { 'PASS' } else { 'FAIL' }
-    if (-not $Ok) { $script:FailCount++ }
+    if (-not $Ok) {
+        $script:FailCount++
+        $flat = if ($Detail) { $Detail -replace '[\r\n]+', ' ' } else { 'failed' }
+        Write-Host ("::error::{0}: {1}" -f $Name, $flat)
+    }
     if ($Detail) { Write-Host ("{0} {1} ({2})" -f $tag, $Name, $Detail) }
     else { Write-Host ("{0} {1}" -f $tag, $Name) }
 }

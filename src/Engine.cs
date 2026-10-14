@@ -1,4 +1,4 @@
-// Facts the window reads: processes, scripts, models, tasks, GPU counters.
+// Facts to a Board: processes, scripts, models, tasks, and GPU counters.
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -9,16 +9,6 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
-using System.Windows;
-using System.Windows.Controls;
-using System.Windows.Input;
-using System.Windows.Interop;
-using System.Windows.Media;
-using System.Windows.Media.Animation;
-using System.Windows.Media.Imaging;
-using System.Windows.Shapes;
-using System.Windows.Shell;
-using System.Windows.Threading;
 
 namespace DesktopVitals
 {
@@ -309,7 +299,7 @@ namespace DesktopVitals
         public List<string> NameKeys = new List<string>();   // looked for in the source of a script using the GPU
     }
 
-    // Installed models: drive/user/AppData models folders, beside scripts, HF/Ollama/LM Studio, @models in watch.txt.
+    // Installed models: drive/user/AppData models folders, beside scripts, HF/Ollama/LM Studio.
 
     static class ModelStore
     {
@@ -652,138 +642,6 @@ namespace DesktopVitals
         }
     }
 
-    // Sign-in start: Startup folder, registry Run, or a logon/boot-only scheduled task.
-
-    class StartItem
-    {
-        public string Name, Where, Exe, Script;
-        public TaskInfo Task;
-    }
-
-    // Sign-in programs (Startup apps), minus off switches. Refresh at most once a minute off UI thread.
-
-    static class StartupList
-    {
-        public static List<StartItem> Items = new List<StartItem>();
-        static bool busy;
-        static DateTime read = DateTime.MinValue;
-
-        public static void Soon() { if (!busy) read = DateTime.MinValue; }
-
-        public static void Refresh()
-        {
-            if (busy || (DateTime.Now - read).TotalSeconds < 60) return;
-            busy = true;
-            var t = new Thread(delegate ()
-            {
-                var found = new List<StartItem>();
-                try { Folders(found); } catch (Exception) { }
-                try { RunKeys(found); } catch (Exception) { }
-                Items = found;
-                read = DateTime.Now;
-                busy = false;
-            });
-            t.SetApartmentState(ApartmentState.STA);   // the shortcut reader is a COM object
-            t.IsBackground = true;
-            t.Start();
-        }
-
-        // Task Manager's on/off switch for each entry: the first byte is even when on, odd when turned off.
-        static bool TurnedOff(Microsoft.Win32.RegistryKey hive, string list, string name)
-        {
-            try
-            {
-                using (var k = hive.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\" + list))
-                {
-                    var v = k == null ? null : k.GetValue(name) as byte[];
-                    return v != null && v.Length > 0 && (v[0] & 1) == 1;
-                }
-            }
-            catch (Exception) { return false; }
-        }
-
-        static void Folders(List<StartItem> found)
-        {
-            dynamic shell = Activator.CreateInstance(Type.GetTypeFromProgID("WScript.Shell"));
-            var places = new[]
-            {
-                new { Dir = Environment.GetFolderPath(Environment.SpecialFolder.Startup), Hive = Microsoft.Win32.Registry.CurrentUser },
-                new { Dir = Environment.GetFolderPath(Environment.SpecialFolder.CommonStartup), Hive = Microsoft.Win32.Registry.LocalMachine },
-            };
-            foreach (var place in places)
-            {
-                if (string.IsNullOrEmpty(place.Dir) || !Directory.Exists(place.Dir)) continue;
-                foreach (string f in Directory.GetFiles(place.Dir))
-                {
-                    string file = System.IO.Path.GetFileName(f);
-                    if (file.Equals("desktop.ini", StringComparison.OrdinalIgnoreCase) || TurnedOff(place.Hive, "StartupFolder", file)) continue;
-                    var item = new StartItem { Name = System.IO.Path.GetFileNameWithoutExtension(f), Where = "Startup folder", Exe = f };
-                    if (f.EndsWith(".lnk", StringComparison.OrdinalIgnoreCase))
-                    {
-                        try
-                        {
-                            dynamic lnk = shell.CreateShortcut(f);
-                            item.Exe = (string)lnk.TargetPath;
-                            item.Script = ScriptIn((string)lnk.Arguments);
-                        }
-                        catch (Exception) { }
-                    }
-                    else if (Scripts.IsScriptFile(f)) item.Script = f;
-                    if (item.Script == null && Scripts.IsWindowsNoise(item.Name, item.Exe ?? f)) continue;
-                    found.Add(item);
-                }
-            }
-        }
-
-        static void RunKeys(List<StartItem> found)
-        {
-            string win = Environment.GetFolderPath(Environment.SpecialFolder.Windows);
-            foreach (var hive in new[] { Microsoft.Win32.Registry.CurrentUser, Microsoft.Win32.Registry.LocalMachine })
-                foreach (var sub in new[] { "Run", "Run32" })
-                {
-                    string path = sub == "Run" ? @"Software\Microsoft\Windows\CurrentVersion\Run" : @"Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Run";
-                    using (var k = hive.OpenSubKey(path))
-                    {
-                        if (k == null) continue;
-                        foreach (string name in k.GetValueNames())
-                        {
-                            if (TurnedOff(hive, sub, name)) continue;
-                            string cmd = Environment.ExpandEnvironmentVariables(k.GetValue(name) as string ?? "").Trim();
-                            if (cmd.Length == 0) continue;
-                            string exe = ExeOf(cmd);
-                            if (exe.StartsWith(win + "\\", StringComparison.OrdinalIgnoreCase)) continue;   // Windows' own (Security, etc.)
-                            // "GoogleChromeAutoLaunch_23DF09..." says less than the program's own description.
-                            string label = name;
-                            if (Regex.IsMatch(name, "_[0-9A-Fa-f]{16,}$"))
-                            {
-                                label = Regex.Replace(name, "(AutoLaunch)?_[0-9A-Fa-f]{16,}$", "");
-                                try { string d = FileVersionInfo.GetVersionInfo(exe).FileDescription; if (!string.IsNullOrWhiteSpace(d)) label = d.Trim(); } catch (Exception) { }
-                            }
-                            if (Scripts.IsWindowsNoise(label, exe)) continue;
-                            int at = cmd.IndexOf(exe, StringComparison.OrdinalIgnoreCase);
-                            string rest = at < 0 ? "" : cmd.Substring(at + exe.Length).TrimStart('"');
-                            found.Add(new StartItem { Name = label, Where = "Startup apps", Exe = exe, Script = ScriptIn(rest) });
-                        }
-                    }
-                }
-        }
-
-        // The program a command line starts: the quoted first part, or everything up to ".exe".
-        static string ExeOf(string cmd)
-        {
-            if (cmd.StartsWith("\"")) { int end = cmd.IndexOf('"', 1); return end > 0 ? cmd.Substring(1, end - 1) : cmd.Trim('"'); }
-            int at = cmd.IndexOf(".exe", StringComparison.OrdinalIgnoreCase);
-            return at > 0 ? cmd.Substring(0, at + 4) : Scripts.SplitArgs(cmd)[0];
-        }
-
-        static string ScriptIn(string args)
-        {
-            foreach (string a in Scripts.SplitArgs(args ?? ""))
-                if (!a.StartsWith("-") && Scripts.IsScriptFile(a)) return a;
-            return null;
-        }
-    }
-
     // GPU load/memory from Windows counters when NVML is absent (AMD, Intel).
 
     static class GpuCounters
@@ -903,90 +761,692 @@ namespace DesktopVitals
         }
     }
 
-    // What a bot's check says: when it last showed signs of work, and how long it has been up.
+    // The board is the contract the window draws. Agents, quiet bots, ended work, and heavy other land here later.
 
-    class BotStatus
+    class Board
     {
-        public DateTime? LastSign;     // newest heartbeat file write, or the time the http check answered
-        public TimeSpan? Uptime;       // from the http check, when it reports one
-        public string Problem;         // set when the http check answers but reports something failing
-        public bool Busy;
-        public DateTime Read = DateTime.MinValue;
+        public string name = "";
+        public Strip strip = new Strip();
+        public Headline headline = new Headline();
+        public List<Group> groups = new List<Group>();
+    }
 
-        public void Refresh(WatchRule r)
+    class Strip
+    {
+        public double cpu, ram_used_gb, ram_total_gb, disk_free_gb, disk_total_gb;
+        public double? gpu, gpu_temp, vram_used_gb, vram_total_gb;
+    }
+
+    class Headline
+    {
+        public string text = "All good";
+        public bool needs_you;
+    }
+
+    class Group
+    {
+        public string title = "";
+        public string kind = "project";
+        public List<Thing> things = new List<Thing>();
+    }
+
+    class Thing
+    {
+        public string id = "";
+        public string name = "";
+        public string kind = "other";
+        public string state = "idle";
+        public string project;
+        public string branch;
+        public string folder;
+        public List<int> ports = new List<int>();
+        public double cpu, ram_mb, vram_mb;
+        public int count = 1;
+        public string since = "";
+        public string detail;
+        public string why = "";
+        public bool pinned;
+    }
+
+    // Dedicated video memory per process. Off the UI thread, at most every 5 s.
+    static class Vram
+    {
+        public static Dictionary<int, long> ByPid = new Dictionary<int, long>();
+        static bool busy;
+        static DateTime read = DateTime.MinValue;
+
+        public static void Refresh()
         {
-            if (Busy || (DateTime.Now - Read).TotalSeconds < 10) return;
-            Busy = true;
+            if (busy || (DateTime.Now - read).TotalSeconds < 5) return;
+            busy = true;
             ThreadPool.QueueUserWorkItem(delegate
             {
+                var next = new Dictionary<int, long>();
                 try
                 {
-                    if (r.Check.StartsWith("http", StringComparison.OrdinalIgnoreCase)) ReadHttp(r.Check);
-                    else LastSign = NewestWrite(r.Check);
+                    var data = new PerformanceCounterCategory(GpuCounters.PerfName("GPU Process Memory")).ReadCategory();
+                    var usage = data[GpuCounters.PerfName("Local Usage")];
+                    if (usage != null)
+                        foreach (InstanceData d in usage.Values)
+                        {
+                            var m = Regex.Match(d.InstanceName, "^pid_(\\d+)_");
+                            if (!m.Success || d.RawValue <= 0) continue;
+                            int pid = int.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture);
+                            long have;
+                            next.TryGetValue(pid, out have);
+                            next[pid] = have + d.RawValue;
+                        }
                 }
                 catch (Exception) { }
-                finally { Read = DateTime.Now; Busy = false; }
+                ByPid = next;
+                read = DateTime.Now;
+                busy = false;
             });
-        }
-
-        void ReadHttp(string url)
-        {
-            Uri uri;
-            if (!Uri.TryCreate(url, UriKind.Absolute, out uri)
-                || !string.Equals(uri.Scheme, "http", StringComparison.OrdinalIgnoreCase)
-                || !uri.IsLoopback)
-            {
-                Uptime = null; LastSign = null; Problem = "check must be a local address";
-                return;
-            }
-            try
-            {
-                var req = (System.Net.HttpWebRequest)System.Net.WebRequest.Create(uri);
-                req.Timeout = 3000; req.ReadWriteTimeout = 3000; req.Proxy = null; req.AllowAutoRedirect = false;
-                using (var resp = req.GetResponse())
-                using (var stream = resp.GetResponseStream())
-                using (var sr = new StreamReader(stream))
-                {
-                    var buf = new char[64 * 1024];
-                    sr.Read(buf, 0, buf.Length);
-                }
-                LastSign = DateTime.Now;
-                Uptime = null;
-                Problem = null;
-            }
-            catch (Exception) { Uptime = null; Problem = null; }
-        }
-
-        // A file's last write, or for a folder the newest file in its newest subfolder (data\20261010\...).
-        static DateTime? NewestWrite(string path)
-        {
-            if (File.Exists(path)) return File.GetLastWriteTime(path);
-            if (!Directory.Exists(path)) return null;
-            DateTime? newest = null;
-            string dir = path;
-            int seen = 0;
-            for (int depth = 0; depth < 4 && dir != null; depth++)
-            {
-                string[] files;
-                try { files = Directory.GetFiles(dir); }
-                catch (Exception) { break; }
-                foreach (var f in files)
-                {
-                    if (++seen > 500) return newest;
-                    try
-                    {
-                        var t = File.GetLastWriteTime(f);
-                        if (newest == null || t > newest) newest = t;
-                    }
-                    catch (Exception) { }
-                }
-                string[] subs;
-                try { subs = Directory.GetDirectories(dir); }
-                catch (Exception) { break; }
-                dir = subs.Length == 0 ? null : subs.OrderBy(d => d, StringComparer.OrdinalIgnoreCase).Last();
-            }
-            return newest;
         }
     }
 
+    // ModelStore.Scan on a background thread, at most every 30 s.
+    static class ModelScan
+    {
+        public static List<InstalledModel> Items = new List<InstalledModel>();
+        public static bool Ready;
+        static bool busy;
+        static DateTime read = DateTime.MinValue;
+
+        public static void Refresh(IEnumerable<string> folders)
+        {
+            if (busy || (Ready && (DateTime.Now - read).TotalSeconds < 30)) return;
+            busy = true;
+            var copy = new List<string>(folders);
+            ThreadPool.QueueUserWorkItem(delegate
+            {
+                var found = new List<InstalledModel>();
+                try { found = ModelStore.Scan(new string[0], copy); }
+                catch (Exception) { }
+                Items = found;
+                read = DateTime.Now;
+                Ready = true;
+                busy = false;
+            });
+        }
+    }
+
+    static class BoardText
+    {
+        public static string Dot(string state)
+        {
+            switch (state)
+            {
+                case "working":
+                case "running": return "\u25CF";
+                case "waiting": return "\u25D0";
+                case "quiet": return "\u25CC";
+                case "failed": return "\u2715";
+                case "idle": return "\u25CB";
+                case "ended": return "\u2713";
+                default: return "\u25CB";
+            }
+        }
+
+        public static string Phrase(string state)
+        {
+            switch (state)
+            {
+                case "working": return "working";
+                case "running": return "running";
+                case "waiting": return "waiting on you";
+                case "quiet": return "quiet";
+                case "idle": return "idle";
+                case "failed": return "failed";
+                case "ended": return "ended";
+                default: return state ?? "";
+            }
+        }
+
+        public static string DisplayName(Thing t)
+        {
+            if (t.count > 1 && (t.name == null || t.name.IndexOf(" models on disk", StringComparison.Ordinal) < 0))
+                return (t.name ?? "") + " \u00D7" + t.count.ToString(CultureInfo.InvariantCulture);
+            return t.name ?? "";
+        }
+
+        public static string Num(double v)
+        {
+            if (double.IsNaN(v) || double.IsInfinity(v)) v = 0;
+            double rounded = Math.Round(v, 1);
+            double whole = Math.Round(rounded);
+            bool near = Math.Abs(rounded - whole) < 0.05;
+            if (near && (Math.Abs(whole) >= 10 || Math.Abs(v - whole) < 0.001))
+                return whole.ToString("0", CultureInfo.InvariantCulture);
+            return rounded.ToString("0.0", CultureInfo.InvariantCulture);
+        }
+
+        public static string Pct(double v)
+        {
+            int n = (int)Math.Round(v);
+            if (n < 0) n = 0;
+            if (n > 100) n = 100;
+            return n.ToString(CultureInfo.InvariantCulture) + "%";
+        }
+
+        public static string Strip(Strip s)
+        {
+            if (s == null) return "";
+            var parts = new List<string>();
+            parts.Add("CPU " + Pct(s.cpu));
+            parts.Add("RAM " + Num(s.ram_used_gb) + "/" + Num(s.ram_total_gb) + " GB");
+            if (s.gpu.HasValue)
+            {
+                string gpu = "GPU " + Pct(s.gpu.Value);
+                if (s.gpu_temp.HasValue) gpu += " " + ((int)Math.Round(s.gpu_temp.Value)).ToString(CultureInfo.InvariantCulture) + "\u00B0";
+                parts.Add(gpu);
+            }
+            if (s.vram_used_gb.HasValue || s.vram_total_gb.HasValue)
+            {
+                string used = s.vram_used_gb.HasValue ? Num(s.vram_used_gb.Value) : "0";
+                string total = s.vram_total_gb.HasValue ? Num(s.vram_total_gb.Value) : "?";
+                parts.Add("VRAM " + used + "/" + total + " GB");
+            }
+            parts.Add("Disk " + Num(s.disk_free_gb) + " GB free");
+            return string.Join(" \u00B7 ", parts.ToArray());
+        }
+
+        public static string Render(Board b)
+        {
+            if (b == null) b = new Board();
+            var sb = new StringBuilder();
+            sb.Append("Desktop Vitals  ").Append(b.name ?? "").Append("  ");
+            sb.Append(DateTime.Now.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture)).Append('\n');
+            sb.Append(Strip(b.strip)).Append('\n');
+            sb.Append('\n');
+            sb.Append(b.headline == null || b.headline.text == null ? "All good" : b.headline.text).Append('\n');
+            if (b.groups != null)
+                foreach (Group g in b.groups)
+                {
+                    sb.Append('\n');
+                    sb.Append(g.title ?? "").Append('\n');
+                    if (g.things == null) continue;
+                    foreach (Thing t in g.things)
+                    {
+                        sb.Append("  ").Append(Dot(t.state)).Append(' ').Append(DisplayName(t));
+                        if (!string.IsNullOrEmpty(t.project)) sb.Append("  ").Append(t.project);
+                        sb.Append("  ").Append(Phrase(t.state));
+                        if (!string.IsNullOrEmpty(t.since)) sb.Append(" \u00B7 ").Append(t.since);
+                        sb.Append('\n');
+                        if (!string.IsNullOrEmpty(t.detail)) sb.Append("    ").Append(t.detail).Append('\n');
+                        if (!string.IsNullOrEmpty(t.why)) sb.Append("    ").Append(t.why).Append('\n');
+                    }
+                }
+            return sb.ToString();
+        }
+    }
+
+    static class Engine
+    {
+        public static Board Current = Empty();
+        public static bool TasksReady { get { return TaskList.Ready; } }
+        public static bool ModelsReady { get { return ModelScan.Ready; } }
+
+        static Dictionary<int, Proc> prevProcs = new Dictionary<int, Proc>();
+        static readonly Dictionary<string, string> cmds = new Dictionary<string, string>();
+        static readonly Dictionary<string, string> cwds = new Dictionary<string, string>();
+        static long prevWall, cpuIdle, cpuKernel, cpuUser;
+        static bool haveWall, haveCpu, logged;
+
+        public static void Reset()
+        {
+            prevProcs = new Dictionary<int, Proc>();
+            cmds.Clear();
+            cwds.Clear();
+            haveWall = false;
+            haveCpu = false;
+            prevWall = cpuIdle = cpuKernel = cpuUser = 0;
+        }
+
+        public static void Prime()
+        {
+            SampleCpu();
+            try { SampleProcs(Procs.Snapshot()); } catch (Exception) { }
+            try { TaskList.Refresh(null); } catch (Exception) { }
+            try { GpuCounters.Refresh(); } catch (Exception) { }
+            try { Vram.Refresh(); } catch (Exception) { }
+        }
+
+        public static Board Tick()
+        {
+            try
+            {
+                Current = Build();
+                logged = false;
+            }
+            catch (Exception ex)
+            {
+                if (!logged) { ErrorLog.Write(ex); logged = true; }
+            }
+            return Current;
+        }
+
+        static Board Empty()
+        {
+            var b = new Board();
+            b.name = Environment.MachineName;
+            b.headline = new Headline();
+            b.headline.text = "All good";
+            return b;
+        }
+
+        static string KeyOf(Proc p) { return p.Pid.ToString(CultureInfo.InvariantCulture) + ":" + p.CreateTime.ToString(CultureInfo.InvariantCulture); }
+
+        static string CmdOf(Proc p)
+        {
+            if (!string.IsNullOrEmpty(p.Cmd)) return p.Cmd;
+            string key = KeyOf(p);
+            string cmd;
+            if (cmds.TryGetValue(key, out cmd)) { p.Cmd = cmd; return cmd; }
+            try { cmd = Procs.CommandLine(p.Pid) ?? ""; }
+            catch (Exception) { cmd = ""; }
+            if (cmds.Count > 4000) cmds.Clear();
+            cmds[key] = cmd;
+            p.Cmd = cmd;
+            return cmd;
+        }
+
+        static string CwdOf(Proc p)
+        {
+            string key = KeyOf(p);
+            string dir;
+            if (cwds.TryGetValue(key, out dir)) return dir;
+            try { dir = Procs.CurrentDirectory(p.Pid); }
+            catch (Exception) { dir = null; }
+            if (cwds.Count > 4000) cwds.Clear();
+            cwds[key] = dir;
+            return dir;
+        }
+
+        static double SampleCpu()
+        {
+            long idle, kernel, user;
+            if (!Native.GetSystemTimes(out idle, out kernel, out user)) return 0;
+            double pct = 0;
+            if (haveCpu)
+            {
+                long dIdle = idle - cpuIdle;
+                long dTotal = (kernel - cpuKernel) + (user - cpuUser);
+                if (dTotal > 0)
+                {
+                    pct = (dTotal - dIdle) * 100.0 / dTotal;
+                    if (pct < 0) pct = 0;
+                    if (pct > 100) pct = 100;
+                }
+            }
+            cpuIdle = idle; cpuKernel = kernel; cpuUser = user; haveCpu = true;
+            return pct;
+        }
+
+        static void SampleProcs(List<Proc> list)
+        {
+            long wall = (long)Native.GetTickCount64();
+            double wallMs = haveWall ? wall - prevWall : 0;
+            int ncpu = Math.Max(1, Environment.ProcessorCount);
+            foreach (Proc p in list)
+            {
+                Proc old;
+                if (wallMs > 0 && prevProcs.TryGetValue(p.Pid, out old) && old.CreateTime == p.CreateTime)
+                {
+                    long d = p.CpuTime - old.CpuTime;
+                    if (d < 0) d = 0;
+                    p.Cpu = (d / 10000.0) / wallMs * 100.0 / ncpu;
+                }
+            }
+            var next = new Dictionary<int, Proc>();
+            foreach (Proc p in list) next[p.Pid] = p;
+            prevProcs = next;
+            prevWall = wall;
+            haveWall = true;
+        }
+
+        static string FormatSpan(TimeSpan span)
+        {
+            int sec = (int)span.TotalSeconds;
+            if (sec < 0) sec = 0;
+            if (sec < 60) return sec.ToString(CultureInfo.InvariantCulture) + "s";
+            int mins = (int)span.TotalMinutes;
+            if (mins < 60) return mins.ToString(CultureInfo.InvariantCulture) + "m";
+            int h = mins / 60;
+            int m = mins % 60;
+            if (m == 0) return h.ToString(CultureInfo.InvariantCulture) + "h";
+            return h.ToString(CultureInfo.InvariantCulture) + "h " + m.ToString(CultureInfo.InvariantCulture) + "m";
+        }
+
+        static string Age(long fileTime)
+        {
+            if (fileTime <= 0) return "";
+            try
+            {
+                TimeSpan span = DateTime.Now - DateTime.FromFileTime(fileTime);
+                return FormatSpan(span);
+            }
+            catch (Exception) { return ""; }
+        }
+
+        static string SinceWhen(DateTime t)
+        {
+            if (t.Year < 2000) return "";
+            try { return FormatSpan(DateTime.Now - t); }
+            catch (Exception) { return ""; }
+        }
+
+        static string Cap(string s)
+        {
+            if (string.IsNullOrEmpty(s)) return "";
+            return s.Length <= 2000 ? s : s.Substring(0, 2000);
+        }
+
+        static bool Hidden(string id, string name)
+        {
+            if (!string.IsNullOrEmpty(id) && Prefs.Hides.Contains(id)) return true;
+            if (!string.IsNullOrEmpty(name) && Prefs.Hides.Contains(name)) return true;
+            return false;
+        }
+
+        static void Finish(Thing t)
+        {
+            if (t.ports == null) t.ports = new List<int>();
+            string renamed;
+            if (!string.IsNullOrEmpty(t.id) && Prefs.Rename.TryGetValue(t.id, out renamed) && !string.IsNullOrEmpty(renamed))
+            {
+                if (!Hidden(t.id, renamed)) t.name = renamed;
+            }
+            if (!string.IsNullOrEmpty(t.id) && Prefs.PinIds.Contains(t.id)) t.pinned = true;
+            t.name = Redact.Show(t.name);
+            t.project = Redact.Show(t.project);
+            t.branch = Redact.Show(t.branch);
+            t.detail = Redact.Show(t.detail);
+            t.why = Cap(Redact.Show(t.why));
+            t.since = t.since ?? "";
+            if (t.count < 1) t.count = 1;
+        }
+
+        static long VramOf(int pid)
+        {
+            long bytes;
+            var map = Vram.ByPid;
+            if (map != null && map.TryGetValue(pid, out bytes)) return bytes;
+            return 0;
+        }
+
+        static Board Build()
+        {
+            var board = Empty();
+            string named = Prefs.Name;
+            board.name = Redact.Show(string.IsNullOrEmpty(named) ? Environment.MachineName : named);
+            board.strip.cpu = SampleCpu();
+            try
+            {
+                var mem = new Native.MEMSTAT();
+                mem.len = (uint)Marshal.SizeOf(typeof(Native.MEMSTAT));
+                if (Native.GlobalMemoryStatusEx(ref mem) && mem.total > 0)
+                {
+                    board.strip.ram_total_gb = mem.total / 1073741824.0;
+                    board.strip.ram_used_gb = (mem.total - mem.avail) / 1073741824.0;
+                }
+            }
+            catch (Exception) { }
+            try
+            {
+                string root = System.IO.Path.GetPathRoot(Environment.SystemDirectory);
+                var drive = new DriveInfo(root);
+                board.strip.disk_free_gb = drive.AvailableFreeSpace / 1073741824.0;
+                board.strip.disk_total_gb = drive.TotalSize / 1073741824.0;
+            }
+            catch (Exception) { }
+
+            double util = -1, usedGb = -1, totalGb = -1, watts = -1;
+            int temp = -1;
+            bool nv = false;
+            try { nv = Nvml.Read(out util, out usedGb, out totalGb, out temp, out watts); }
+            catch (Exception) { nv = false; util = usedGb = totalGb = watts = -1; temp = -1; }
+            if (nv && util >= 0 && watts >= -1) board.strip.gpu = util;
+            if (nv && temp >= 0) board.strip.gpu_temp = temp;
+            if (nv && totalGb >= 0) { board.strip.vram_used_gb = usedGb < 0 ? 0 : usedGb; board.strip.vram_total_gb = totalGb; }
+            if (!board.strip.gpu.HasValue || !board.strip.vram_total_gb.HasValue)
+            {
+                try { GpuCounters.Refresh(); } catch (Exception) { }
+                if (GpuCounters.Have)
+                {
+                    if (!board.strip.gpu.HasValue && GpuCounters.UtilReady) board.strip.gpu = GpuCounters.Util;
+                    if (!board.strip.vram_total_gb.HasValue && (GpuCounters.TotalGb > 0 || GpuCounters.UsedGb > 0))
+                    {
+                        board.strip.vram_used_gb = GpuCounters.UsedGb;
+                        if (GpuCounters.TotalGb > 0) board.strip.vram_total_gb = GpuCounters.TotalGb;
+                    }
+                }
+            }
+            try { Vram.Refresh(); } catch (Exception) { }
+
+            var procs = new List<Proc>();
+            try { procs = Procs.Snapshot(); SampleProcs(procs); }
+            catch (Exception) { procs = new List<Proc>(); }
+
+            bool textPin = false;
+            foreach (PinRule rule in Prefs.PinRules) if (!rule.ByExe) textPin = true;
+            foreach (Proc p in procs)
+                if (textPin || Scripts.IsInterpreter(p.Exe ?? "")) CmdOf(p);
+
+            var order = new List<Group>();
+            var byFolder = new Dictionary<string, Group>(StringComparer.OrdinalIgnoreCase);
+            var scriptHits = new Dictionary<string, Thing>(StringComparer.OrdinalIgnoreCase);
+            var scriptFolders = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (Proc p in procs)
+            {
+                if (!Scripts.IsInterpreter(p.Exe ?? "")) continue;
+                string script = null;
+                try
+                {
+                    script = Scripts.Find(p, delegate
+                    {
+                        string dir = CwdOf(p);
+                        return dir;
+                    });
+                }
+                catch (Exception) { script = null; }
+                if (string.IsNullOrEmpty(script)) continue;
+                string folder = Scripts.Folder(script);
+                Thing hit;
+                if (!scriptHits.TryGetValue(script, out hit))
+                {
+                    hit = new Thing();
+                    hit.id = "script:" + script;
+                    hit.name = Scripts.Label(script);
+                    hit.kind = "script";
+                    hit.state = "running";
+                    hit.project = Scripts.Language(p.Exe);
+                    hit.folder = script.StartsWith("module:", StringComparison.Ordinal) ? folder : script;
+                    hit.why = p.Cmd ?? "";
+                    hit.since = Age(p.CreateTime);
+                    hit.count = 0;
+                    scriptHits[script] = hit;
+                    if (!string.IsNullOrEmpty(folder)) scriptFolders.Add(folder);
+                }
+                hit.count++;
+                hit.cpu += p.Cpu;
+                hit.ram_mb += p.Private / 1048576.0;
+                hit.vram_mb += VramOf(p.Pid) / 1048576.0;
+                string older = Age(p.CreateTime);
+                if (hit.since.Length == 0) hit.since = older;
+            }
+
+            foreach (var kv in scriptHits)
+            {
+                Thing hit = kv.Value;
+                if (hit.count < 1) hit.count = 1;
+                if (Hidden(hit.id, hit.name)) continue;
+                string folder = Scripts.Folder(kv.Key) ?? "";
+                string title = "";
+                try { title = System.IO.Path.GetFileName(folder.TrimEnd('\\')); } catch (Exception) { title = ""; }
+                if (string.IsNullOrEmpty(title)) title = "Scripts";
+                Group g = TakeGroup(byFolder, order, string.IsNullOrEmpty(folder) ? "scripts" : folder, title, "project");
+                Finish(hit);
+                g.things.Add(hit);
+            }
+
+            try { TaskList.Refresh(null); } catch (Exception) { }
+            foreach (TaskInfo task in TaskList.Items)
+            {
+                var t = new Thing();
+                t.id = "task:" + (string.IsNullOrEmpty(task.Path) ? task.Name : task.Path);
+                t.name = task.Name ?? "";
+                t.kind = "task";
+                t.project = "task";
+                if (task.Running) t.state = "running";
+                else if (task.Failed) t.state = "failed";
+                else t.state = "idle";
+                t.folder = task.Script;
+                t.why = task.Action ?? "";
+                t.since = SinceWhen(task.LastRun);
+                if (task.Failed && task.LastRun.Year >= 2000)
+                    t.detail = "failed " + task.LastRun.ToString("HH:mm", CultureInfo.InvariantCulture);
+                if (Hidden(t.id, t.name)) continue;
+                string folder = "";
+                try { if (!string.IsNullOrEmpty(task.Script)) folder = System.IO.Path.GetDirectoryName(task.Script) ?? ""; }
+                catch (Exception) { folder = ""; }
+                string title = "Tasks";
+                string key = "tasks";
+                if (folder.Length > 0)
+                {
+                    key = folder;
+                    try { title = System.IO.Path.GetFileName(folder.TrimEnd('\\')); } catch (Exception) { title = "Tasks"; }
+                    if (string.IsNullOrEmpty(title)) title = "Tasks";
+                }
+                Finish(t);
+                TakeGroup(byFolder, order, key, title, "project").things.Add(t);
+            }
+
+            try { ModelScan.Refresh(scriptFolders); } catch (Exception) { }
+            var models = ModelScan.Items;
+            if (models != null && models.Count > 0)
+            {
+                var t = new Thing();
+                t.id = "models";
+                t.kind = "model";
+                t.state = "idle";
+                t.count = models.Count;
+                if (models.Count == 1)
+                {
+                    t.name = models[0].Name ?? "model";
+                    t.folder = models[0].Path;
+                    t.why = models[0].Name ?? "";
+                }
+                else
+                {
+                    t.name = models.Count.ToString(CultureInfo.InvariantCulture) + " models on disk";
+                    var names = new StringBuilder();
+                    foreach (InstalledModel m in models)
+                    {
+                        if (names.Length > 0) names.Append(" \u00B7 ");
+                        names.Append(m.Name);
+                        if (names.Length > 4000) break;
+                    }
+                    t.why = names.ToString();
+                }
+                if (!Hidden(t.id, t.name))
+                {
+                    Finish(t);
+                    var g = new Group();
+                    g.title = "MODELS";
+                    g.kind = "models";
+                    g.things.Add(t);
+                    order.Add(g);
+                }
+            }
+
+            if (Prefs.PinRules.Count > 0)
+            {
+                var pinGroup = new Group();
+                pinGroup.title = "Pinned";
+                pinGroup.kind = "other";
+                foreach (PinRule rule in Prefs.PinRules)
+                {
+                    var t = new Thing();
+                    t.id = string.IsNullOrEmpty(rule.Id) ? "pin:" + rule.Label : rule.Id;
+                    t.name = rule.Label ?? "";
+                    t.kind = "other";
+                    t.pinned = true;
+                    t.state = "idle";
+                    t.count = 0;
+                    foreach (Proc p in procs)
+                    {
+                        bool hit = false;
+                        if (rule.ByExe) hit = string.Equals(p.Exe, rule.Match, StringComparison.OrdinalIgnoreCase);
+                        else if (!string.IsNullOrEmpty(rule.Match) && !string.IsNullOrEmpty(p.Cmd))
+                            hit = p.Cmd.IndexOf(rule.Match, StringComparison.OrdinalIgnoreCase) >= 0;
+                        if (!hit) continue;
+                        if (t.count == 0)
+                        {
+                            t.why = p.Cmd ?? p.Exe ?? "";
+                            try { if (!string.IsNullOrEmpty(rule.Match) && System.IO.Path.IsPathRooted(rule.Match) && (File.Exists(rule.Match) || Directory.Exists(rule.Match))) t.folder = rule.Match; }
+                            catch (Exception) { }
+                        }
+                        t.count++;
+                        t.cpu += p.Cpu;
+                        t.ram_mb += p.Private / 1048576.0;
+                        t.state = "running";
+                    }
+                    if (t.count < 1) t.count = 1;
+                    if (Hidden(t.id, t.name)) continue;
+                    Finish(t);
+                    pinGroup.things.Add(t);
+                }
+                if (pinGroup.things.Count > 0) order.Add(pinGroup);
+            }
+
+            foreach (Group g in order)
+                g.things.Sort(delegate(Thing a, Thing b) { return string.Compare(a.name, b.name, StringComparison.OrdinalIgnoreCase); });
+
+            int waiting = 0, failed = 0, quiet = 0;
+            foreach (Group g in order)
+                foreach (Thing t in g.things)
+                {
+                    if (t.state == "waiting" && t.kind == "agent") waiting += Math.Max(1, t.count);
+                    else if (t.state == "failed") failed += Math.Max(1, t.count);
+                    else if (t.state == "quiet" && t.kind == "bot") quiet += Math.Max(1, t.count);
+                }
+            if (waiting == 0 && failed == 0 && quiet == 0)
+            {
+                board.headline.text = "All good";
+                board.headline.needs_you = false;
+                if (Prefs.ImportNote)
+                {
+                    board.headline.text = "Imported hides and pins from your old watch.txt. Change them anytime with right-click.";
+                    Prefs.ImportNote = false;
+                    Prefs.Save();
+                }
+            }
+            else
+            {
+                var bits = new List<string>();
+                if (waiting > 0) bits.Add(waiting.ToString(CultureInfo.InvariantCulture) + (waiting == 1 ? " agent waiting on you" : " agents waiting on you"));
+                if (failed > 0) bits.Add(failed.ToString(CultureInfo.InvariantCulture) + (failed == 1 ? " task failed" : " tasks failed"));
+                if (quiet > 0) bits.Add(quiet.ToString(CultureInfo.InvariantCulture) + (quiet == 1 ? " bot quiet" : " bots quiet"));
+                board.headline.text = string.Join(" \u00B7 ", bits.ToArray());
+                board.headline.needs_you = true;
+            }
+            board.headline.text = Redact.Show(board.headline.text);
+            board.groups = order;
+            return board;
+        }
+
+        static Group TakeGroup(Dictionary<string, Group> map, List<Group> order, string key, string title, string kind)
+        {
+            Group g;
+            if (map.TryGetValue(key, out g)) return g;
+            g = new Group();
+            g.title = Redact.Show(title ?? "");
+            g.kind = kind;
+            map[key] = g;
+            order.Add(g);
+            return g;
+        }
+    }
 }

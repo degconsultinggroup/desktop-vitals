@@ -24,10 +24,13 @@ $ConfigDir = Join-Path $env:APPDATA 'DesktopVitals'
 $StateDir = Join-Path $env:LOCALAPPDATA 'DesktopVitals'
 $ConfigFile = Join-Path $ConfigDir 'watch.txt'
 $ReviewFile = Join-Path $ConfigDir 'review.txt'
+$PrefsFile = Join-Path $ConfigDir 'prefs.txt'
 $ConfigBackup = Join-Path $Work 'watch.txt.bak'
 $ReviewBackup = Join-Path $Work 'review.txt.bak'
+$PrefsBackup = Join-Path $Work 'prefs.txt.bak'
 $HadConfig = $false
 $HadReview = $false
+$HadPrefs = $false
 $Children = New-Object System.Collections.Generic.List[System.Diagnostics.Process]
 $Fail = $false
 $Lines = New-Object System.Collections.Generic.List[string]
@@ -37,6 +40,9 @@ function Log {
     $line = ("{0:o}  {1}" -f [DateTimeOffset]::UtcNow, $Message)
     [void]$Lines.Add($line)
     Write-Host $line
+    if ($Message -like 'FAIL*' -or $Message -like '*FAILED') {
+        Write-Host ("::error::safety: {0}" -f ($Message -replace '[\r\n]+', ' '))
+    }
 }
 
 function Save-Config {
@@ -48,6 +54,10 @@ function Save-Config {
     if (Test-Path -LiteralPath $ReviewFile) {
         $script:HadReview = $true
         Copy-Item -LiteralPath $ReviewFile -Destination $ReviewBackup -Force
+    }
+    if (Test-Path -LiteralPath $PrefsFile) {
+        $script:HadPrefs = $true
+        Copy-Item -LiteralPath $PrefsFile -Destination $PrefsBackup -Force
     }
 }
 
@@ -64,6 +74,12 @@ function Restore-Config {
     }
     elseif (Test-Path -LiteralPath $ReviewFile) {
         Remove-Item -LiteralPath $ReviewFile -Force -ErrorAction SilentlyContinue
+    }
+    if ($script:HadPrefs -and (Test-Path -LiteralPath $PrefsBackup)) {
+        Copy-Item -LiteralPath $PrefsBackup -Destination $PrefsFile -Force
+    }
+    elseif (Test-Path -LiteralPath $PrefsFile) {
+        Remove-Item -LiteralPath $PrefsFile -Force -ErrorAction SilentlyContinue
     }
 }
 

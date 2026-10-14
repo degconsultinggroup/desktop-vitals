@@ -10,7 +10,7 @@ function Make-Shortcut([string]$path, [string]$hotkey) {
     $s.TargetPath = $exe
     $s.WorkingDirectory = Join-Path $d 'bin'
     $s.IconLocation = "$exe,0"
-    $s.Description = 'What this PC is doing: system load, scripts, scheduled tasks, bots'
+    $s.Description = 'What you started on this PC'
     if ($hotkey) { $s.Hotkey = $hotkey }
     $s.Save()
     Write-Host 'Shortcut:' $path
