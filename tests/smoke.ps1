@@ -163,11 +163,12 @@ function Test-HasCommandLines {
 
 # README safety promises as failing CI checks (static source + manifest).
 function Invoke-SafetyStaticChecks {
-    $srcPath = Join-Path $Root 'src\DesktopVitals.cs'
+    $srcDir = Join-Path $Root 'src'
     $manifestPath = Join-Path $Root 'src\app.manifest'
-    if (-not (Test-Path -LiteralPath $srcPath)) { throw "missing $srcPath" }
+    $srcFiles = @(Get-ChildItem -LiteralPath $srcDir -Filter '*.cs' | Sort-Object Name)
+    if ($srcFiles.Count -eq 0) { throw "missing $srcDir\*.cs" }
     if (-not (Test-Path -LiteralPath $manifestPath)) { throw "missing $manifestPath" }
-    $src = [System.IO.File]::ReadAllText($srcPath)
+    $src = ($srcFiles | ForEach-Object { [System.IO.File]::ReadAllText($_.FullName) }) -join "`n"
     $manifest = [System.IO.File]::ReadAllText($manifestPath)
     $srcLines = $src -split "`r?`n"
 
@@ -243,7 +244,7 @@ function Invoke-SafetyStaticChecks {
         if ($u -match '(?i)(^https?://([^/@]*@)?(example\.(com|org|net)|localhost|127\.0\.0\.1|\[::1\])(:|/|$))') {
             continue
         }
-        throw ("hardcoded outbound URL in DesktopVitals.cs: " + $u)
+        throw ("hardcoded outbound URL in src: " + $u)
     }
 
     # No telemetry / auto-update hooks.

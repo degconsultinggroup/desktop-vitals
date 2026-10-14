@@ -96,7 +96,7 @@ In `vitals.txt`, bots are marked `[ok]`, `[QUIET]` (running but no sign of work 
 
 ## Build notes
 
-The whole app is one file, `src\DesktopVitals.cs`, a WPF window written for the C# 5 compiler in `%WINDIR%\Microsoft.NET\Framework64\v4.0.30319`. `build.ps1` shows the exact compiler call. Setting `DESKTOPVITALS_NO_NVML=1` before starting it shows the graphics readings that AMD and Intel owners get.
+The app is four files under `src`: `App.cs` (entry, command line, settings), `Engine.cs` (readings), `Window.cs` (the glass window), and `Native.cs` (Windows calls). It is a WPF window written for the C# 5 compiler in `%WINDIR%\Microsoft.NET\Framework64\v4.0.30319`. `build.ps1` shows the exact compiler call. Setting `DESKTOPVITALS_NO_NVML=1` before starting it shows the graphics readings that AMD and Intel owners get.
 
 ## Tested on
 

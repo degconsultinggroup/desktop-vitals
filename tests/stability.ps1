@@ -343,7 +343,7 @@ try {
             cpuDeltaMs = $cpuIdleDelta
             handlesBefore = [int]$before.Handles
             handlesAfter = [int]$after.Handles
-            note = 'Live-off shares UpdateRunning() timer.Stop path with minimize (src DesktopVitals.cs).'
+            note = 'Live-off shares UpdateRunning() timer.Stop path with minimize (src/Window.cs).'
         }
         if (-not $idleOk) { throw $idleDetail }
     }

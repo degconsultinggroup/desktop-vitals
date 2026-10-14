@@ -12,7 +12,7 @@ function Write-Check {
     else { Write-Host ("{0} {1}" -f $tag, $Name) }
 }
 
-# Same algorithm as GpuCounters.PerfName (src/DesktopVitals.cs): index from 009, name from CurrentLanguage.
+# Same algorithm as GpuCounters.PerfName (src/Engine.cs): index from 009, name from CurrentLanguage.
 function Get-PerfLocalName {
     param(
         [string]$English,
@@ -139,8 +139,7 @@ catch {
 Write-Check 'invariant-decimals-under-de-DE' $invOk $invDetail
 
 # Source gate: every GPU PerformanceCounterCategory construction must go through PerfName.
-$src = Join-Path $Root 'src\DesktopVitals.cs'
-$srcText = [System.IO.File]::ReadAllText($src)
+$srcText = (Get-ChildItem -LiteralPath (Join-Path $Root 'src') -Filter '*.cs' | Sort-Object Name | ForEach-Object { [System.IO.File]::ReadAllText($_.FullName) }) -join "`n"
 $rawHits = [regex]::Matches($srcText, 'new PerformanceCounterCategory\(\s*"(GPU [^"]+)"')
 $perfHits = [regex]::Matches($srcText, 'new PerformanceCounterCategory\(\s*(?:GpuCounters\.)?PerfName\(')
 $srcOk = ($rawHits.Count -eq 0) -and ($perfHits.Count -ge 3)
