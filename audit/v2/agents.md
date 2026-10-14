@@ -157,3 +157,66 @@ Synthetic blob:
 ```json
 {"role":"assistant","content":[{"type":"tool-call","toolCallId":"call_example","toolName":"StrReplace","args":{"path":"C:\\repo\\app\\notes.md","old_string":"a","new_string":"b"}}]}
 ```
+
+## What the probe reports
+
+`tools/v2-agents/agents.cs` prints one JSON object per agent process:
+
+`agent`, `model`, `pid`, `repo`, `branch`, `worktree`, `child_now`, `git.commits_since_start`, `git.changed_files`, `git.last_subject`, `last_action.kind`, `last_action.target_file_name`, `last_action.age_s`, `state`, `why`.
+
+General facts do not read a log. Repo and branch come from `git` in the cwd (a linked worktree reports the main repo name plus the worktree folder). `child_now` is the leaf child, skipping `conhost.exe`. `state` is `working` when a child is running, the model is thinking, or the CPU gained more than half a second since the last pass; `waiting` when the log shows an open tool with no child, or the model has answered; `quiet` when nothing has moved for 5 minutes. A finished tool younger than 5 minutes still counts as working. `ended` is not emitted: the probe only lists live processes.
+
+`last_action.kind` is `thinking`, `answering`, `editing`, `reading`, `shell`, `tool`, or `waiting`. The file field is the base name only. Model comes from `--model` on the command line, otherwise from the log (`requestedModel`, Codex `turn_context.payload.model`).
+
+Pretty names (`Claude Code`, `Codex`, `Cursor`) are display only. A `node.exe` or `python.exe` with `--model` still shows up under its own exe name when it is not the Cursor CLI (`--model` and `--worktree` together).
+
+## Accuracy
+
+Thirty samples, 10 seconds apart, on this box. Seven agents at the start, eight for part of the window. Names below are placeholders for the processes that were actually running.
+
+| Placeholder | What the samples showed |
+| --- | --- |
+| Cursor in worktree A | `state=working` for all 30 samples. `child_now` was the sampler process the whole time. `last_action` was `shell`, and `age_s` climbed by about 10 seconds per sample, from 0 to 302. The child and the log agreed: one long shell. |
+| Cursor in worktree B | `state=working`, `kind=shell`, no child at the sample instants (the commands finished inside the 10 second gap). `age_s` reset to 0 twice, which is a newly flushed tool. In that same window `git.changed_files` went 0 → 2 and `commits_since_start` went 0 → 1, then one file was dirty again. Git progress moved in the same sample as the new shell. The edit itself was not the latest log record, so `last_action` stayed `shell`. |
+| Claude with a shell child | `child_now` was `bash.exe` for the whole window, so `state=working` immediately. `last_action` stayed `answering` until the last sample, when a `shell` record flushed (`age_s` 1). The transcript lagged the child by the whole run. |
+| Claude, idle about 4 hours | `kind=answering`, age climbing, no child, no repo. `state` flickered between `quiet` and `working`. That was a CPU floor of about 20 ms, which a timer can cross. The probe now ignores CPU gains under half a second. |
+| Claude that started mid-window | First sample `waiting` with no log. Then `shell` with `bash.exe`, then `curl.exe`, then `answering` after the child exited. Kind followed the flushed records within one sample. |
+| Two `codex.exe` | No project cwd, so the log layer stayed off. Both showed `quiet` with no repo, model, or action. One of them is a remote session, which v2 does not pretend to see. |
+
+Cursor writes reasoning and the tool call in one blob. The probe reports the tool, so a poll does not show the thinking that led into it. A 10 second poll also misses a child that exits between samples. `git.changed_files` and `commits_since_start` still move when that work touched the repo.
+
+## Cost
+
+Each pass tails at most 16 KB per transcript, from the last offset. A line longer than that is scanned at the head (4 KB) and the tail (2 KB) only. Cursor reopens `store.db` only when the database or WAL length changes, and then reads the root id list plus `substr` of the newest plaintext message (4 KB, and 1 KB at the end if the path key is not in the head). Codex transcripts are opened only when the time in the filename is within five minutes of that process start.
+
+On the 30-sample run (16 KB cap was not in yet; the cap was 64 KB and every Codex file was indexed once):
+
+- First pass: 28 ms, 414 KB.
+- Later passes: max 6.2 ms, average 1.3 ms, 7 or 8 agents.
+- A pass that had to catch a grown transcript read up to about 70 KB.
+
+After the cap, on the same box, a cold process is 16–20 ms and a warm pass is under 1 ms (about 0.8–0.9 ms, ~1.6 KB: the Claude pid registry, which is re-read because it holds `status`). Ten agents stay under the 20 ms log budget. Git is separate: a full pass is about 310–470 ms, almost all `git` process startup, and it does not write (`--no-optional-locks`, stderr discarded).
+
+## Privacy
+
+The probe is read-only. It does not start, stop, or signal any process except the `git` commands it starts itself, and those are killed on timeout.
+
+Read, and then dropped: prompt text, thinking text, answer text, command lines except `--model` / `--worktree`, tool stdout and stderr, file bodies, patches, and the Cursor `blobEncryptionKey`. Absolute paths are used to open a file and to ask git where the repo is. They are not fields in the JSON.
+
+Shown, after `Redact.Show` (key-shaped tokens replaced, length capped at 160): agent name, model id, pid, repo folder, branch, worktree folder, child exe, commit count, changed-file count, last commit subject, action kind, target file name, age, state, and the short `why`.
+
+Nothing from a session log is written except those fields. Host captures from the measurement sit in an untracked `scratch/` directory and are not part of the repo.
+
+## Lines for this box
+
+```
+repo-a
+  Claude Code                 quiet      answering · 4h
+  Claude Code                 working    running: bash.exe
+  Cursor · wt-a               working    running: git.exe · shell · 12s
+repo-b
+  Cursor · wt-b               working    shell · 1 commit · 2 files
+Other
+  Codex                       quiet
+  Codex                       quiet
+```
