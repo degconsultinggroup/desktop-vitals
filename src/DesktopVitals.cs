@@ -1858,9 +1858,15 @@ namespace DesktopVitals
                 MaxHeight = double.PositiveInfinity;
                 ShowActivated = false;
                 ShowInTaskbar = false;
-                var done = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(4500) };
+                // Wait until Task Scheduler and the model scan finish (or 12 s), so vitals.txt is not empty of both.
+                var since = DateTime.UtcNow;
+                var done = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(250) };
                 done.Tick += delegate
                 {
+                    double sec = (DateTime.UtcNow - since).TotalSeconds;
+                    bool models = (!modelsBusy && modelsRead != DateTime.MinValue) || sec >= 12;
+                    bool tasks = TaskList.Ready || sec >= 12;
+                    if (sec < 2.5 || !models || !tasks) return;
                     done.Stop();
                     if (acceptReview) { acceptReview = false; WriteAcceptedReview(); }
                     WriteSnapshot();
