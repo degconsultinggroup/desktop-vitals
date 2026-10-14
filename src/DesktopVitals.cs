@@ -3288,7 +3288,7 @@ namespace DesktopVitals
 
         void WritePrivacyProof(string dir)
         {
-            const string sample = @"C:\Users\Sam\x.ps1 --api-key sk-dvsmokeTESTKEY0001 --token ghp_dvsmokeTESTTOKEN0123456789 password=dvsmokePass99 Bearer dvsmokeBearerTok99 https://u:dvsmokeUrlPass@example.com/x API_KEY=dvsmokeEnv99";
+            const string sample = @"C:\Users\Sam\x.ps1 --api-key sk-dvsmokeTESTKEY0001 --token ghp_dvsmokeTESTTOKEN0123456789 password=dvsmokePass99 Bearer dvsmokeBearerTok99 API_KEY=dvsmokeEnv99";
             var tips = aiRows.Concat(botRows).Concat(scriptRows).Concat(startRows).Concat(taskRows).Concat(watchRows).Concat(topRows)
                 .Where(r => r.Visibility == Visibility.Visible && r.ToolTip != null).Select(r => "tip=" + r.ToolTip);
             File.WriteAllText(System.IO.Path.Combine(dir, "privacy.txt"),
