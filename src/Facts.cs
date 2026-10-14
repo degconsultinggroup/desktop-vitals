@@ -84,13 +84,15 @@ using System.Security.Cryptography; using System.Text; using System.Text.Regular
                     cur = parent; }
                 AssignProject(p, m); }
             static string mineSid; static int mineSession = -2; static bool RunsAsYou(Proc p) {
-                if (p == null || p.Session == 0) return false; if (mineSession < -1) {
+                if (p == null) return false; if (mineSession < -1) {
                     try { mineSession = System.Diagnostics.Process.GetCurrentProcess().SessionId; } catch (Exception) { mineSession = -1; }
                     try { mineSid = System.Security.Principal.WindowsIdentity.GetCurrent().User.Value; } catch (Exception) { mineSid = ""; } }
+                // Services sit in session 0 while the desktop is another session. A session-0 host still owns its own session.
                 if (p.Session != mineSession || string.IsNullOrEmpty(mineSid)) return false;
                 string sid = UserSid(p.Pid); return sid != null && string.Equals(sid, mineSid, StringComparison.OrdinalIgnoreCase); }
             static string UserSid(int pid) {
-                IntPtr h = Native.OpenProcess(Native.QueryLimited, false, pid); if (h == IntPtr.Zero) return null; try {
+                IntPtr h = Native.OpenProcess(Native.QueryLimited | Native.QueryInfo, false, pid);
+                if (h == IntPtr.Zero) h = Native.OpenProcess(Native.QueryLimited, false, pid); if (h == IntPtr.Zero) return null; try {
                     IntPtr tok; if (!Native.OpenProcessToken(h, Native.TokenQuery, out tok)) return null; try {
                         int need = 0; Native.GetTokenInformation(tok, 1, IntPtr.Zero, 0, out need); if (need < 8) return null;
                         IntPtr buf = Marshal.AllocHGlobal(need); try {
