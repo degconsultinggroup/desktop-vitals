@@ -662,10 +662,11 @@ try {
     $localeDetail = ''
     try {
         $localeScript = Join-Path $Root 'tests\locale-perflib.ps1'
-        $localeOut = & $localeScript 2>&1 | Out-String
+        $localeOut = & $localeScript *>&1 | Out-String
         if ($LASTEXITCODE -ne 0) { throw ("exit $LASTEXITCODE; " + ($localeOut -replace '\s+', ' ').Trim()) }
         $localeOk = $true
-        $localeDetail = (($localeOut -split "`r?`n" | Where-Object { $_ -match '^PASS ' } | Measure-Object).Count).ToString() + ' subchecks'
+        $n = @($localeOut -split "`r?`n" | Where-Object { $_ -match '^PASS ' }).Count
+        $localeDetail = if ($n -gt 0) { "$n subchecks" } else { 'nested exit 0' }
     }
     catch {
         $localeDetail = $_.Exception.Message
