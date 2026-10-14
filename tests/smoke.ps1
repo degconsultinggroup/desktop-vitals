@@ -184,24 +184,27 @@ function Invoke-SafetyStaticChecks {
     $manifest = [System.IO.File]::ReadAllText($manifestPath)
     $srcLines = $src -split "`r?`n"
 
-    # Process.Start only at editor, Explorer, and loopback port sites.
+    # Process.Start only at editor, Explorer, loopback port, and the Frontier credit link.
     $startHits = @()
     for ($i = 0; $i -lt $srcLines.Length; $i++) {
         if ($srcLines[$i] -match 'Process\.Start\s*\(') {
             $startHits += [pscustomobject]@{ Line = ($i + 1); Text = $srcLines[$i].Trim() }
         }
     }
-    if ($startHits.Count -ne 3) {
-        throw ("Process.Start count {0} (want 3 editor/Explorer/loopback): {1}" -f $startHits.Count, (($startHits | ForEach-Object { "$($_.Line):$($_.Text)" }) -join ' | '))
+    if ($startHits.Count -ne 4) {
+        throw ("Process.Start count {0} (want 4 editor/Explorer/loopback/frontier): {1}" -f $startHits.Count, (($startHits | ForEach-Object { "$($_.Line):$($_.Text)" }) -join ' | '))
     }
     $joined = ($startHits | ForEach-Object { $_.Text }) -join "`n"
     if ($joined -notmatch 'ProcessStartInfo\(Editor\[0\]') { throw 'missing editor Process.Start' }
     if ($joined -notmatch 'ProcessStartInfo\(explorer') { throw 'missing explorer Process.Start' }
     if ($joined -notmatch 'ProcessStartInfo\("http://127\.0\.0\.1:"') { throw 'missing loopback port Process.Start' }
+    if ($joined -notmatch 'ProcessStartInfo\("https://frontierdeployments\.com"\)') { throw 'missing Frontier Deployments link' }
     $editorLine = ($startHits | Where-Object { $_.Text -match 'Editor\[0\]' } | Select-Object -First 1).Text
     $explorerLine = ($startHits | Where-Object { $_.Text -match 'ProcessStartInfo\(explorer' } | Select-Object -First 1).Text
+    $frontierLine = ($startHits | Where-Object { $_.Text -match 'frontierdeployments' } | Select-Object -First 1).Text
     if ($editorLine -notmatch 'UseShellExecute\s*=\s*false') { throw 'editor Process.Start must UseShellExecute=false' }
     if ($explorerLine -notmatch 'UseShellExecute\s*=\s*false') { throw 'explorer Process.Start must UseShellExecute=false' }
+    if ($frontierLine -notmatch 'UseShellExecute\s*=\s*true') { throw 'Frontier link must UseShellExecute=true' }
 
     # Nothing launches cmd/powershell/pwsh/schtasks as a process image.
     $badLaunch = [regex]::Matches($src, '(?i)ProcessStartInfo\s*\(\s*"(cmd\.exe|powershell\.exe|pwsh\.exe|schtasks\.exe)"')
@@ -253,6 +256,8 @@ function Invoke-SafetyStaticChecks {
         if ($u -match '(?i)(^https?://([^/@]*@)?(example\.(com|org|net)|localhost|127\.0\.0\.1|\[::1\])(:|/|$))') {
             continue
         }
+        # Gear credit link. The only product URL the window may open.
+        if ($u -match '(?i)^https://frontierdeployments\.com/?$') { continue }
         throw ("hardcoded outbound URL in src: " + $u)
     }
 

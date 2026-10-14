@@ -25,7 +25,7 @@ namespace DesktopVitals
 
     static class ErrorLog
     {
-        const string Ver = "2.0";
+        public const string Ver = "2.0";
         const int Cap = 256 * 1024;
 
         public static void Write(Exception ex)
