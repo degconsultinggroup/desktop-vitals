@@ -207,12 +207,12 @@ function New-GitRepo {
 }
 
 function Write-AgentHome {
-    param($Home, $Repo, $Processes)
+    param($AgentRoot, $Repo, $Processes)
     $repoFull = [System.IO.Path]::GetFullPath($Repo)
     $enc = Encode-Cwd $repoFull
     $sid = [guid]::NewGuid().ToString()
-    $proj = Join-Path $Home (Join-Path '.claude\projects' $enc)
-    New-Item -ItemType Directory -Force -Path $proj, (Join-Path $Home '.claude\sessions') | Out-Null
+    $proj = Join-Path $AgentRoot (Join-Path '.claude\projects' $enc)
+    New-Item -ItemType Directory -Force -Path $proj, (Join-Path $AgentRoot '.claude\sessions') | Out-Null
     $cwdJson = $repoFull.Replace('\', '\\')
     $stamp = [DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ss.fffZ')
     $line = '{"cwd":"' + $cwdJson + '","timestamp":"' + $stamp + '","message":{"content":[{"type":"tool_use","name":"Edit","input":{"file_path":"C:\\src\\install.ps1"}}]}}'
@@ -220,7 +220,7 @@ function Write-AgentHome {
     foreach ($proc in $Processes) {
         $ft = $proc.StartTime.ToFileTime()
         $json = '{"sessionId":"' + $sid + '","cwd":"' + $cwdJson + '","procStart":"' + $ft + '"}'
-        Set-Content -LiteralPath (Join-Path $Home ('.claude\sessions\' + $proc.Id + '.json')) -Value $json -Encoding ASCII
+        Set-Content -LiteralPath (Join-Path $AgentRoot ('.claude\sessions\' + $proc.Id + '.json')) -Value $json -Encoding ASCII
     }
 }
 
@@ -514,7 +514,7 @@ while ($true) { Start-Sleep -Seconds 2 }
         $AgentA += Start-Child -FilePath $nodeCmd.Source -ArgumentList @($agentJs, '--agent', 'claude') -WorkingDirectory $RepoA
         $null = Start-Child -FilePath $nodeCmd.Source -ArgumentList @($agentJs, '--model', 'grok-4.7-high', '--worktree', '.') -WorkingDirectory $RepoB
         foreach ($ap in $AgentA) { $ap.Refresh() | Out-Null }
-        Write-AgentHome -Home $AgentHome -Repo $RepoA -Processes $AgentA
+        Write-AgentHome -AgentRoot $AgentHome -Repo $RepoA -Processes $AgentA
     }
     $null = Start-Child -FilePath 'powershell.exe' -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $listenScript, $ListenPortFile)
     $null = Start-Child -FilePath 'powershell.exe' -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $mapScript) -WorkingDirectory $ToolDir
