@@ -1590,6 +1590,7 @@ namespace DesktopVitals
             if (WordState(state)) return BoardText.Phrase(state);
             if (!string.IsNullOrEmpty(t.since)) return t.since;
             if (t.cpu >= 5) return t.cpu.ToString("0", CultureInfo.InvariantCulture) + "%";
+            if (!string.IsNullOrEmpty(t.detail)) return "";
             if (t.vram_mb >= 200) return Megs(t.vram_mb) + " VRAM";
             if (t.ram_mb >= 200) return Megs(t.ram_mb);
             return "";
