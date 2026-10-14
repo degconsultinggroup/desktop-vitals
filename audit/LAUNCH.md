@@ -33,7 +33,7 @@ Author of agent commits: Desktop Vitals. Did not touch `cursor/vitals-complete`.
 | Light OS theme | AppsUseLightTheme | Known limit | App forces dark glass | - |
 | Accuracy: Scripts / Scheduled / Starts / AI fixtures | GHA windows + arm Accuracy step | PASS | FN=0; product FP=0; run 38602034363 | `9a10f0a`, `dc4e40f`, `e21d412`, `6989517` |
 | Live soak: no handle / GDI / thread / private leak | GHA windows-latest, 4 cores, ~8 min | PASS (data) | handles/GDI/private flat; harness fix | `ee81561`, `227e900` |
-| Live CPU "~0.1% of the machine" | GHA windows-latest 4-core | Known limit | Measured ~1-2% Live on that runner | `ac85c55` |
+| Live CPU "~0.1% of the machine" | GHA windows-latest 4-core | Known limit | Measured ~1-2% Live on that runner | `a8fad93` |
 | Minimized / Live-off idle | GHA stability | PASS when job green | timer.Stop when !live or minimized | `ee81561` |
 | Sleep / resume / RDP / FUS / display unplug | physical Windows | NOT RUN | Known limit | - |
 | First-run board then review; grey human reasons | GHA smoke + code path | PASS | board before review; Reading GPU / disk / Task Scheduler | `13e7b75`, `db7af88`, `6d1a2ff` |
