@@ -35,6 +35,7 @@ jobs:
           name: vitals-png
           path: |
             tests/results/vitals.png
+            tests/results/review.png
             tests/results/accuracy/
             tests/results/safety-runtime.log
           if-no-files-found: warn
@@ -136,6 +137,8 @@ jobs:
           path: |
             tests/results/vitals.png
             tests/results/vitals.txt
+            tests/results/review.png
+            tests/results/review.txt
             tests/results/accuracy/
             tests/results/safety-runtime.log
           if-no-files-found: warn

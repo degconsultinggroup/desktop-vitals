@@ -372,9 +372,11 @@ try {
         $snapDir = Join-Path $Work 'snap-basic'
         $basic = Invoke-Snapshot -Dir $snapDir
         $reviewDir = Join-Path $Work 'snap-review'
-        $null = Invoke-Snapshot -Dir $reviewDir -Review
+        $review = Invoke-Snapshot -Dir $reviewDir -Review
         Copy-Item -LiteralPath $basic.Png -Destination (Join-Path $ResultsDir 'vitals.png') -Force
         Copy-Item -LiteralPath $basic.Txt -Destination (Join-Path $ResultsDir 'vitals.txt') -Force
+        Copy-Item -LiteralPath $review.Png -Destination (Join-Path $ResultsDir 'review.png') -Force
+        Copy-Item -LiteralPath $review.Txt -Destination (Join-Path $ResultsDir 'review.txt') -Force
         $snapOk = $true
     }
     catch {
