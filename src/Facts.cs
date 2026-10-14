@@ -269,6 +269,7 @@ namespace DesktopVitals
             static void Decide(Proc p, Memo m, Dictionary<int, Proc> byPid)
             {
                 bool sihost = false;
+                bool user = false;
                 Proc cur = p;
                 var guard = new HashSet<int>();
                 for (int n = 0; n < 40 && guard.Add(cur.Pid); n++)
@@ -279,7 +280,9 @@ namespace DesktopVitals
                     string role = AppRole(parent.Exe);
                     string b = Base(parent.Exe);
                     if (b == "sihost") sihost = true;
-                    if (!sihost && (parent.Session == 0 || b == "services")) m.Services = true;
+                    if (role != null || Shell(parent.Exe)) user = true;
+                    // A shell, terminal, or editor closer than services.exe started this. The runner service above that shell does not make it a service.
+                    if (!sihost && !user && (parent.Session == 0 || b == "services")) m.Services = true;
                     if (role == "terminal" || role == "editor") { m.LaunchKind = role; m.LaunchName = RoleLabel(parent.Exe); }
                     else if (role == "explorer" && m.LaunchKind == null) { m.LaunchKind = role; m.LaunchName = "Explorer"; }
                     else if (Shell(parent.Exe) && m.LaunchKind == null) { m.LaunchKind = "terminal"; m.LaunchName = RoleLabel(parent.Exe); }
