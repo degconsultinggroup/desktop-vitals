@@ -293,7 +293,7 @@ namespace DesktopVitals
             var b = new Board();
             if (src == null) return b;
             b.name = Redact.Show(src.name);
-            b.strip = src.strip ?? new Strip();
+            b.strip = CopyStrip(src.strip);
             b.headline = new Headline();
             if (src.headline != null)
             {
@@ -311,6 +311,34 @@ namespace DesktopVitals
                 b.groups.Add(ng);
             }
             return b;
+        }
+
+        static Strip CopyStrip(Strip s)
+        {
+            var n = new Strip();
+            if (s == null) return n;
+            n.cpu = s.cpu;
+            n.ram_used_gb = s.ram_used_gb;
+            n.ram_total_gb = s.ram_total_gb;
+            n.gpu = s.gpu;
+            n.gpu_temp = s.gpu_temp;
+            n.vram_used_gb = s.vram_used_gb;
+            n.vram_total_gb = s.vram_total_gb;
+            n.disk_free_gb = s.disk_free_gb;
+            n.disk_total_gb = s.disk_total_gb;
+            n.gpu_name = Opt(s.gpu_name);
+            n.watts = s.watts;
+            if (s.threads != null) n.threads = new List<double>(s.threads);
+            if (s.core_groups != null)
+                foreach (CoreGroup g in s.core_groups)
+                {
+                    var cg = new CoreGroup();
+                    if (g == null) { n.core_groups.Add(cg); continue; }
+                    cg.kind = Redact.Show(g.kind);
+                    if (g.threads != null) cg.threads = new List<int>(g.threads);
+                    n.core_groups.Add(cg);
+                }
+            return n;
         }
 
         static Thing CopyThing(Thing t)

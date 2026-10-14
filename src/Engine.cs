@@ -787,6 +787,17 @@ namespace DesktopVitals
         [DataMember(Order = 7, EmitDefaultValue = false)] public double? vram_total_gb;
         [DataMember(Order = 8)] public double disk_free_gb;
         [DataMember(Order = 9)] public double disk_total_gb;
+        [DataMember(Order = 10, EmitDefaultValue = false)] public string gpu_name;
+        [DataMember(Order = 11, EmitDefaultValue = false)] public double? watts;
+        [DataMember(Order = 12)] public List<double> threads = new List<double>();
+        [DataMember(Order = 13)] public List<CoreGroup> core_groups = new List<CoreGroup>();
+    }
+
+    [DataContract]
+    public class CoreGroup
+    {
+        [DataMember(Order = 1)] public string kind = "core";
+        [DataMember(Order = 2)] public List<int> threads = new List<int>();
     }
 
     [DataContract]
@@ -927,45 +938,183 @@ namespace DesktopVitals
             return t.name ?? "";
         }
 
-        public static string Num(double v)
+        // Bar labels: one decimal under 10, otherwise a whole number. Matches the v0.1.0 bars.
+        public static string BarPct(double v)
         {
-            if (double.IsNaN(v) || double.IsInfinity(v)) v = 0;
-            double rounded = Math.Round(v, 1);
-            double whole = Math.Round(rounded);
-            bool near = Math.Abs(rounded - whole) < 0.05;
-            if (near && (Math.Abs(whole) >= 10 || Math.Abs(v - whole) < 0.001))
-                return whole.ToString("0", CultureInfo.InvariantCulture);
-            return rounded.ToString("0.0", CultureInfo.InvariantCulture);
+            if (double.IsNaN(v) || double.IsInfinity(v) || v < 0.05) return "0%";
+            if (v < 10) return v.ToString("0.0", CultureInfo.InvariantCulture) + "%";
+            return v.ToString("0", CultureInfo.InvariantCulture) + "%";
         }
 
-        public static string Pct(double v)
+        public static string GbAmount(double gb)
         {
-            int n = (int)Math.Round(v);
-            if (n < 0) n = 0;
-            if (n > 100) n = 100;
-            return n.ToString(CultureInfo.InvariantCulture) + "%";
+            if (double.IsNaN(gb) || double.IsInfinity(gb) || gb < 0) gb = 0;
+            return gb >= 100 ? gb.ToString("0", CultureInfo.InvariantCulture) : gb.ToString("0.0", CultureInfo.InvariantCulture);
         }
 
-        public static string Strip(Strip s)
+        public static string DiskLabel()
         {
-            if (s == null) return "";
-            var parts = new List<string>();
-            parts.Add("CPU " + Pct(s.cpu));
-            parts.Add("RAM " + Num(s.ram_used_gb) + "/" + Num(s.ram_total_gb) + " GB");
-            if (s.gpu.HasValue)
+            try
             {
-                string gpu = "GPU " + Pct(s.gpu.Value);
-                if (s.gpu_temp.HasValue) gpu += " " + ((int)Math.Round(s.gpu_temp.Value)).ToString(CultureInfo.InvariantCulture) + "\u00B0";
-                parts.Add(gpu);
+                string root = Path.GetPathRoot(Environment.SystemDirectory);
+                if (!string.IsNullOrEmpty(root)) return "Disk " + root.TrimEnd('\\');
             }
-            if (s.vram_used_gb.HasValue || s.vram_total_gb.HasValue)
+            catch (Exception) { }
+            return "Disk";
+        }
+
+        public class Meter
+        {
+            public string Detail = "";
+            public string Value = "";
+            public double Fraction;
+        }
+
+        static double Clamp01(double v)
+        {
+            if (double.IsNaN(v) || v < 0) return 0;
+            if (v > 1) return 1;
+            return v;
+        }
+
+        static double ClampPct(double v)
+        {
+            if (double.IsNaN(v) || v < 0) return 0;
+            if (v > 100) return 100;
+            return v;
+        }
+
+        public static List<Meter> Meters(Strip s)
+        {
+            if (s == null) s = new Strip();
+            var list = new List<Meter>();
+
+            var cpu = new Meter();
+            double cpuPct = ClampPct(s.cpu);
+            cpu.Value = BarPct(cpuPct);
+            cpu.Fraction = cpuPct / 100.0;
+            list.Add(cpu);
+
+            var mem = new Meter();
+            if (s.ram_total_gb > 0)
             {
-                string used = s.vram_used_gb.HasValue ? Num(s.vram_used_gb.Value) : "0";
-                string total = s.vram_total_gb.HasValue ? Num(s.vram_total_gb.Value) : "?";
-                parts.Add("VRAM " + used + "/" + total + " GB");
+                double used = s.ram_used_gb < 0 ? 0 : s.ram_used_gb;
+                mem.Detail = GbAmount(used) + " of " + GbAmount(s.ram_total_gb) + " GB";
+                mem.Fraction = Clamp01(used / s.ram_total_gb);
+                mem.Value = BarPct(mem.Fraction * 100);
             }
-            parts.Add("Disk " + Num(s.disk_free_gb) + " GB free");
-            return string.Join(" \u00B7 ", parts.ToArray());
+            else mem.Detail = "not available";
+            list.Add(mem);
+
+            var gpu = new Meter();
+            bool haveGpu = s.gpu.HasValue || s.gpu_temp.HasValue || s.watts.HasValue || !string.IsNullOrEmpty(s.gpu_name) || s.vram_used_gb.HasValue || s.vram_total_gb.HasValue;
+            if (!haveGpu) gpu.Detail = "not available";
+            else
+            {
+                var bits = new List<string>();
+                if (!string.IsNullOrEmpty(s.gpu_name)) bits.Add(s.gpu_name);
+                else if (s.gpu.HasValue) bits.Add("GPU");
+                if (s.gpu_temp.HasValue) bits.Add(((int)Math.Round(s.gpu_temp.Value)).ToString(CultureInfo.InvariantCulture) + "\u00B0C");
+                if (s.watts.HasValue && s.watts.Value >= 0) bits.Add(s.watts.Value.ToString("0", CultureInfo.InvariantCulture) + " W");
+                gpu.Detail = bits.Count == 0 ? "not available" : string.Join(" \u00B7 ", bits.ToArray());
+                if (s.gpu.HasValue)
+                {
+                    double g = ClampPct(s.gpu.Value);
+                    gpu.Value = BarPct(g);
+                    gpu.Fraction = g / 100.0;
+                }
+            }
+            list.Add(gpu);
+
+            var vram = new Meter();
+            if (s.vram_total_gb.HasValue && s.vram_total_gb.Value > 0)
+            {
+                double u = s.vram_used_gb.HasValue && s.vram_used_gb.Value > 0 ? s.vram_used_gb.Value : 0;
+                double t = s.vram_total_gb.Value;
+                vram.Detail = u.ToString("0.0", CultureInfo.InvariantCulture) + " of " + t.ToString("0", CultureInfo.InvariantCulture) + " GB";
+                vram.Fraction = Clamp01(u / t);
+                vram.Value = BarPct(vram.Fraction * 100);
+            }
+            else if (s.vram_used_gb.HasValue && s.vram_used_gb.Value >= 0)
+                vram.Detail = s.vram_used_gb.Value.ToString("0.0", CultureInfo.InvariantCulture) + " GB";
+            else vram.Detail = "not available";
+            list.Add(vram);
+
+            var disk = new Meter();
+            if (s.disk_total_gb > 0)
+            {
+                double free = s.disk_free_gb < 0 ? 0 : s.disk_free_gb;
+                double usedD = s.disk_total_gb - free;
+                if (usedD < 0) usedD = 0;
+                disk.Detail = GbAmount(free) + " GB free of " + GbAmount(s.disk_total_gb);
+                disk.Fraction = Clamp01(usedD / s.disk_total_gb);
+                disk.Value = BarPct(disk.Fraction * 100);
+            }
+            else disk.Detail = "not available";
+            list.Add(disk);
+            return list;
+        }
+
+        public static List<KeyValuePair<int, int[]>> Cores(Strip s)
+        {
+            var list = new List<KeyValuePair<int, int[]>>();
+            if (s == null || s.core_groups == null) return list;
+            foreach (CoreGroup g in s.core_groups)
+            {
+                if (g == null || g.threads == null || g.threads.Count == 0) continue;
+                int eff = g.kind == "performance" ? 1 : 0;
+                list.Add(new KeyValuePair<int, int[]>(eff, g.threads.ToArray()));
+            }
+            return list;
+        }
+
+        public static string CoreSig(Strip s)
+        {
+            if (s == null || s.core_groups == null) return "";
+            var sb = new StringBuilder();
+            foreach (CoreGroup g in s.core_groups)
+            {
+                sb.Append(g == null || g.kind == null ? "" : g.kind).Append(':');
+                if (g != null && g.threads != null)
+                    foreach (int t in g.threads) sb.Append(t.ToString(CultureInfo.InvariantCulture)).Append(',');
+                sb.Append(';');
+            }
+            return sb.ToString();
+        }
+
+        public static string BusiestLine(Strip s)
+        {
+            var cores = Cores(s);
+            if (cores.Count == 0 || s == null || s.threads == null || s.threads.Count == 0) return "";
+            int top = 0;
+            for (int i = 0; i < cores.Count; i++) if (cores[i].Key > top) top = cores[i].Key;
+            bool hybrid = false;
+            for (int i = 0; i < cores.Count; i++) if (cores[i].Key != top) hybrid = true;
+            int bestCpu = -1;
+            double best = -1;
+            int prevEff = -1, coreNo = 0;
+            string bestName = "";
+            for (int i = 0; i < cores.Count; i++)
+            {
+                var c = cores[i];
+                if (c.Key != prevEff) coreNo = 0;
+                coreNo++;
+                prevEff = c.Key;
+                string kind = !hybrid ? "core " : c.Key == top ? "performance core " : "efficiency core ";
+                for (int t = 0; t < c.Value.Length; t++)
+                {
+                    int cpu = c.Value[t];
+                    double pct = cpu >= 0 && cpu < s.threads.Count ? s.threads[cpu] : 0;
+                    if (pct > best)
+                    {
+                        best = pct;
+                        bestCpu = cpu;
+                        bestName = "Thread " + cpu.ToString(CultureInfo.InvariantCulture) + "  \u00B7  " + kind + coreNo.ToString(CultureInfo.InvariantCulture);
+                    }
+                }
+            }
+            if (bestCpu < 0) return "";
+            return "Busiest thread: " + bestName + " at " + BarPct(best);
         }
 
         public static string Render(Board b)
@@ -974,7 +1123,16 @@ namespace DesktopVitals
             var sb = new StringBuilder();
             sb.Append("Desktop Vitals  ").Append(b.name ?? "").Append("  ");
             sb.Append(DateTime.Now.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture)).Append('\n');
-            sb.Append(Strip(b.strip)).Append('\n');
+            string[] labels = new[] { "Processor", "Memory", "Graphics", "Video memory", DiskLabel() };
+            var meters = Meters(b.strip);
+            for (int i = 0; i < meters.Count && i < labels.Length; i++)
+            {
+                sb.Append(labels[i]).Append("  ").Append(meters[i].Value ?? "");
+                if (!string.IsNullOrEmpty(meters[i].Detail)) sb.Append("  \u00B7  ").Append(meters[i].Detail);
+                sb.Append('\n');
+            }
+            string busy = BusiestLine(b.strip);
+            if (busy.Length > 0) sb.Append(busy).Append('\n');
             sb.Append('\n');
             sb.Append(b.headline == null || b.headline.text == null ? "All good" : b.headline.text).Append('\n');
             if (b.groups != null)
@@ -1020,6 +1178,9 @@ namespace DesktopVitals
         static readonly Dictionary<string, string> cwds = new Dictionary<string, string>();
         static long prevWall, cpuIdle, cpuKernel, cpuUser;
         static bool haveWall, haveCpu, logged;
+        static long[] threadBusy, threadTotal, prevThreadBusy, prevThreadTotal;
+        static bool haveThreads;
+        static List<CoreGroup> cachedGroups;
 
         public static void Reset()
         {
@@ -1028,12 +1189,15 @@ namespace DesktopVitals
             cwds.Clear();
             haveWall = false;
             haveCpu = false;
+            haveThreads = false;
             prevWall = cpuIdle = cpuKernel = cpuUser = 0;
+            threadBusy = threadTotal = prevThreadBusy = prevThreadTotal = null;
         }
 
         public static void Prime()
         {
             SampleCpu();
+            SampleThreads(null);
             try { SampleProcs(Procs.Snapshot()); } catch (Exception) { }
             try { TaskList.Refresh(null); } catch (Exception) { }
             try { GpuCounters.Refresh(); } catch (Exception) { }
@@ -1109,6 +1273,79 @@ namespace DesktopVitals
             }
             cpuIdle = idle; cpuKernel = kernel; cpuUser = user; haveCpu = true;
             return pct;
+        }
+
+        static void SampleThreads(List<double> into)
+        {
+            int n = Math.Max(1, Environment.ProcessorCount);
+            if (threadBusy == null || threadBusy.Length != n)
+            {
+                threadBusy = new long[n];
+                threadTotal = new long[n];
+                prevThreadBusy = new long[n];
+                prevThreadTotal = new long[n];
+                haveThreads = false;
+            }
+            if (into != null)
+            {
+                into.Clear();
+                for (int i = 0; i < n; i++) into.Add(0);
+            }
+            try
+            {
+                if (!Native.ThreadTimes(threadBusy, threadTotal)) return;
+            }
+            catch (Exception) { return; }
+            if (haveThreads && into != null)
+            {
+                for (int i = 0; i < n; i++)
+                {
+                    long dt = threadTotal[i] - prevThreadTotal[i];
+                    double p = 0;
+                    if (dt > 0)
+                    {
+                        p = (threadBusy[i] - prevThreadBusy[i]) * 100.0 / dt;
+                        if (p < 0) p = 0;
+                        if (p > 100) p = 100;
+                    }
+                    into[i] = p;
+                }
+            }
+            long[] swap = prevThreadBusy;
+            prevThreadBusy = threadBusy;
+            threadBusy = swap;
+            swap = prevThreadTotal;
+            prevThreadTotal = threadTotal;
+            threadTotal = swap;
+            haveThreads = true;
+        }
+
+        static List<CoreGroup> CoreGroups()
+        {
+            if (cachedGroups != null) return cachedGroups;
+            List<KeyValuePair<int, int[]>> cores;
+            try { cores = Native.CoreLayout(); }
+            catch (Exception)
+            {
+                cores = new List<KeyValuePair<int, int[]>>();
+                int n = Math.Max(1, Environment.ProcessorCount);
+                for (int i = 0; i < n; i++) cores.Add(new KeyValuePair<int, int[]>(0, new[] { i }));
+            }
+            int top = 0;
+            for (int i = 0; i < cores.Count; i++) if (cores[i].Key > top) top = cores[i].Key;
+            bool hybrid = false;
+            for (int i = 0; i < cores.Count; i++) if (cores[i].Key != top) hybrid = true;
+            cachedGroups = new List<CoreGroup>();
+            for (int i = 0; i < cores.Count; i++)
+            {
+                var g = new CoreGroup();
+                if (!hybrid) g.kind = "core";
+                else if (cores[i].Key == top) g.kind = "performance";
+                else g.kind = "efficiency";
+                g.threads = new List<int>(cores[i].Value);
+                cachedGroups.Add(g);
+            }
+            return cachedGroups;
         }
 
         static void SampleProcs(List<Proc> list)
@@ -1229,6 +1466,10 @@ namespace DesktopVitals
             }
             catch (Exception) { }
 
+            board.strip.threads = new List<double>();
+            SampleThreads(board.strip.threads);
+            board.strip.core_groups = new List<CoreGroup>(CoreGroups());
+
             double util = -1, usedGb = -1, totalGb = -1, watts = -1;
             int temp = -1;
             bool nv = false;
@@ -1236,13 +1477,17 @@ namespace DesktopVitals
             catch (Exception) { nv = false; util = usedGb = totalGb = watts = -1; temp = -1; }
             if (nv && util >= 0 && watts >= -1) board.strip.gpu = util;
             if (nv && temp >= 0) board.strip.gpu_temp = temp;
+            if (nv && watts >= 0) board.strip.watts = watts;
+            if (nv && !string.IsNullOrEmpty(Nvml.Name)) board.strip.gpu_name = Redact.Show(Nvml.Name);
             if (nv && totalGb >= 0) { board.strip.vram_used_gb = usedGb < 0 ? 0 : usedGb; board.strip.vram_total_gb = totalGb; }
-            if (!board.strip.gpu.HasValue || !board.strip.vram_total_gb.HasValue)
+            if (!board.strip.gpu.HasValue || !board.strip.vram_total_gb.HasValue || string.IsNullOrEmpty(board.strip.gpu_name))
             {
                 try { GpuCounters.Refresh(); } catch (Exception) { }
                 if (GpuCounters.Have)
                 {
                     if (!board.strip.gpu.HasValue && GpuCounters.UtilReady) board.strip.gpu = GpuCounters.Util;
+                    if (string.IsNullOrEmpty(board.strip.gpu_name) && !string.IsNullOrEmpty(GpuCounters.Name))
+                        board.strip.gpu_name = Redact.Show(GpuCounters.Name);
                     if (!board.strip.vram_total_gb.HasValue && (GpuCounters.TotalGb > 0 || GpuCounters.UsedGb > 0))
                     {
                         board.strip.vram_used_gb = GpuCounters.UsedGb;

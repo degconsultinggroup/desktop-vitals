@@ -20,7 +20,7 @@ It needs no setup. Open it and it finds what is running on your machine.
 
 ## What it shows
 
-One window. The strip across the top is processor load, memory, graphics and video memory when the machine reports them, and free space on the system drive. The headline says "All good", or it counts what needs you.
+One window. The top of the pane is the v0.1.0 system bars: processor with every thread, grouped by core type, then memory, graphics, video memory, and disk. The headline says "All good", or it counts what needs you.
 
 Scripts, scheduled tasks, and models on disk are listed under the folder they belong to. Each line has a state dot, a name, and a short status. Hover a line for the facts behind it. Click a name to open its folder.
 

@@ -1,8 +1,10 @@
 // Glass window: one pane that draws a Board.
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
+using System.Linq;
 using System.Text;
 using System.Windows;
 using System.Windows.Controls;
@@ -25,7 +27,14 @@ namespace DesktopVitals
         public static readonly Brush Card = Gradient(Color.FromArgb(0x1E, 0xFF, 0xFF, 0xFF), Color.FromArgb(0x0A, 0xFF, 0xFF, 0xFF), false);
         public static readonly Brush Sheen = Gradient(Color.FromArgb(0x12, 0xFF, 0xFF, 0xFF), Color.FromArgb(0x00, 0xFF, 0xFF, 0xFF), false);
         public static readonly Brush Hover = Solid(0x1A, 0xFF, 0xFF, 0xFF);
+        public static readonly Brush Track = Solid(0x1C, 0xFF, 0xFF, 0xFF);
         public static readonly Brush Green = Solid(0xFF, 0x34, 0xD3, 0x6A);
+        public static readonly Brush Blue = Gradient(Color.FromRgb(0x5E, 0x9B, 0xFF), Color.FromRgb(0x6F, 0xE0, 0xFF), true);
+        public static readonly Brush Amber = Gradient(Color.FromRgb(0xFF, 0x9F, 0x2E), Color.FromRgb(0xFF, 0xCF, 0x5C), true);
+        public static readonly Brush Red = Gradient(Color.FromRgb(0xFF, 0x45, 0x5A), Color.FromRgb(0xFF, 0x7E, 0x6B), true);
+        public static readonly Brush BlueV = Gradient(Color.FromRgb(0x6F, 0xE0, 0xFF), Color.FromRgb(0x5E, 0x9B, 0xFF), false);
+        public static readonly Brush AmberV = Gradient(Color.FromRgb(0xFF, 0xCF, 0x5C), Color.FromRgb(0xFF, 0x9F, 0x2E), false);
+        public static readonly Brush RedV = Gradient(Color.FromRgb(0xFF, 0x7E, 0x6B), Color.FromRgb(0xFF, 0x45, 0x5A), false);
         public static readonly Brush Link = Solid(0xFF, 0x6F, 0xC8, 0xFF);
         public static readonly Brush AmberDot = Solid(0xFF, 0xFF, 0xB5, 0x47);
         public static readonly Brush FailedDot = Solid(0xFF, 0xFF, 0x5C, 0x5C);
@@ -75,6 +84,173 @@ namespace DesktopVitals
         }
     }
 
+    // One thin column per processor thread, grouped by core: performance cores first, then efficiency cores.
+    class ThreadStrip : StackPanel
+    {
+        readonly Dictionary<int, ScaleTransform> fills = new Dictionary<int, ScaleTransform>();
+        readonly Dictionary<int, Border> bars = new Dictionary<int, Border>();
+        readonly Dictionary<int, string> names = new Dictionary<int, string>();
+        readonly TextBlock busiestLine;
+
+        public ThreadStrip(List<KeyValuePair<int, int[]>> cores)
+        {
+            Margin = new Thickness(0, 2, 0, 6);
+            busiestLine = Theme.Label("", 11.5, Theme.Faint, FontWeights.Normal);
+            busiestLine.Margin = new Thickness(0, 4, 0, 0);
+            if (cores == null) cores = new List<KeyValuePair<int, int[]>>();
+            int top = cores.Count == 0 ? 0 : cores.Max(c => c.Key);
+            bool hybrid = cores.Any(c => c.Key != top);
+            int nThreads = cores.Sum(c => c.Value.Length);
+            if (nThreads == 0)
+            {
+                Visibility = Visibility.Collapsed;
+                return;
+            }
+            int pThreads = cores.Where(c => c.Key == top).Sum(c => c.Value.Length);
+            int eThreads = cores.Where(c => c.Key != top).Sum(c => c.Value.Length);
+            string text = nThreads.ToString(CultureInfo.InvariantCulture) + " threads";
+            if (hybrid) text += "  \u00B7  " + pThreads.ToString(CultureInfo.InvariantCulture) + " performance, " + eThreads.ToString(CultureInfo.InvariantCulture) + " efficiency";
+            var caption = Theme.Label(text, 11.5, Theme.Faint, FontWeights.Normal);
+            caption.Margin = new Thickness(0, 0, 0, 5);
+            Children.Add(caption);
+
+            var row = new Grid { Height = 28 };
+            int col = 0, prevEff = -1, coreNo = 0;
+            foreach (var c in cores)
+            {
+                double gapBefore = col == 0 ? 0 : c.Key != prevEff ? 10 : 4;
+                if (c.Key != prevEff) coreNo = 0;
+                coreNo++;
+                prevEff = c.Key;
+                for (int t = 0; t < c.Value.Length; t++)
+                {
+                    int cpu = c.Value[t];
+                    row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+                    var cell = new Grid { Margin = new Thickness(t == 0 ? gapBefore : 1.5, 0, 0, 0), Background = Brushes.Transparent };
+                    cell.Children.Add(new Border { CornerRadius = new CornerRadius(2), Background = Theme.Track });
+                    var sc = new ScaleTransform(1, 0);
+                    var f = new Border { CornerRadius = new CornerRadius(2), Background = Theme.BlueV, RenderTransform = sc, RenderTransformOrigin = new Point(0.5, 1) };
+                    cell.Children.Add(f);
+                    names[cpu] = "Thread " + cpu.ToString(CultureInfo.InvariantCulture) + "  \u00B7  " + (!hybrid ? "core " : c.Key == top ? "performance core " : "efficiency core ") + coreNo.ToString(CultureInfo.InvariantCulture);
+                    cell.ToolTip = names[cpu];
+                    Grid.SetColumn(cell, col++);
+                    row.Children.Add(cell);
+                    fills[cpu] = sc;
+                    bars[cpu] = f;
+                }
+            }
+            Children.Add(row);
+            Children.Add(busiestLine);
+        }
+
+        public void SetBusiest(string line)
+        {
+            if (busiestLine == null) return;
+            if (line == null) line = "";
+            if (busiestLine.Text != line) busiestLine.Text = line;
+        }
+
+        public void Set(int cpu, double frac, bool instant)
+        {
+            ScaleTransform sc;
+            if (!fills.TryGetValue(cpu, out sc)) return;
+            if (double.IsNaN(frac)) frac = 0;
+            frac = Math.Max(0, Math.Min(1, frac));
+            Brush b = frac >= 0.9 ? Theme.RedV : frac >= 0.75 ? Theme.AmberV : Theme.BlueV;
+            if (bars[cpu].Background != b) bars[cpu].Background = b;
+            string tip = names[cpu] + "  \u00B7  " + BoardText.BarPct(frac * 100);
+            ((FrameworkElement)bars[cpu].Parent).ToolTip = tip;
+            if (instant)
+            {
+                sc.BeginAnimation(ScaleTransform.ScaleYProperty, null);
+                sc.ScaleY = frac;
+                return;
+            }
+            var a = new DoubleAnimation(frac, TimeSpan.FromMilliseconds(500));
+            a.EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut };
+            sc.BeginAnimation(ScaleTransform.ScaleYProperty, a);
+        }
+    }
+
+    // A thin bar that eases to its new length.
+    class Bar : Grid
+    {
+        readonly Border fill;
+        readonly ScaleTransform scale = new ScaleTransform(0, 1);
+        double current = -1;
+
+        public Bar()
+        {
+            Height = 5;
+            var track = new Border();
+            track.CornerRadius = new CornerRadius(2.5);
+            track.Background = Theme.Track;
+            fill = new Border();
+            fill.CornerRadius = new CornerRadius(2.5);
+            fill.Background = Theme.Blue;
+            fill.RenderTransform = scale;
+            fill.RenderTransformOrigin = new Point(0, 0.5);
+            Children.Add(track);
+            Children.Add(fill);
+        }
+
+        public void Set(double frac, bool instant)
+        {
+            if (double.IsNaN(frac)) frac = 0;
+            frac = Math.Max(0, Math.Min(1, frac));
+            Brush b = frac >= 0.9 ? Theme.Red : frac >= 0.75 ? Theme.Amber : Theme.Blue;
+            if (fill.Background != b) fill.Background = b;
+            if (!instant && Math.Abs(frac - current) < 0.003) return;
+            current = frac;
+            if (instant)
+            {
+                scale.BeginAnimation(ScaleTransform.ScaleXProperty, null);
+                scale.ScaleX = frac;
+                return;
+            }
+            var a = new DoubleAnimation(frac, TimeSpan.FromMilliseconds(500));
+            a.EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut };
+            scale.BeginAnimation(ScaleTransform.ScaleXProperty, a);
+        }
+    }
+
+    // Label, detail, value, then a bar.
+    class StatRow : StackPanel
+    {
+        readonly TextBlock detail, value;
+        readonly Bar bar = new Bar();
+
+        public StatRow(string label)
+        {
+            Margin = new Thickness(0, 6, 0, 6);
+            var g = new Grid();
+            g.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            g.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            var l = Theme.Label(label, 13, Theme.Text, FontWeights.SemiBold);
+            detail = Theme.Label("", 12, Theme.Sub, FontWeights.Normal);
+            detail.Margin = new Thickness(8, 1, 8, 0);
+            value = Theme.Label("", 13, Theme.Text, FontWeights.SemiBold);
+            Grid.SetColumn(detail, 1);
+            Grid.SetColumn(value, 2);
+            g.Children.Add(l);
+            g.Children.Add(detail);
+            g.Children.Add(value);
+            bar.Margin = new Thickness(0, 7, 0, 0);
+            Children.Add(g);
+            Children.Add(bar);
+        }
+
+        public void Set(string d, string v, double frac, bool instant)
+        {
+            if (d == null) d = "";
+            if (v == null) v = "";
+            if (detail.Text != d) detail.Text = d;
+            if (value.Text != v) value.Text = v;
+            bar.Set(frac, instant);
+        }
+    }
+
     class VitalsWindow : Window
     {
         static readonly string StateDir = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "DesktopVitals");
@@ -86,9 +262,12 @@ namespace DesktopVitals
         bool fixtureMode;
         Board fixtureBoard;
         bool naming;
-        TextBlock nameText, stripText, headlineText, stateLabel;
+        string threadSig;
+        TextBlock nameText, headlineText, stateLabel;
+        StatRow cpuRow, memRow, gpuRow, vramRow, diskRow;
+        ThreadStrip threadStrip;
         TextBox nameEdit;
-        StackPanel nameHost, list;
+        StackPanel nameHost, system, list;
         Border switchTrack, pane;
         TranslateTransform knob;
         ScrollViewer scroll;
@@ -196,10 +375,20 @@ namespace DesktopVitals
 
             var stack = new StackPanel { Margin = new Thickness(16, 14, 16, 14) };
             stack.Children.Add(BuildHeader());
-            stripText = Theme.Label("", 12.5, Theme.Sub, FontWeights.Normal);
-            stripText.TextWrapping = TextWrapping.Wrap;
-            stripText.Margin = new Thickness(0, 8, 0, 0);
-            stack.Children.Add(stripText);
+            cpuRow = new StatRow("Processor");
+            memRow = new StatRow("Memory");
+            gpuRow = new StatRow("Graphics");
+            vramRow = new StatRow("Video memory");
+            diskRow = new StatRow(BoardText.DiskLabel());
+            threadStrip = new ThreadStrip(new List<KeyValuePair<int, int[]>>());
+            system = new StackPanel { Margin = new Thickness(0, 4, 0, 0) };
+            system.Children.Add(cpuRow);
+            system.Children.Add(threadStrip);
+            system.Children.Add(memRow);
+            system.Children.Add(gpuRow);
+            system.Children.Add(vramRow);
+            system.Children.Add(diskRow);
+            stack.Children.Add(system);
             headlineText = Theme.Label("", 13.5, Theme.Sub, FontWeights.SemiBold);
             headlineText.TextWrapping = TextWrapping.Wrap;
             headlineText.Margin = new Thickness(0, 8, 0, 8);
@@ -329,7 +518,6 @@ namespace DesktopVitals
             {
                 timer.Stop();
                 Engine.Reset();
-                if (!live && stripText != null) stripText.Text = "Off";
                 Native.SetProcessWorkingSetSize(Native.GetCurrentProcess(), (IntPtr)(-1), (IntPtr)(-1));
             }
         }
@@ -356,8 +544,7 @@ namespace DesktopVitals
             if (board == null || list == null) return;
             if (nameEdit == null && nameText != null)
                 nameText.Text = string.IsNullOrEmpty(board.name) ? Environment.MachineName : board.name;
-            if (stripText != null)
-                stripText.Text = live ? BoardText.Strip(board.strip) : "Off";
+            ShowSystem(board, snapshotDir != null);
             if (headlineText != null)
             {
                 headlineText.Text = board.headline == null || board.headline.text == null ? "" : board.headline.text;
@@ -373,6 +560,48 @@ namespace DesktopVitals
                 if (g.things == null) continue;
                 foreach (Thing t in g.things) AddThing(t);
             }
+        }
+
+        void ShowSystem(Board board, bool instant)
+        {
+            if (cpuRow == null) return;
+            Strip strip = board == null ? null : board.strip;
+            var meters = BoardText.Meters(strip);
+            if (meters.Count >= 1) cpuRow.Set(meters[0].Detail, meters[0].Value, meters[0].Fraction, instant);
+            if (meters.Count >= 2) memRow.Set(meters[1].Detail, meters[1].Value, meters[1].Fraction, instant);
+            if (meters.Count >= 3) gpuRow.Set(meters[2].Detail, meters[2].Value, meters[2].Fraction, instant);
+            if (meters.Count >= 4) vramRow.Set(meters[3].Detail, meters[3].Value, meters[3].Fraction, instant);
+            if (meters.Count >= 5) diskRow.Set(meters[4].Detail, meters[4].Value, meters[4].Fraction, instant);
+
+            string sig = BoardText.CoreSig(strip);
+            if (threadStrip == null || sig != threadSig)
+            {
+                var next = new ThreadStrip(BoardText.Cores(strip));
+                if (system != null && threadStrip != null)
+                {
+                    int at = system.Children.IndexOf(threadStrip);
+                    if (at >= 0)
+                    {
+                        system.Children.RemoveAt(at);
+                        system.Children.Insert(at, next);
+                    }
+                }
+                threadStrip = next;
+                threadSig = sig;
+            }
+            if (threadStrip == null) return;
+            var cores = BoardText.Cores(strip);
+            if (strip != null && strip.threads != null)
+            {
+                foreach (var c in cores)
+                    for (int t = 0; t < c.Value.Length; t++)
+                    {
+                        int cpu = c.Value[t];
+                        double pct = cpu >= 0 && cpu < strip.threads.Count ? strip.threads[cpu] : 0;
+                        threadStrip.Set(cpu, pct / 100.0, instant);
+                    }
+            }
+            threadStrip.SetBusiest(BoardText.BusiestLine(strip));
         }
 
         static Brush DotBrush(string state)

@@ -4,7 +4,15 @@
     "cpu": 3,
     "ram_used_gb": 5,
     "ram_total_gb": 16,
-    "disk_free_gb": 210
+    "disk_free_gb": 210,
+    "disk_total_gb": 256,
+    "threads": [5, 3, 2, 4, 2, 3, 3, 2],
+    "core_groups": [
+      {"kind": "core", "threads": [0, 1]},
+      {"kind": "core", "threads": [2, 3]},
+      {"kind": "core", "threads": [4, 5]},
+      {"kind": "core", "threads": [6, 7]}
+    ]
   },
   "headline": {
     "text": "Nothing of yours is running.",
