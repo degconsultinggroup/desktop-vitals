@@ -92,8 +92,38 @@ namespace DesktopVitals
         }
 
         public const int QueryLimited = 0x1000;
+        public const int QueryInfo = 0x0400;
+        public const int VmRead = 0x0010;
         public const int StatusLengthMismatch = unchecked((int)0xC0000004);
         public const int StatusBufferTooSmall = unchecked((int)0xC0000023);
+        public const int SqliteOpenReadonly = 1;
+        public const int SqliteOpenUri = 0x40;
+        public const int SqliteRow = 100;
+
+        [DllImport("iphlpapi.dll", SetLastError = true)] public static extern uint GetExtendedTcpTable(IntPtr buf, ref int len, bool sort, int af, int table, uint reserved);
+        [DllImport("psapi.dll", CharSet = CharSet.Unicode, SetLastError = true)] public static extern int GetMappedFileName(IntPtr h, IntPtr addr, StringBuilder sb, int cap);
+        [DllImport("kernel32.dll", SetLastError = true)] public static extern IntPtr VirtualQueryEx(IntPtr h, IntPtr addr, IntPtr info, IntPtr len);
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode)] public static extern uint QueryDosDevice(string name, char[] buf, uint cap);
+        [DllImport("kernel32.dll")] public static extern bool GetExitCodeProcess(IntPtr h, out uint code);
+
+        [DllImport("winsqlite3.dll", CallingConvention = CallingConvention.Cdecl)]
+        public static extern int sqlite3_open_v2([MarshalAs(UnmanagedType.LPStr)] string filename, out IntPtr db, int flags, IntPtr vfs);
+        [DllImport("winsqlite3.dll", CallingConvention = CallingConvention.Cdecl)]
+        public static extern int sqlite3_close(IntPtr db);
+        [DllImport("winsqlite3.dll", CallingConvention = CallingConvention.Cdecl)]
+        public static extern int sqlite3_busy_timeout(IntPtr db, int ms);
+        [DllImport("winsqlite3.dll", CallingConvention = CallingConvention.Cdecl)]
+        public static extern int sqlite3_prepare_v2(IntPtr db, byte[] sql, int nByte, out IntPtr stmt, IntPtr tail);
+        [DllImport("winsqlite3.dll", CallingConvention = CallingConvention.Cdecl)]
+        public static extern int sqlite3_step(IntPtr stmt);
+        [DllImport("winsqlite3.dll", CallingConvention = CallingConvention.Cdecl)]
+        public static extern int sqlite3_finalize(IntPtr stmt);
+        [DllImport("winsqlite3.dll", CallingConvention = CallingConvention.Cdecl)]
+        public static extern IntPtr sqlite3_column_blob(IntPtr stmt, int i);
+        [DllImport("winsqlite3.dll", CallingConvention = CallingConvention.Cdecl)]
+        public static extern int sqlite3_column_bytes(IntPtr stmt, int i);
+        [DllImport("winsqlite3.dll", CallingConvention = CallingConvention.Cdecl)]
+        public static extern int sqlite3_bind_text(IntPtr stmt, int i, byte[] val, int n, IntPtr dtor);
     }
 
     // NVIDIA NVML via the driver. Missing or failing calls leave GPU rows blank.

@@ -390,12 +390,36 @@ namespace DesktopVitals
             if (wantJson && at < 0)
             {
                 Board board = fixture != null ? fixture : ReadLiveBoard();
+                string json = BoardJson.Write(board);
+                string path = ArgValue(args, "--json");
                 try
                 {
-                    Console.Out.WriteLine(BoardJson.Write(board));
+                    if (!string.IsNullOrEmpty(path))
+                    {
+                        string full = Path.GetFullPath(path);
+                        string dir = Path.GetDirectoryName(full);
+                        if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+                        File.WriteAllText(full, json, new UTF8Encoding(false));
+                    }
+                    Console.Out.WriteLine(json);
                     Console.Out.Flush();
                 }
                 catch (Exception) { Environment.Exit(1); }
+                return;
+            }
+            int benchAt = Find(args, "--bench");
+            if (benchAt >= 0 && at < 0)
+            {
+                int n = 21;
+                if (benchAt + 1 < args.Length && !args[benchAt + 1].StartsWith("--"))
+                {
+                    int parsed;
+                    if (int.TryParse(args[benchAt + 1], NumberStyles.Integer, CultureInfo.InvariantCulture, out parsed)) n = parsed;
+                }
+                if (n < 5) n = 5;
+                if (n > 40) n = 40;
+                string benchPath = benchAt + 2 < args.Length && !args[benchAt + 2].StartsWith("--") ? args[benchAt + 2] : null;
+                RunBench(n, benchPath);
                 return;
             }
             if (at >= 0)
@@ -426,6 +450,41 @@ namespace DesktopVitals
                 ThreadPool.RegisterWaitForSingleObject(signal, delegate { win.Dispatcher.BeginInvoke(new Action(win.Toggle)); }, null, -1, false);
                 app.Run(win);
             }
+        }
+
+        static void RunBench(int n, string path)
+        {
+            Engine.Prime();
+            var start = DateTime.UtcNow;
+            while (true)
+            {
+                Engine.Tick();
+                double sec = (DateTime.UtcNow - start).TotalSeconds;
+                if (Engine.ScansComplete && sec >= 1) break;
+                if (sec >= 20) break;
+                Thread.Sleep(50);
+            }
+            Engine.Tick();
+            var samples = new double[n];
+            for (int i = 0; i < n; i++)
+            {
+                Engine.Tick();
+                samples[i] = Engine.LastPassMs;
+            }
+            Array.Sort(samples);
+            double p50 = samples[n / 2];
+            string line = "p50_ms=" + p50.ToString("0.00", CultureInfo.InvariantCulture)
+                + " n=" + n.ToString(CultureInfo.InvariantCulture)
+                + " procs=" + Engine.LastProcs.ToString(CultureInfo.InvariantCulture);
+            if (!string.IsNullOrEmpty(path))
+            {
+                string full = Path.GetFullPath(path);
+                string dir = Path.GetDirectoryName(full);
+                if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+                File.WriteAllText(full, line + "\n", new UTF8Encoding(false));
+            }
+            try { Console.Out.WriteLine(line); Console.Out.Flush(); }
+            catch (Exception) { }
         }
 
         static Board ReadLiveBoard()

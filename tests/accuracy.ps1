@@ -24,6 +24,9 @@ $StartLnk = Join-Path ([Environment]::GetFolderPath('Startup')) ("DVAccStart$Sta
 $DisabledName = "DVAccDisabled$Stamp"
 $DisabledExe = Join-Path $Work 'dv_acc_disabled.exe'
 $HttpPort = 0
+$ToolDir = $null
+$AgentHome = $null
+$ListenPortFile = $null
 $ConfigDir = Join-Path $env:APPDATA 'DesktopVitals'
 $ConfigFile = Join-Path $ConfigDir 'watch.txt'
 $ReviewFile = Join-Path $ConfigDir 'review.txt'
@@ -173,6 +176,128 @@ function Assert-NoNoise {
     return $ok
 }
 
+function Encode-Cwd {
+    param([string]$Path)
+    $sb = New-Object System.Text.StringBuilder
+    foreach ($ch in $Path.ToCharArray()) {
+        if ($ch -match '[A-Za-z0-9]') { [void]$sb.Append($ch) } else { [void]$sb.Append('-') }
+    }
+    return $sb.ToString()
+}
+
+function New-GitRepo {
+    param([string]$Dir)
+    New-Item -ItemType Directory -Force -Path $Dir | Out-Null
+    Push-Location $Dir
+    try {
+        & git init -b feature-x 2>&1 | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            & git init 2>&1 | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw "git init failed in $Dir" }
+            & git checkout -b feature-x 2>&1 | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw "git checkout failed in $Dir" }
+        }
+        Set-Content -LiteralPath (Join-Path $Dir 'readme.txt') -Value 'fixture' -Encoding ASCII
+        & git -c user.email=desktop-vitals@example.com -c user.name='Desktop Vitals' add readme.txt
+        if ($LASTEXITCODE -ne 0) { throw "git add failed in $Dir" }
+        & git -c user.email=desktop-vitals@example.com -c user.name='Desktop Vitals' commit -m fixture
+        if ($LASTEXITCODE -ne 0) { throw "git commit failed in $Dir" }
+    }
+    finally { Pop-Location }
+}
+
+function Write-AgentHome {
+    param($Home, $Repo, $Processes)
+    $repoFull = [System.IO.Path]::GetFullPath($Repo)
+    $enc = Encode-Cwd $repoFull
+    $sid = [guid]::NewGuid().ToString()
+    $proj = Join-Path $Home (Join-Path '.claude\projects' $enc)
+    New-Item -ItemType Directory -Force -Path $proj, (Join-Path $Home '.claude\sessions') | Out-Null
+    $cwdJson = $repoFull.Replace('\', '\\')
+    $stamp = [DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ss.fffZ')
+    $line = '{"cwd":"' + $cwdJson + '","timestamp":"' + $stamp + '","message":{"content":[{"type":"tool_use","name":"Edit","input":{"file_path":"C:\\src\\install.ps1"}}]}}'
+    Set-Content -LiteralPath (Join-Path $proj ($sid + '.jsonl')) -Value $line -Encoding ASCII
+    foreach ($proc in $Processes) {
+        $ft = $proc.StartTime.ToFileTime()
+        $json = '{"sessionId":"' + $sid + '","cwd":"' + $cwdJson + '","procStart":"' + $ft + '"}'
+        Set-Content -LiteralPath (Join-Path $Home ('.claude\sessions\' + $proc.Id + '.json')) -Value $json -Encoding ASCII
+    }
+}
+
+function Wait-CommandLine {
+    param([string]$Like, [int]$Seconds = 15)
+    $deadline = (Get-Date).AddSeconds($Seconds)
+    while ((Get-Date) -lt $deadline) {
+        $hits = @(Get-CimInstance Win32_Process -Filter "Name = 'powershell.exe'" | Where-Object { $_.CommandLine -and $_.CommandLine -like $Like })
+        if ($hits.Count -gt 0) { return [int]$hits[0].ProcessId }
+        Start-Sleep -Milliseconds 200
+    }
+    return 0
+}
+
+function Invoke-BoardJson {
+    param([string]$HomeDir)
+    $exe = Join-Path $Root 'bin\DesktopVitals.exe'
+    $path = Join-Path $Work 'board.json'
+    if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Force }
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = $exe
+    $psi.Arguments = '--json "' + $path + '"'
+    $psi.UseShellExecute = $false
+    $psi.CreateNoWindow = $true
+    $psi.EnvironmentVariables['DESKTOPVITALS_HOME'] = $HomeDir
+    $proc = [System.Diagnostics.Process]::Start($psi)
+    if (-not $proc.WaitForExit(120000)) {
+        try { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue } catch { }
+        throw 'json exceeded 120000 ms'
+    }
+    if ($proc.ExitCode -ne 0) { throw "json exit $($proc.ExitCode)" }
+    if (-not (Test-Path -LiteralPath $path)) { throw 'json wrote no file' }
+    $raw = [System.IO.File]::ReadAllText($path)
+    if ([string]::IsNullOrWhiteSpace($raw)) { throw 'json file empty' }
+    return $raw | ConvertFrom-Json
+}
+
+function Invoke-Bench {
+    $exe = Join-Path $Root 'bin\DesktopVitals.exe'
+    $path = Join-Path $Work 'bench.txt'
+    if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Force }
+    $p = Start-Process -FilePath $exe -ArgumentList @('--bench', '21', $path) -PassThru -WindowStyle Hidden
+    if (-not $p.WaitForExit(180000)) {
+        try { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue } catch { }
+        throw 'bench exceeded 180000 ms'
+    }
+    if ($p.ExitCode -ne 0) { throw "bench exit $($p.ExitCode)" }
+    if (-not (Test-Path -LiteralPath $path)) { throw 'bench wrote no file' }
+    $line = ([System.IO.File]::ReadAllText($path)).Trim()
+    if ($line -notmatch 'p50_ms=([0-9.]+)\s+n=(\d+)\s+procs=(\d+)') { throw "bad bench line: $line" }
+    return @{ P50 = $Matches[1]; N = $Matches[2]; Procs = $Matches[3]; Line = $line }
+}
+
+function Get-Things {
+    param($Board)
+    $list = New-Object System.Collections.Generic.List[object]
+    foreach ($g in @($Board.groups)) {
+        foreach ($t in @($g.things)) {
+            $list.Add([pscustomobject]@{
+                    Group     = [string]$g.title
+                    GroupKind = [string]$g.kind
+                    Name      = [string]$t.name
+                    Kind      = [string]$t.kind
+                    State     = [string]$t.state
+                    Project   = [string]$t.project
+                    Branch    = [string]$t.branch
+                    Detail    = [string]$t.detail
+                    Why       = [string]$t.why
+                    Count     = [int]$t.count
+                    Id        = [string]$t.id
+                    Ports     = @($t.ports)
+                })
+        }
+    }
+    return $list
+}
+
 function Invoke-Snapshot {
     param([string]$Dir, [int]$TimeoutMs = 90000)
     New-Item -ItemType Directory -Force -Path $Dir | Out-Null
@@ -254,6 +379,9 @@ function Clear-Fixtures {
     }
     if ($ModelCreated -and (Test-Path -LiteralPath $ModelFile)) {
         Remove-Item -LiteralPath $ModelFile -Force -ErrorAction SilentlyContinue
+    }
+    if ($ToolDir -and (Test-Path -LiteralPath $ToolDir)) {
+        Remove-Item -LiteralPath $ToolDir -Recurse -Force -ErrorAction SilentlyContinue
     }
     Get-Process DesktopVitals -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 }
@@ -339,6 +467,69 @@ try {
         try { $null = Start-Child -FilePath $llama.Source -ArgumentList @('--host', '127.0.0.1', '--port', '18080') } catch { }
     }
 
+    # v2 board: two agent repos, an orphan bot, a listen port, and a mapped split model inside a tool folder.
+    $nodeCmd = Get-Command node -ErrorAction SilentlyContinue
+    $RepoA = Join-Path $Work 'repo-a'
+    $RepoB = Join-Path $Work 'repo-b'
+    $BotRepo = Join-Path $Work 'bots-repo'
+    $ToolDir = Join-Path $ModelsDir ("dv-tool-" + $Stamp)
+    $AgentHome = Join-Path $Work 'agent-home'
+    $ListenPortFile = Join-Path $Work 'listen.port'
+    New-GitRepo $RepoA
+    New-GitRepo $RepoB
+    New-GitRepo $BotRepo
+    $agentJs = Join-Path $Work 'dv_agent.js'
+    Set-Content -LiteralPath $agentJs -Value 'setInterval(function () {}, 1000);' -Encoding ASCII
+    $listenScript = Join-Path $Work 'dv_acc_listen.ps1'
+    @'
+$listener = New-Object System.Net.Sockets.TcpListener ([System.Net.IPAddress]::Loopback, 0)
+$listener.Start()
+Set-Content -LiteralPath $args[0] -Value $listener.LocalEndpoint.Port -Encoding ASCII
+while ($true) { Start-Sleep -Seconds 2 }
+'@ | Set-Content -LiteralPath $listenScript -Encoding ASCII
+    $botScript = Join-Path $BotRepo 'dv_acc_bot.ps1'
+    @'
+$beat = Join-Path $PSScriptRoot 'beat.txt'
+while ($true) {
+  Set-Content -LiteralPath $beat -Value ([DateTime]::UtcNow.ToString('o')) -Encoding ASCII
+  Start-Sleep -Milliseconds 400
+}
+'@ | Set-Content -LiteralPath $botScript -Encoding ASCII
+    New-Item -ItemType Directory -Force -Path (Join-Path $ToolDir 'models'), (Join-Path $ToolDir 'packs'), (Join-Path $ToolDir 'logs') | Out-Null
+    $shard = New-Object byte[] 4096
+    [System.IO.File]::WriteAllBytes((Join-Path $ToolDir 'models\fixture-weights-00001-of-00002.gguf'), $shard)
+    [System.IO.File]::WriteAllBytes((Join-Path $ToolDir 'models\fixture-weights-00002-of-00002.gguf'), $shard)
+    Set-Content -LiteralPath (Join-Path $ToolDir 'packs\readme.txt') -Value 'pack' -Encoding ASCII
+    Set-Content -LiteralPath (Join-Path $ToolDir 'logs\run.log') -Value 'log' -Encoding ASCII
+    $mapScript = Join-Path $ToolDir 'dv_acc_map.ps1'
+    @'
+$root = Split-Path -Parent $MyInvocation.MyCommand.Path
+$mappedA = [System.IO.MemoryMappedFiles.MemoryMappedFile]::CreateFromFile((Join-Path $root 'models\fixture-weights-00001-of-00002.gguf'))
+$mappedB = [System.IO.MemoryMappedFiles.MemoryMappedFile]::CreateFromFile((Join-Path $root 'models\fixture-weights-00002-of-00002.gguf'))
+while ($true) { Start-Sleep -Seconds 2 }
+'@ | Set-Content -LiteralPath $mapScript -Encoding ASCII
+    $AgentA = @()
+    if ($nodeCmd) {
+        $AgentA += Start-Child -FilePath $nodeCmd.Source -ArgumentList @($agentJs, '--agent', 'claude') -WorkingDirectory $RepoA
+        $AgentA += Start-Child -FilePath $nodeCmd.Source -ArgumentList @($agentJs, '--agent', 'claude') -WorkingDirectory $RepoA
+        $null = Start-Child -FilePath $nodeCmd.Source -ArgumentList @($agentJs, '--model', 'grok-4.7-high', '--worktree', '.') -WorkingDirectory $RepoB
+        foreach ($ap in $AgentA) { $ap.Refresh() | Out-Null }
+        Write-AgentHome -Home $AgentHome -Repo $RepoA -Processes $AgentA
+    }
+    $null = Start-Child -FilePath 'powershell.exe' -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $listenScript, $ListenPortFile)
+    $null = Start-Child -FilePath 'powershell.exe' -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $mapScript) -WorkingDirectory $ToolDir
+    $launchCmd = Join-Path $BotRepo 'launch.cmd'
+    Set-Content -LiteralPath $launchCmd -Value ("@echo off`r`nstart `"`" /b powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"{0}`"`r`n" -f $botScript) -Encoding ASCII
+    $launcher = Start-Process -FilePath 'cmd.exe' -ArgumentList @('/c', $launchCmd) -WorkingDirectory $BotRepo -WindowStyle Hidden -PassThru
+    if (-not $launcher.WaitForExit(20000)) {
+        try { Stop-Process -Id $launcher.Id -Force -ErrorAction SilentlyContinue } catch { }
+    }
+    $botPid = Wait-CommandLine -Like '*dv_acc_bot.ps1*' -Seconds 15
+    if ($botPid -gt 0) {
+        $botProc = Get-Process -Id $botPid -ErrorAction SilentlyContinue
+        if ($botProc) { $Children.Add($botProc) | Out-Null }
+    }
+
     Start-Sleep -Seconds 3
 
     # Main accuracy snapshot
@@ -401,6 +592,71 @@ try {
     }
     Write-Check 'ai-model' $aiOk
 
+    # Live board: agents, orphan bot, listen port, failed task, mapped model. No Windows noise, no duplicate ids.
+    $v2Ok = $true
+    $v2Detail = ''
+    $tp = 0
+    $fpN = 0
+    try {
+        if (-not $nodeCmd) { throw 'node is required for agent fixtures' }
+        $portDeadline = (Get-Date).AddSeconds(10)
+        while (-not (Test-Path -LiteralPath $ListenPortFile) -and (Get-Date) -lt $portDeadline) { Start-Sleep -Milliseconds 200 }
+        if (-not (Test-Path -LiteralPath $ListenPortFile)) { throw 'listen port file missing' }
+        $listenPort = [int](Get-Content -LiteralPath $ListenPortFile -Raw).Trim()
+        $board = Invoke-BoardJson -HomeDir $AgentHome
+        $things = @(Get-Things $board)
+        $seenIds = @{}
+        $toolName = 'dv-tool-' + $Stamp
+        foreach ($t in $things) {
+            if ($seenIds.ContainsKey($t.Id)) { $v2Ok = $false; $fpN++; [void]$script:Fp.Add("duplicate id $($t.Id)") }
+            else { $seenIds[$t.Id] = $true }
+            $blob = "$($t.Name) $($t.Why) $($t.Detail) $($t.Project)"
+            if (-not (Assert-NoNoise 'v2' $blob)) { $v2Ok = $false; $fpN++ }
+            if ($t.Name -eq $toolName -or $t.Group -eq $toolName) {
+                $v2Ok = $false
+                $fpN++
+                [void]$script:Fp.Add('tool folder named as a model')
+            }
+        }
+        $claude = @($things | Where-Object { $_.Name -eq 'Claude Code' -and $_.Project -eq 'repo-a' })
+        $cursor = @($things | Where-Object { $_.Name -eq 'Cursor agent' -and $_.Project -eq 'repo-b' })
+        $bot = @($things | Where-Object { $_.Name -eq 'dv_acc_bot.ps1' -and $_.Kind -eq 'bot' })
+        $server = @($things | Where-Object { $_.Kind -eq 'server' -and ($_.Ports -contains $listenPort) })
+        $failed = @($things | Where-Object { $_.Name -eq $TaskFail -and $_.State -eq 'failed' })
+        $model = @($things | Where-Object { $_.Name -eq 'fixture-weights' -and $_.Kind -eq 'model' -and $_.State -eq 'running' })
+        $checks = @(
+            @{ N = 'claude'; Ok = ($claude.Count -eq 1 -and [int]$claude[0].Count -ge 2 -and $claude[0].State -eq 'waiting' -and $claude[0].Branch -eq 'feature-x' -and $claude[0].Detail -match 'editing' -and $claude[0].Detail -match 'install\.ps1') },
+            @{ N = 'cursor'; Ok = ($cursor.Count -eq 1 -and $cursor[0].Branch -eq 'feature-x' -and $cursor[0].Why -match 'grok-4\.7-high') },
+            @{ N = 'bot'; Ok = ($bot.Count -eq 1 -and $bot[0].Project -eq 'bots-repo') },
+            @{ N = 'server'; Ok = ($server.Count -ge 1) },
+            @{ N = 'task'; Ok = ($failed.Count -ge 1) },
+            @{ N = 'model'; Ok = ($model.Count -ge 1) }
+        )
+        foreach ($c in $checks) {
+            if ($c.Ok) { $tp++ }
+            else { $v2Ok = $false; [void]$script:Fn.Add("v2 missing $($c.N)") }
+        }
+        $miss = @($checks | Where-Object { -not $_.Ok } | ForEach-Object { $_.N })
+        $nodeLine = @($things | Where-Object { $_.Name -eq 'dv_acc_node.js' })
+        if ($nodeLine.Count -lt 1) { $v2Ok = $false; [void]$script:Fn.Add('v2 node script renamed or missing') }
+        $den = $tp + $fpN
+        $prec = if ($den -eq 0) { 0 } else { [math]::Round($tp / $den, 3) }
+        $rec = [math]::Round($tp / 6.0, 3)
+        $v2Detail = "precision=$prec ($tp/$den) recall=$rec ($tp/6) missing=$($miss -join ',')"
+        if ($tp -lt 6 -or $fpN -gt 0) { $v2Ok = $false }
+        [void]$report.Add($v2Detail)
+        if (-not $v2Ok) {
+            $names = ($things | ForEach-Object { "$($_.Kind):$($_.Name):$($_.Project):$($_.State)" }) -join ' | '
+            $v2Detail = "$v2Detail things=$names"
+        }
+    }
+    catch {
+        $v2Ok = $false
+        if (-not $v2Detail) { $v2Detail = $_.Exception.Message }
+        else { $v2Detail = "$v2Detail; $($_.Exception.Message)" }
+    }
+    Write-Check 'v2-board' $v2Ok $v2Detail
+
     # Exit mid-scan: kill during snapshot; host must stay clean and a later snapshot must work
     $midOk = $false
     $midDetail = ''
@@ -447,6 +703,17 @@ try {
         Start-Sleep -Seconds 1
         $after = @(Get-Process -ErrorAction SilentlyContinue).Count
         $floodDetail = "procs $before -> $after (spawned $spawn)"
+        $bench = $null
+        $benchErr = ''
+        try { $bench = Invoke-Bench }
+        catch { $benchErr = $_.Exception.Message }
+        if ($bench) {
+            $p50 = [double]$bench.P50
+            $passDetail = "p50_ms=$($bench.P50) n=$($bench.N) procs=$($bench.Procs); $floodDetail"
+            Write-Check 'pass-time' ($p50 -le 50) $passDetail
+            [void]$report.Add($passDetail)
+        }
+        else { Write-Check 'pass-time' $false $benchErr }
         $null = Invoke-Snapshot -Dir (Join-Path $Work 'snap-flood') -TimeoutMs 90000
         if ($after -lt 1000 -and $spawn -eq $need) {
             # Could not reach 1000 on this host; still required no crash.

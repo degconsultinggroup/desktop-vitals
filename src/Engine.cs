@@ -15,12 +15,13 @@ namespace DesktopVitals
 {
     class Proc
     {
-        public int Pid;
+        public int Pid, Parent, Session;
         public string Exe;        // image name, e.g. chrome.exe
         public long CpuTime;      // 100 ns units, user + kernel
         public long CreateTime;
         public long Private;      // private working set, what Task Manager calls Memory
         public long Committed;    // private bytes, held even when Windows pages an idle process out of RAM
+        public long Io;           // read + write operation counts from the snapshot
         public double Cpu;       // percent of the whole machine
         public string Cmd = "";
     }
@@ -58,8 +59,11 @@ namespace DesktopVitals
                 {
                     var pr = new Proc();
                     pr.Pid = pid;
+                    pr.Parent = (int)Marshal.ReadIntPtr(p, 88).ToInt64();
+                    pr.Session = Marshal.ReadInt32(p, 100);
                     pr.Private = Marshal.ReadInt64(p, 8);
                     pr.Committed = Marshal.ReadInt64(p, 200);   // PrivatePageCount
+                    pr.Io = Marshal.ReadInt64(p, 208) + Marshal.ReadInt64(p, 216);
                     pr.CreateTime = Marshal.ReadInt64(p, 32);
                     pr.CpuTime = Marshal.ReadInt64(p, 40) + Marshal.ReadInt64(p, 48);
                     int nlen = Marshal.ReadInt16(p, 56) & 0xffff;
@@ -110,27 +114,46 @@ namespace DesktopVitals
                 int ret;
                 if (Native.NtQueryInformationProcess(h, 0, pbi, 48, out ret) != 0) return null;
                 IntPtr peb = Marshal.ReadIntPtr(pbi, 8);
-                IntPtr parms = ReadPtr(h, peb + 0x20);
-                if (parms == IntPtr.Zero) return null;
-                byte[] us = new byte[16];
-                IntPtr got;
-                if (!Native.ReadProcessMemory(h, parms + 0x38, us, 16, out got)) return null;
-                int len = BitConverter.ToUInt16(us, 0);
-                long bufAddr = BitConverter.ToInt64(us, 8);
-                if (len == 0 || len > 32 * 1024 || bufAddr == 0) return null;
-                byte[] chars = new byte[len];
-                if (!Native.ReadProcessMemory(h, new IntPtr(bufAddr), chars, len, out got)) return null;
-                return Encoding.Unicode.GetString(chars).TrimEnd('\\');
+                string cwd = ReadCwd(h, peb, true);
+                if (cwd != null) return cwd;
+                IntPtr wowBuf = Marshal.AllocHGlobal(IntPtr.Size);
+                try
+                {
+                    if (Native.NtQueryInformationProcess(h, 26, wowBuf, IntPtr.Size, out ret) != 0) return null;
+                    IntPtr wow = Marshal.ReadIntPtr(wowBuf);
+                    if (wow == IntPtr.Zero) return null;
+                    return ReadCwd(h, wow, false);
+                }
+                finally { Marshal.FreeHGlobal(wowBuf); }
             }
             catch (Exception) { return null; }
             finally { Marshal.FreeHGlobal(pbi); Native.CloseHandle(h); }
         }
 
-        static IntPtr ReadPtr(IntPtr h, IntPtr addr)
+        static string ReadCwd(IntPtr h, IntPtr peb, bool wide)
         {
-            byte[] b = new byte[8];
+            IntPtr parms = ReadPtr(h, peb + (wide ? 0x20 : 0x10), wide ? 8 : 4);
+            if (parms == IntPtr.Zero) return null;
+            int ptr = wide ? 8 : 4;
+            IntPtr us = parms + (wide ? 0x38 : 0x24);
+            byte[] hdr = new byte[ptr == 8 ? 16 : 8];
             IntPtr got;
-            return Native.ReadProcessMemory(h, addr, b, 8, out got) ? new IntPtr(BitConverter.ToInt64(b, 0)) : IntPtr.Zero;
+            if (!Native.ReadProcessMemory(h, us, hdr, hdr.Length, out got)) return null;
+            int len = BitConverter.ToUInt16(hdr, 0);
+            long bufAddr = ptr == 8 ? BitConverter.ToInt64(hdr, 8) : BitConverter.ToUInt32(hdr, 4);
+            if (len <= 0 || len > 32 * 1024 || bufAddr == 0) return null;
+            byte[] chars = new byte[len];
+            if (!Native.ReadProcessMemory(h, new IntPtr(bufAddr), chars, len, out got)) return null;
+            return Encoding.Unicode.GetString(chars).TrimEnd('\\');
+        }
+
+        static IntPtr ReadPtr(IntPtr h, IntPtr addr, int bytes)
+        {
+            byte[] b = new byte[bytes];
+            IntPtr got;
+            if (!Native.ReadProcessMemory(h, addr, b, bytes, out got)) return IntPtr.Zero;
+            long v = bytes == 8 ? BitConverter.ToInt64(b, 0) : BitConverter.ToUInt32(b, 0);
+            return new IntPtr(v);
         }
 
         public static string ImagePath(int pid)
@@ -427,7 +450,7 @@ namespace DesktopVitals
         // One folder of weights as one model, or null when it holds none. BFS skips reparse points (no symlink hang).
         static InstalledModel FolderModel(DirectoryInfo sub, string root)
         {
-            var weights = new List<FileInfo>(); long bytes = 0; int n = 0;
+            var weights = new List<FileInfo>(); int n = 0;
             var q = new Queue<DirectoryInfo>(); var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             for (q.Enqueue(sub); q.Count > 0 && n <= 20000; )
             {
@@ -435,16 +458,30 @@ namespace DesktopVitals
                 if (!seen.Add(full)) continue;
                 try
                 {
-                    foreach (var f in dir.EnumerateFiles()) { bytes += f.Length; if (IsWeights(f)) weights.Add(f); if (++n > 20000) break; }
+                    foreach (var f in dir.EnumerateFiles()) { if (IsWeights(f)) weights.Add(f); if (++n > 20000) break; }
                     if (n <= 20000) foreach (var c in dir.EnumerateDirectories())
                         if ((c.Attributes & FileAttributes.ReparsePoint) == 0 && !c.Name.StartsWith(".")) q.Enqueue(c);
                 }
                 catch (Exception) { }
             }
             if (weights.Count == 0) return null;
-            // "push-to-talk\model" is better called push-to-talk.
-            string name = PlainNames.Contains(sub.Name.ToLowerInvariant()) && sub.Parent != null ? sub.Parent.Name : sub.Name;
-            var m = new InstalledModel { Name = Pretty(name), Path = sub.FullName, Where = root, Bytes = bytes, Files = weights.Count, WeightBytes = weights.Sum(f => f.Length) };
+            // One weight family is named from the file, so a tool folder that merely holds the model stays the tool.
+            var fam = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            foreach (var f in weights)
+            {
+                string key = Regex.Replace(f.Name, "-\\d{5}-of-\\d{5}(?=\\.[a-z0-9]+$)", "", RegexOptions.IgnoreCase);
+                int have;
+                fam.TryGetValue(key, out have);
+                fam[key] = have + 1;
+            }
+            string name;
+            if (fam.Count == 1)
+            {
+                name = null;
+                foreach (string k in fam.Keys) name = System.IO.Path.GetFileNameWithoutExtension(k);
+            }
+            else name = PlainNames.Contains(sub.Name.ToLowerInvariant()) && sub.Parent != null ? sub.Parent.Name : sub.Name;
+            var m = new InstalledModel { Name = Pretty(name), Path = weights[0].FullName, Where = root, Bytes = weights.Sum(f => f.Length), Files = weights.Count, WeightBytes = weights.Sum(f => f.Length) };
             m.Added = weights.Max(f => f.CreationTime);
             m.PathKeys.Add(Norm(sub.FullName));
             if (sub.Name.Length >= 5) m.NameKeys.Add(Norm(sub.Name));
@@ -1156,13 +1193,15 @@ namespace DesktopVitals
         }
     }
 
-    static class Engine
+    static partial class Engine
     {
         public static Board Current = Empty();
         public static bool TasksReady { get { return TaskList.Ready; } }
         public static bool ModelsReady { get { return ModelScan.Ready; } }
         // Both background scans have finished a pass. Snapshot waits on this, not on a fixed delay.
         public static bool ScansComplete { get { return TaskList.Ready && ModelScan.Ready; } }
+        public static double LastPassMs;
+        public static int LastProcs;
 
         // Drop the one-time import headline after the window or snapshot has actually shown it.
         public static void AcknowledgeImport(Board board)
@@ -1192,6 +1231,7 @@ namespace DesktopVitals
             haveThreads = false;
             prevWall = cpuIdle = cpuKernel = cpuUser = 0;
             threadBusy = threadTotal = prevThreadBusy = prevThreadTotal = null;
+            LiveBoard.Clear();
         }
 
         public static void Prime()
@@ -1442,6 +1482,13 @@ namespace DesktopVitals
 
         static Board Build()
         {
+            var clock = Stopwatch.StartNew();
+            try { return BuildBoard(); }
+            finally { LastPassMs = clock.Elapsed.TotalMilliseconds; }
+        }
+
+        static Board BuildBoard()
+        {
             var board = Empty();
             string named = Prefs.Name;
             board.name = Redact.Show(string.IsNullOrEmpty(named) ? Environment.MachineName : named);
@@ -1501,191 +1548,21 @@ namespace DesktopVitals
             try { procs = Procs.Snapshot(); SampleProcs(procs); }
             catch (Exception) { procs = new List<Proc>(); }
 
-            bool textPin = false;
-            foreach (PinRule rule in Prefs.PinRules) if (!rule.ByExe) textPin = true;
-            foreach (Proc p in procs)
-                if (textPin || Scripts.IsInterpreter(p.Exe ?? "")) CmdOf(p);
+            List<Group> order;
+            try { order = LiveBoard.Make(procs); }
+            catch (Exception) { order = new List<Group>(); }
 
-            var order = new List<Group>();
-            var byFolder = new Dictionary<string, Group>(StringComparer.OrdinalIgnoreCase);
-            var scriptHits = new Dictionary<string, Thing>(StringComparer.OrdinalIgnoreCase);
-            var scriptFolders = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-            foreach (Proc p in procs)
-            {
-                if (!Scripts.IsInterpreter(p.Exe ?? "")) continue;
-                string script = null;
-                try
-                {
-                    script = Scripts.Find(p, delegate
-                    {
-                        string dir = CwdOf(p);
-                        return dir;
-                    });
-                }
-                catch (Exception) { script = null; }
-                if (string.IsNullOrEmpty(script)) continue;
-                string folder = Scripts.Folder(script);
-                Thing hit;
-                if (!scriptHits.TryGetValue(script, out hit))
-                {
-                    hit = new Thing();
-                    hit.id = "script:" + script;
-                    hit.name = Scripts.Label(script);
-                    hit.kind = "script";
-                    hit.state = "running";
-                    hit.project = Scripts.Language(p.Exe);
-                    hit.folder = script.StartsWith("module:", StringComparison.Ordinal) ? folder : script;
-                    hit.why = p.Cmd ?? "";
-                    hit.since = Age(p.CreateTime);
-                    hit.count = 0;
-                    scriptHits[script] = hit;
-                    if (!string.IsNullOrEmpty(folder)) scriptFolders.Add(folder);
-                }
-                hit.count++;
-                hit.cpu += p.Cpu;
-                hit.ram_mb += p.Private / 1048576.0;
-                hit.vram_mb += VramOf(p.Pid) / 1048576.0;
-                string older = Age(p.CreateTime);
-                if (hit.since.Length == 0) hit.since = older;
-            }
-
-            foreach (var kv in scriptHits)
-            {
-                Thing hit = kv.Value;
-                if (hit.count < 1) hit.count = 1;
-                if (Hidden(hit.id, hit.name)) continue;
-                string folder = Scripts.Folder(kv.Key) ?? "";
-                string title = "";
-                try { title = System.IO.Path.GetFileName(folder.TrimEnd('\\')); } catch (Exception) { title = ""; }
-                if (string.IsNullOrEmpty(title)) title = "Scripts";
-                Group g = TakeGroup(byFolder, order, string.IsNullOrEmpty(folder) ? "scripts" : folder, title, "project");
-                Finish(hit);
-                g.things.Add(hit);
-            }
-
-            try { TaskList.Refresh(null); } catch (Exception) { }
-            foreach (TaskInfo task in TaskList.Items)
-            {
-                var t = new Thing();
-                t.id = "task:" + (string.IsNullOrEmpty(task.Path) ? task.Name : task.Path);
-                t.name = task.Name ?? "";
-                t.kind = "task";
-                t.project = "task";
-                if (task.Running) t.state = "running";
-                else if (task.Failed) t.state = "failed";
-                else t.state = "idle";
-                t.folder = task.Script;
-                t.why = task.Action ?? "";
-                t.since = SinceWhen(task.LastRun);
-                if (task.Failed && task.LastRun.Year >= 2000)
-                    t.detail = "failed " + task.LastRun.ToString("HH:mm", CultureInfo.InvariantCulture);
-                if (Hidden(t.id, t.name)) continue;
-                string folder = "";
-                try { if (!string.IsNullOrEmpty(task.Script)) folder = System.IO.Path.GetDirectoryName(task.Script) ?? ""; }
-                catch (Exception) { folder = ""; }
-                string title = "Tasks";
-                string key = "tasks";
-                if (folder.Length > 0)
-                {
-                    key = folder;
-                    try { title = System.IO.Path.GetFileName(folder.TrimEnd('\\')); } catch (Exception) { title = "Tasks"; }
-                    if (string.IsNullOrEmpty(title)) title = "Tasks";
-                }
-                Finish(t);
-                TakeGroup(byFolder, order, key, title, "project").things.Add(t);
-            }
-
-            try { ModelScan.Refresh(scriptFolders); } catch (Exception) { }
-            var models = ModelScan.Items;
-            if (models != null && models.Count > 0)
-            {
-                var t = new Thing();
-                t.id = "models";
-                t.kind = "model";
-                t.state = "idle";
-                t.count = models.Count;
-                if (models.Count == 1)
-                {
-                    t.name = models[0].Name ?? "model";
-                    t.folder = models[0].Path;
-                    t.why = models[0].Name ?? "";
-                }
-                else
-                {
-                    t.name = models.Count.ToString(CultureInfo.InvariantCulture) + " models on disk";
-                    var names = new StringBuilder();
-                    foreach (InstalledModel m in models)
-                    {
-                        if (names.Length > 0) names.Append(" \u00B7 ");
-                        names.Append(m.Name);
-                        if (names.Length > 4000) break;
-                    }
-                    t.why = names.ToString();
-                }
-                if (!Hidden(t.id, t.name))
-                {
-                    Finish(t);
-                    var g = new Group();
-                    g.title = "MODELS";
-                    g.kind = "models";
-                    g.things.Add(t);
-                    order.Add(g);
-                }
-            }
-
-            if (Prefs.PinRules.Count > 0)
-            {
-                var pinGroup = new Group();
-                pinGroup.title = "Pinned";
-                pinGroup.kind = "other";
-                foreach (PinRule rule in Prefs.PinRules)
-                {
-                    var t = new Thing();
-                    t.id = string.IsNullOrEmpty(rule.Id) ? "pin:" + rule.Label : rule.Id;
-                    t.name = rule.Label ?? "";
-                    t.kind = "other";
-                    t.pinned = true;
-                    t.state = "idle";
-                    t.count = 0;
-                    foreach (Proc p in procs)
-                    {
-                        bool hit = false;
-                        if (rule.ByExe) hit = string.Equals(p.Exe, rule.Match, StringComparison.OrdinalIgnoreCase);
-                        else if (!string.IsNullOrEmpty(rule.Match) && !string.IsNullOrEmpty(p.Cmd))
-                            hit = p.Cmd.IndexOf(rule.Match, StringComparison.OrdinalIgnoreCase) >= 0;
-                        if (!hit) continue;
-                        if (t.count == 0)
-                        {
-                            t.why = p.Cmd ?? p.Exe ?? "";
-                            try { if (!string.IsNullOrEmpty(rule.Match) && System.IO.Path.IsPathRooted(rule.Match) && (File.Exists(rule.Match) || Directory.Exists(rule.Match))) t.folder = rule.Match; }
-                            catch (Exception) { }
-                        }
-                        t.count++;
-                        t.cpu += p.Cpu;
-                        t.ram_mb += p.Private / 1048576.0;
-                        t.state = "running";
-                    }
-                    if (t.count < 1) t.count = 1;
-                    if (Hidden(t.id, t.name)) continue;
-                    Finish(t);
-                    pinGroup.things.Add(t);
-                }
-                if (pinGroup.things.Count > 0) order.Add(pinGroup);
-            }
-
-            foreach (Group g in order)
-                g.things.Sort(delegate(Thing a, Thing b) { return string.Compare(a.name, b.name, StringComparison.OrdinalIgnoreCase); });
-
-            int waiting = 0, failed = 0, quiet = 0;
+            int waiting = 0, taskFailed = 0, exitFailed = 0, quiet = 0;
             foreach (Group g in order)
                 foreach (Thing t in g.things)
                 {
-                    if (t.state == "waiting" && t.kind == "agent") waiting += Math.Max(1, t.count);
-                    else if (t.state == "failed") failed += Math.Max(1, t.count);
-                    else if (t.state == "quiet" && t.kind == "bot") quiet += Math.Max(1, t.count);
+                    int n = Math.Max(1, t.count);
+                    if (t.state == "waiting" && t.kind == "agent") waiting += n;
+                    else if (t.state == "failed" && t.kind == "task") taskFailed += n;
+                    else if (t.state == "failed") exitFailed += n;
+                    else if (t.state == "quiet" && t.kind == "bot") quiet += n;
                 }
-            if (waiting == 0 && failed == 0 && quiet == 0)
+            if (waiting == 0 && taskFailed == 0 && exitFailed == 0 && quiet == 0)
             {
                 board.headline.text = "All good";
                 board.headline.needs_you = false;
@@ -1697,7 +1574,8 @@ namespace DesktopVitals
             {
                 var bits = new List<string>();
                 if (waiting > 0) bits.Add(waiting.ToString(CultureInfo.InvariantCulture) + (waiting == 1 ? " agent waiting on you" : " agents waiting on you"));
-                if (failed > 0) bits.Add(failed.ToString(CultureInfo.InvariantCulture) + (failed == 1 ? " task failed" : " tasks failed"));
+                if (taskFailed > 0) bits.Add(taskFailed.ToString(CultureInfo.InvariantCulture) + (taskFailed == 1 ? " task failed" : " tasks failed"));
+                if (exitFailed > 0) bits.Add(exitFailed.ToString(CultureInfo.InvariantCulture) + " failed");
                 if (quiet > 0) bits.Add(quiet.ToString(CultureInfo.InvariantCulture) + (quiet == 1 ? " bot quiet" : " bots quiet"));
                 board.headline.text = string.Join(" \u00B7 ", bits.ToArray());
                 board.headline.needs_you = true;

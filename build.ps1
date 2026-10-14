@@ -21,7 +21,7 @@ $refs = @(
 ) | ForEach-Object { "/r:$_" }
 $cscOut = & $csc /nologo /target:winexe /optimize+ /warnaserror+ /platform:x64 `
     "/out:$bin\DesktopVitals.exe" "/win32icon:$d\assets\vitals.ico" "/win32manifest:$d\src\app.manifest" `
-    @refs "$d\src\Native.cs" "$d\src\Engine.cs" "$d\src\Window.cs" "$d\src\App.cs" 2>&1 | Out-String
+    @refs "$d\src\Native.cs" "$d\src\Engine.cs" "$d\src\Facts.cs" "$d\src\Window.cs" "$d\src\App.cs" 2>&1 | Out-String
 if ($LASTEXITCODE -ne 0) { throw ("Build failed.`r`n" + $cscOut) }
 if ($cscOut) { Write-Output $cscOut }
 Write-Host "Built $bin\DesktopVitals.exe"
