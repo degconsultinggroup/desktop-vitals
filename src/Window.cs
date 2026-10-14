@@ -563,6 +563,27 @@ namespace DesktopVitals
             catch (Exception) { }
         }
 
+        // The chrome inset was shorter than the pane, so the last line was cut off.
+        void FitSnapshotHeight()
+        {
+            if (pane == null) return;
+            var chrome = WindowChrome.GetWindowChrome(this);
+            if (chrome != null)
+            {
+                chrome.CaptionHeight = 0;
+                chrome.ResizeBorderThickness = new Thickness(0);
+            }
+            double inner = Math.Max(1, Width - pane.Margin.Left - pane.Margin.Right);
+            pane.Measure(new Size(inner, double.PositiveInfinity));
+            double h = pane.DesiredSize.Height + pane.Margin.Top + pane.Margin.Bottom + pane.Margin.Bottom;
+            if (h < 1) h = MinHeight;
+            SizeToContent = SizeToContent.Manual;
+            MinHeight = 0;
+            MaxHeight = double.PositiveInfinity;
+            Height = Math.Ceiling(h);
+            UpdateLayout();
+        }
+
         void WriteSnapshot()
         {
             try
@@ -573,18 +594,23 @@ namespace DesktopVitals
                 string pngPath = System.IO.Path.Combine(dir, "vitals.png");
                 ShowBoard(Engine.Current);
                 UpdateLayout();
+                FitSnapshotHeight();
                 string text = BoardText.Render(Engine.Current);
                 File.WriteAllText(txtPath, text, new UTF8Encoding(false));
                 if (string.Equals(Environment.GetEnvironmentVariable("DESKTOPVITALS_PRIVACY_TEST"), "1", StringComparison.Ordinal))
                     WritePrivacyProof(dir);
 
                 var root = (FrameworkElement)Content;
+                double renderW = Math.Max(1, root.ActualWidth);
+                root.Measure(new Size(renderW, double.PositiveInfinity));
+                double renderH = Math.Max(root.ActualHeight, Math.Max(Height, root.DesiredSize.Height));
+                root.Arrange(new Rect(0, 0, renderW, renderH));
                 double scale = 2;
                 double maxPx = 4000;
-                if (root.ActualWidth * scale > maxPx) scale = maxPx / Math.Max(1, root.ActualWidth);
-                if (root.ActualHeight * scale > maxPx) scale = Math.Min(scale, maxPx / Math.Max(1, root.ActualHeight));
-                int bw = Math.Max(1, (int)Math.Ceiling(root.ActualWidth * scale));
-                int bh = Math.Max(1, (int)Math.Ceiling(root.ActualHeight * scale));
+                if (renderW * scale > maxPx) scale = maxPx / renderW;
+                if (renderH * scale > maxPx) scale = Math.Min(scale, maxPx / Math.Max(1, renderH));
+                int bw = Math.Max(1, (int)Math.Ceiling(renderW * scale));
+                int bh = Math.Max(1, (int)Math.Ceiling(renderH * scale));
                 var bmp = new RenderTargetBitmap(bw, bh, 96 * scale, 96 * scale, PixelFormats.Pbgra32);
                 bmp.Render(root);
                 var enc = new PngBitmapEncoder();

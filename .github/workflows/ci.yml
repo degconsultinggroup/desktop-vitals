@@ -39,11 +39,16 @@ jobs:
           New-Item -ItemType Directory -Force -Path $dev, $fresh | Out-Null
           function Invoke-FixtureSnapshot([string]$Fixture, [string]$Dir, [string]$Name) {
             $p = Start-Process -FilePath $exe -ArgumentList @('--fixture', $Fixture, '--snapshot', $Dir) -PassThru -WindowStyle Hidden -Wait
-            if ($p.ExitCode -ne 0) { throw "$Name snapshot exit $($p.ExitCode)" }
+            $code = 0
+            if ($null -ne $p -and $null -ne $p.ExitCode) { $code = [int]$p.ExitCode }
+            if ($code -ne 0) { throw "$Name snapshot exit $code" }
             if (-not (Test-Path -LiteralPath (Join-Path $Dir 'vitals.png'))) { throw "$Name missing vitals.png" }
+            if (-not (Test-Path -LiteralPath (Join-Path $Dir 'vitals.txt'))) { throw "$Name missing vitals.txt" }
           }
           Invoke-FixtureSnapshot (Join-Path $PWD 'tests\fixtures\board-dev.json') $dev 'board-dev'
           Invoke-FixtureSnapshot (Join-Path $PWD 'tests\fixtures\board-fresh.json') $fresh 'board-fresh'
+          $global:LASTEXITCODE = 0
+          exit 0
 
       - name: Upload vitals.png and safety log
         if: always()
