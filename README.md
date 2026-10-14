@@ -41,7 +41,15 @@ Hover over a line to see what a click will do:
 
 You need Windows 10 or 11.
 
-### Build from source (works today)
+### Download the exe
+
+1. Open the latest [GitHub Release](https://github.com/degconsultinggroup/desktop-vitals/releases).
+2. Download `DesktopVitals.exe` (and `SHA256SUMS.txt` if you want to check the hash).
+3. Run the exe. No installer and no admin prompt.
+
+The exe is not code-signed yet. Windows SmartScreen may say "Windows protected your PC". Click **More info**, then **Run anyway**.
+
+### Build from source
 
 ```powershell
 git clone https://github.com/degconsultinggroup/desktop-vitals.git
@@ -50,18 +58,6 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1
 ```
 
 `install.ps1` builds `bin\DesktopVitals.exe` and adds two shortcuts: one on the desktop, and one in the Start menu that opens with **Ctrl+Alt+P**. `build.ps1` builds without adding shortcuts. The build uses the C# compiler that ships with Windows, so there is nothing else to install.
-
-### Download the exe (after a release tag)
-
-There is no GitHub Release yet. When someone pushes tag `v0.1.0` (or any `v*`), CI builds `DesktopVitals.exe`, writes `SHA256SUMS.txt`, and publishes both on the [Releases](https://github.com/degconsultinggroup/desktop-vitals/releases) page. Until then, use Build from source above.
-
-After a release exists:
-
-1. Open the latest [GitHub Release](https://github.com/degconsultinggroup/desktop-vitals/releases).
-2. Download `DesktopVitals.exe` (and `SHA256SUMS.txt` if you want to check the hash).
-3. Run the exe. No installer and no admin prompt.
-
-The release exe is not code-signed yet (TODO). Windows SmartScreen may say "Windows protected your PC". Click **More info**, then **Run anyway**.
 
 ## First run
 
@@ -106,8 +102,11 @@ The whole app is one file, `src\DesktopVitals.cs`, a WPF window written for the 
 
 - PASS: GitHub Actions `windows-latest` (x64) smoke
 - PASS: GitHub Actions `windows-11-arm` (x64 exe under emulation); cores flat on that image
+- PASS: Windows 11 desktop, i7-14700F, RTX 4070 SUPER, with Claude Code, Codex, Cursor, bots and local models running
 - Not tested yet (no lab machine): Windows Sandbox / fresh non-admin no-NVIDIA; German UI; Defender / VirusTotal; Windows 10 22H2
 
 ## License
 
 MIT. See [LICENSE](LICENSE).
+
+Made by [Frontier Deployments](https://frontierdeployments.com).
