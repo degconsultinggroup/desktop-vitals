@@ -380,7 +380,7 @@ namespace DesktopVitals
             list = new Grid();
             list.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(22) });
             list.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-            list.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(136) });
+            list.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(168) });
             scroll = new ScrollViewer { HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, Content = list };
             scroll.VerticalScrollBarVisibility = snapshotDir == null ? ScrollBarVisibility.Hidden : ScrollBarVisibility.Disabled;
             if (snapshotDir == null) scroll.MaxHeight = 640;
@@ -534,7 +534,6 @@ namespace DesktopVitals
             var meters = BoardText.Meters(strip);
             ShowMeter(cpuRow, meters, 0, false, instant);
             ShowMeter(memRow, meters, 1, false, instant);
-            // No graphics adapter: drop the rows. A "not available" bar is a blank.
             ShowMeter(gpuRow, meters, 2, true, instant);
             ShowMeter(vramRow, meters, 3, true, instant);
             ShowMeter(diskRow, meters, 4, false, instant);
@@ -641,8 +640,6 @@ namespace DesktopVitals
             }
             return planned;
         }
-
-        // One section title. One row: dot, name, note, and a detail line under it.
         Entry Make(Entry e, bool instant)
         {
             int row = list.RowDefinitions.Count;
@@ -650,13 +647,13 @@ namespace DesktopVitals
             if (e.Section)
             {
                 e.Name = Theme.Label(e.Title ?? "", 11.5, Theme.Faint, FontWeights.SemiBold);
-                e.Name.Margin = new Thickness(2, row == 0 ? 6 : 13, 0, 4);
+                e.Name.Margin = new Thickness(2, row == 0 ? 4 : 8, 0, 2);
                 Put(e.Name, row, 0, 3);
                 return e;
             }
             var wash = new SolidColorBrush(Colors.Transparent);
             e.Wash = wash;
-            Put(new Border { Background = wash, IsHitTestVisible = false, CornerRadius = new CornerRadius(8), Margin = new Thickness(-6, 1, -4, 1) }, row, 0, 3);
+            Put(new Border { Background = wash, IsHitTestVisible = false, CornerRadius = new CornerRadius(8), Margin = new Thickness(-6, 0, -4, 0) }, row, 0, 3);
             bool quiet = e.Roll || e.Thing == null || e.Indent > 0;
             e.Dot = Theme.Label("", 13, Theme.Sub, FontWeights.Normal);
             e.Dot.HorizontalAlignment = HorizontalAlignment.Center;
@@ -720,7 +717,7 @@ namespace DesktopVitals
             {
                 string only = Redact.Show(e.Title ?? "");
                 if (e.Name.Text != only) e.Name.Text = only;
-                e.Host.Margin = new Thickness(e.Indent * 16, 2, 8, 2);
+                e.Host.Margin = new Thickness(e.Indent * 16, 1, 8, 1);
                 return;
             }
             Thing t = e.Thing;
@@ -733,17 +730,17 @@ namespace DesktopVitals
                 label = Redact.Show(label);
                 if (e.Name.Text != label) e.Name.Text = label;
                 Tip(e.Name, why);
-                e.Host.Margin = new Thickness(0, 4, 8, 3);
+                e.Host.Margin = new Thickness(0, 2, 8, 2);
                 Spin(e, instant);
                 return;
             }
             bool pin = Pinned(t);
             double inner = double.IsNaN(list.Width) ? 480 : list.Width;
-            e.Name.MaxWidth = Math.Max(96, inner - 170 - e.Indent * 16);
+            e.Name.MaxWidth = Math.Max(96, inner - 202 - e.Indent * 16);
             e.Name.FontWeight = pin ? FontWeights.SemiBold : FontWeights.Medium;
             e.Name.Cursor = string.IsNullOrEmpty(t.folder) ? Cursors.Arrow : Cursors.Hand;
             var mark = new StringBuilder();
-            mark.Append(pin ? "1|" : "0|").Append(ShownName(t)).Append('|').Append(t.project ?? "").Append('|').Append(t.detail ?? "").Append('|');
+            mark.Append(pin ? "1|" : "0|").Append(ShownName(t)).Append('|').Append(t.project ?? "").Append('|').Append(t.detail ?? "").Append('|').Append(RightText(t)).Append('|');
             if (t.ports != null) foreach (int p in t.ports) mark.Append(p.ToString(CultureInfo.InvariantCulture)).Append(',');
             if (e.Sig != mark.ToString()) { e.Sig = mark.ToString(); Fill(e, t, pin); }
             string right = Redact.Show(RightText(t));
@@ -752,10 +749,10 @@ namespace DesktopVitals
             e.Note.Foreground = word ? DotBrush(t.state) : Theme.Faint;
             e.Dot.Text = BoardText.Dot(t.state);
             e.Dot.Foreground = DotBrush(t.state);
-            int bot = e.Detail.Visibility == Visibility.Visible ? 0 : 4;
-            e.Dot.Margin = new Thickness(0, 4, 0, bot);
-            e.Host.Margin = new Thickness(e.Indent * 16, 4, 8, bot);
-            e.Note.Margin = new Thickness(6, 4, 0, bot);
+            int bot = e.Detail.Visibility == Visibility.Visible ? 0 : 2;
+            e.Dot.Margin = new Thickness(0, 2, 0, bot);
+            e.Host.Margin = new Thickness(e.Indent * 16, 2, 8, bot);
+            e.Note.Margin = new Thickness(6, 2, 0, bot);
             Tip(e.Dot, why); Tip(e.Name, why); Tip(e.Note, why); Tip(e.Detail, why);
             NoteState(e, t, instant);
         }
@@ -764,8 +761,7 @@ namespace DesktopVitals
             if (e.Spin == null || Math.Abs(e.Spin.Angle - (e.Open ? 90 : 0)) < 1) return;
             if (!instant && e.Open)
             {
-                var a = new DoubleAnimation(0, 90, TimeSpan.FromMilliseconds(160)) { EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut } };
-                e.Spin.BeginAnimation(RotateTransform.AngleProperty, a);
+                e.Spin.BeginAnimation(RotateTransform.AngleProperty, new DoubleAnimation(0, 90, TimeSpan.FromMilliseconds(160)) { EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut } });
                 return;
             }
             e.Spin.BeginAnimation(RotateTransform.AngleProperty, null);
@@ -778,19 +774,20 @@ namespace DesktopVitals
             e.Name.Inlines.Add(name);
             string proj = Redact.Show(t.project ?? "");
             if (proj.Length > 0) e.Name.Inlines.Add(new Run("  " + proj) { Foreground = Theme.Sub, FontWeight = FontWeights.Normal });
-            if (string.IsNullOrEmpty(t.detail) && t.ports != null)
+            string story = Story(t);
+            if (story.Length == 0 && t.ports != null)
                 foreach (int port in t.ports) AddPort(e.Name, port, " \u00B7 ");
             e.Detail.Inlines.Clear();
-            if (string.IsNullOrEmpty(t.detail))
+            if (story.Length == 0)
             {
                 e.Detail.Visibility = Visibility.Collapsed;
                 e.Detail.Margin = new Thickness(0);
                 return;
             }
-            e.Detail.Inlines.Add(new Run(Redact.Show(t.detail)));
+            e.Detail.Inlines.Add(new Run(Redact.Show(story)));
             if (t.ports != null) foreach (int port in t.ports) AddPort(e.Detail, port, "  \u00B7  ");
             e.Detail.Visibility = Visibility.Visible;
-            e.Detail.Margin = new Thickness(e.Indent * 16, 1, 8, 5);
+            e.Detail.Margin = new Thickness(e.Indent * 16, 0, 8, 3);
         }
         static void AddPort(TextBlock tb, int port, string lead)
         {
@@ -812,20 +809,13 @@ namespace DesktopVitals
             var src = DotBrush(now) as SolidColorBrush;
             Color c = src == null ? Colors.White : src.Color;
             var a = new ColorAnimation(Color.FromArgb(0x48, c.R, c.G, c.B), Colors.Transparent, TimeSpan.FromMilliseconds(900)) { EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }, FillBehavior = FillBehavior.Stop };
-            a.Completed += delegate
-            {
-                e.Flashing = false;
-                if (e.Wash == null) return;
-                e.Wash.BeginAnimation(SolidColorBrush.ColorProperty, null);
-                e.Wash.Color = Colors.Transparent;
-            };
+            a.Completed += delegate { e.Flashing = false; if (e.Wash == null) return; e.Wash.BeginAnimation(SolidColorBrush.ColorProperty, null); e.Wash.Color = Colors.Transparent; };
             e.Wash.BeginAnimation(SolidColorBrush.ColorProperty, a);
         }
         void ToggleRoll(string id)
         {
             if (string.IsNullOrEmpty(id) || snapshotDir != null) return;
-            if (expanded.Contains(id)) expanded.Remove(id);
-            else expanded.Add(id);
+            if (!expanded.Add(id)) expanded.Remove(id);
             if (lastBoard != null) ShowList(lastBoard, false);
         }
         void OpenGear()
@@ -840,11 +830,7 @@ namespace DesktopVitals
             rows.Add(new MenuRow { Label = "Hidden", Header = true });
             var ids = new List<string>(Prefs.Hides);
             ids.Sort(StringComparer.OrdinalIgnoreCase);
-            foreach (string id in ids)
-            {
-                string captured = id;
-                rows.Add(Item(Remembered(captured), delegate { Unhide(captured); }));
-            }
+            foreach (string id in ids) rows.Add(Item(Remembered(id), delegate { Unhide(id); }));
             rows.Add(Item("Frontier Deployments", OpenFrontier));
             rows.Add(new MenuRow { Label = ErrorLog.Ver, Dim = true });
             return rows;
@@ -878,12 +864,7 @@ namespace DesktopVitals
                     item.Cursor = Cursors.Hand;
                     item.MouseEnter += delegate { item.Background = Theme.Hover; };
                     item.MouseLeave += delegate { item.Background = Brushes.Transparent; };
-                    item.MouseLeftButtonUp += delegate(object s, MouseButtonEventArgs ev)
-                    {
-                        ev.Handled = true;
-                        if (menu != null) menu.IsOpen = false;
-                        pick.Act();
-                    };
+                    item.MouseLeftButtonUp += delegate(object s, MouseButtonEventArgs ev) { ev.Handled = true; if (menu != null) menu.IsOpen = false; pick.Act(); };
                 }
                 panel.Children.Add(item);
             }
@@ -965,12 +946,7 @@ namespace DesktopVitals
             rowEdit = null;
             string n = (box.Text ?? "").Trim();
             if (n.Length > 80) n = n.Substring(0, 80);
-            if (save && n.Length > 0 && e.Thing != null && !string.IsNullOrEmpty(e.Thing.id))
-            {
-                Prefs.Rename[e.Thing.id] = n;
-                Prefs.Save();
-                knownNames[e.Thing.id] = n;
-            }
+            if (save && n.Length > 0 && e.Thing != null && !string.IsNullOrEmpty(e.Thing.id)) { Prefs.Rename[e.Thing.id] = n; Prefs.Save(); knownNames[e.Thing.id] = n; }
             if (e.Host.Children.Contains(box)) e.Host.Children.Remove(box);
             e.Name.Visibility = Visibility.Visible;
             e.Sig = null;
@@ -1055,10 +1031,7 @@ namespace DesktopVitals
             try { return File.Exists(path) || Directory.Exists(path); }
             catch (Exception) { return false; }
         }
-        static string QuotePath(string path)
-        {
-            return "\"" + path.TrimEnd('\\') + "\"";
-        }
+        static string QuotePath(string path) { return "\"" + path.TrimEnd('\\') + "\""; }
         static void OpenCode(string path)
         {
             if (!SafePath(path)) return;
@@ -1094,8 +1067,6 @@ namespace DesktopVitals
             try { using (Process.Start(new ProcessStartInfo("https://frontierdeployments.com") { UseShellExecute = true })) { } }
             catch (Exception) { }
         }
-
-        // The chrome inset was shorter than the pane, so the last line was cut off.
         void FitSnapshotHeight()
         {
             if (pane == null) return;
@@ -1220,20 +1191,50 @@ namespace DesktopVitals
                 return baseName + " \u00D7" + t.count.ToString(CultureInfo.InvariantCulture);
             return baseName;
         }
-
-        // A word only when the person is needed. Otherwise a number, or nothing.
         static string RightText(Thing t)
         {
             if (t == null) return "";
             string state = t.state ?? "";
             if (state == "ended") return "";
-            if (state == "waiting" || state == "quiet" || state == "failed") return BoardText.Phrase(state);
+            if (state == "waiting" || state == "quiet" || state == "failed")
+                return BoardText.Phrase(state) + (string.IsNullOrEmpty(t.since) ? "" : " \u00B7 " + t.since);
             if (!string.IsNullOrEmpty(t.since)) return t.since;
             if (t.cpu >= 5) return t.cpu.ToString("0", CultureInfo.InvariantCulture) + "%";
-            if (!string.IsNullOrEmpty(t.detail)) return "";
             if (t.vram_mb >= 200) return Megs(t.vram_mb) + " VRAM";
             if (t.ram_mb >= 200) return Megs(t.ram_mb);
             return "";
+        }
+        static string Story(Thing t)
+        {
+            string detail = t.detail ?? "";
+            string right = RightText(t);
+            if (detail.Length == 0 || right.Length == 0) return detail;
+            int shown = Figure(right);
+            string[] parts = detail.Split(new[] { " \u00B7 " }, StringSplitOptions.RemoveEmptyEntries);
+            var kept = new StringBuilder();
+            foreach (string raw in parts)
+            {
+                string part = raw.Trim();
+                if (shown != 0 && Figure(part) == shown) continue;
+                if (kept.Length > 0) kept.Append(" \u00B7 ");
+                kept.Append(part);
+            }
+            return kept.ToString();
+        }
+        static int Figure(string s)
+        {
+            if (string.IsNullOrEmpty(s)) return 0;
+            if (s.EndsWith("%", StringComparison.Ordinal))
+            {
+                double ignored;
+                if (double.TryParse(s.Substring(0, s.Length - 1), NumberStyles.Number, CultureInfo.InvariantCulture, out ignored) && ignored >= 0) return 3;
+                return 0;
+            }
+            bool vram = s.EndsWith(" VRAM", StringComparison.OrdinalIgnoreCase);
+            string body = vram ? s.Substring(0, s.Length - 5).Trim() : s;
+            if (body.EndsWith(" GB", StringComparison.OrdinalIgnoreCase) || body.EndsWith(" MB", StringComparison.OrdinalIgnoreCase))
+                return vram ? 2 : 1;
+            return 0;
         }
         static string Megs(double mb)
         {
