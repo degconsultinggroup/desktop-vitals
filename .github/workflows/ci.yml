@@ -29,6 +29,33 @@ jobs:
           path: tests/results/vitals.png
           if-no-files-found: warn
 
+  # Live soak + idle/edge stability on windows-latest (shorter than 2h; see SOAK_SECONDS).
+  windows-stability:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Stability soak
+        shell: pwsh
+        env:
+          # Feasible in CI. Full 2h soak is a Known limit (not run here).
+          SOAK_SECONDS: '480'
+        run: |
+          $ErrorActionPreference = 'Stop'
+          .\tests\stability.ps1
+          if ($LASTEXITCODE -ne 0) { throw "stability.ps1 failed with exit $LASTEXITCODE" }
+
+      - name: Upload stability artifacts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: stability
+          path: |
+            tests/results/stability.json
+            tests/results/stability.txt
+          if-no-files-found: warn
+
   # x64 build/smoke under Windows 11 Arm64 (Prism / x64 emulation).
   windows-arm:
     runs-on: windows-11-arm
