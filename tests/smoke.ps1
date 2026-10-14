@@ -142,7 +142,7 @@ function Invoke-Snapshot {
 
 function Format-CliArg {
     param([string]$Arg)
-    if ($Arg -notmatch '[\s"]') { return $Arg }
+    if (-not [string]::IsNullOrEmpty($Arg) -and $Arg -notmatch '[\s"]') { return $Arg }
     return '"' + ($Arg -replace '"', '\"') + '"'
 }
 
@@ -420,6 +420,49 @@ try {
             if ($cliDetail.Length -gt 240) { $cliDetail = $cliDetail.Substring(0, 240) }
         }
         Write-Check 'json-version' $cliOk $cliDetail
+    }
+
+    # 1b3. --name sets the PC name, --json shows it, --name "" resets it.
+    # The real review.txt is backed up by Save-Config and restored in finally.
+    $nameOk = $false
+    $nameDetail = ''
+    if (-not $buildOk) {
+        Write-Check 'pc-name' $false 'skipped: build failed'
+    }
+    else {
+        try {
+            $setRun = Invoke-Cli -Dir (Join-Path $Work 'cli-name-set') -ArgumentList @('--name', 'Studio PC') -TimeoutSeconds 20
+            if ($setRun.Exit -ne 0) { throw "name set exit $($setRun.Exit) $($setRun.Err)" }
+            if ($setRun.Out.Trim() -ne 'Studio PC') { throw "name printed [$($setRun.Out.Trim())]" }
+            if (-not (Test-Path -LiteralPath $ReviewFile)) { throw 'review.txt missing after --name' }
+            $reviewText = [System.IO.File]::ReadAllText($ReviewFile)
+            if ($reviewText -notmatch '(?m)^@name = Studio PC\s*$') { throw 'review.txt missing @name' }
+            $jsonRun = Invoke-Cli -Dir (Join-Path $Work 'cli-name-json') -ArgumentList @('--json') -TimeoutSeconds 40
+            if ($jsonRun.Exit -ne 0) { throw "name json exit $($jsonRun.Exit) $($jsonRun.Err)" }
+            $nameObj = $jsonRun.Out | ConvertFrom-Json
+            if ([string]$nameObj.machine -ne 'Studio PC') { throw "json machine [$($nameObj.machine)]" }
+            $resetRun = Invoke-Cli -Dir (Join-Path $Work 'cli-name-reset') -ArgumentList @('--name', '') -TimeoutSeconds 20
+            if ($resetRun.Exit -ne 0) { throw "name reset exit $($resetRun.Exit) $($resetRun.Err)" }
+            $resetName = $resetRun.Out.Trim()
+            if ([string]::IsNullOrWhiteSpace($resetName) -or $resetName -eq 'Studio PC') { throw "reset printed [$resetName]" }
+            $after = ''
+            if (Test-Path -LiteralPath $ReviewFile) { $after = [System.IO.File]::ReadAllText($ReviewFile) }
+            if ($after -match '(?m)^@name\s*=') { throw 'review.txt still has @name' }
+            $jsonReset = Invoke-Cli -Dir (Join-Path $Work 'cli-name-json-reset') -ArgumentList @('--json') -TimeoutSeconds 40
+            if ($jsonReset.Exit -ne 0) { throw "reset json exit $($jsonReset.Exit)" }
+            $resetObj = $jsonReset.Out | ConvertFrom-Json
+            if ([string]$resetObj.machine -ne $resetName) { throw "reset json machine [$($resetObj.machine)]" }
+            $nameOk = $true
+            $nameDetail = 'set, json, reset'
+        }
+        catch {
+            $nameDetail = $_.Exception.Message
+            if ($nameDetail.Length -gt 240) { $nameDetail = $nameDetail.Substring(0, 240) }
+        }
+        finally {
+            Restore-Config
+        }
+        Write-Check 'pc-name' $nameOk $nameDetail
     }
 
     # 1c. Short runtime outbound + write-root gate (also see tests\safety-runtime.ps1)

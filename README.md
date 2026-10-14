@@ -75,6 +75,7 @@ The first time it opens, the board fills with what is already running. Then **He
 ## Use
 
 - **Ctrl+Alt+P** opens the window. Press it again while the window is in front to tuck it away.
+- Click the name to rename it. `DesktopVitals.exe --name "Studio PC"` sets the same name.
 - The **Live** switch turns readings on and off. When it is off, or the window is minimized, the app does no work.
 - The refresh button looks again for new scripts, models, tasks and settings. It also does this on its own.
 - **Esc** or **×** closes it. Nothing starts at logon.

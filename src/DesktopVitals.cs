@@ -351,13 +351,99 @@ namespace DesktopVitals
         public static bool SoundsLikeAi(string s) { return AiWords.Any(w => s.IndexOf(w, StringComparison.OrdinalIgnoreCase) >= 0); }
 
         // watch.txt and review.txt live under %APPDATA%\DesktopVitals.
+        // The APPDATA variable wins so a process can keep its settings in a temp folder.
+        public static string AppRoot()
+        {
+            string env = Environment.GetEnvironmentVariable("APPDATA");
+            if (!string.IsNullOrEmpty(env)) return System.IO.Path.Combine(env, "DesktopVitals");
+            return System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "DesktopVitals");
+        }
         public static string ConfigFile()
         {
-            return System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "DesktopVitals", "watch.txt");
+            return System.IO.Path.Combine(AppRoot(), "watch.txt");
         }
         public static string ReviewFile()
         {
-            return System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "DesktopVitals", "review.txt");
+            return System.IO.Path.Combine(AppRoot(), "review.txt");
+        }
+
+        public const int NameMax = 40;
+
+        // One line, trimmed, at most NameMax characters. Empty means "use the computer name".
+        public static string CleanName(string value)
+        {
+            if (string.IsNullOrEmpty(value)) return "";
+            var sb = new StringBuilder(value.Length);
+            foreach (char c in value)
+            {
+                if (c < 32) continue;
+                sb.Append(c);
+            }
+            string s = sb.ToString().Trim();
+            if (s.Length > NameMax) s = s.Substring(0, NameMax).Trim();
+            return s;
+        }
+
+        static bool IsNameLine(string raw)
+        {
+            string line = (raw ?? "").Trim();
+            int eq = line.IndexOf('=');
+            return line.StartsWith("@") && eq > 1 && line.Substring(1, eq - 1).Trim().Equals("name", StringComparison.OrdinalIgnoreCase);
+        }
+
+        // The "@name = ..." line to keep when the review screen rewrites review.txt. Null when unset.
+        public static string NameLine(List<string> lines)
+        {
+            string value = "";
+            bool found = false;
+            foreach (string raw in lines)
+            {
+                if (!IsNameLine(raw)) continue;
+                value = CleanName(raw.Substring(raw.IndexOf('=') + 1));
+                found = true;
+            }
+            if (!found || value.Length == 0) return null;
+            return "@name = " + value;
+        }
+
+        // Writes or removes "@name = ..." in review.txt. Returns the name to show, or null if the file could not be updated.
+        public static string WriteName(string value)
+        {
+            value = CleanName(value);
+            string file = ReviewFile();
+            bool wasTooLarge = ConfigTooLarge;
+            ConfigTooLarge = false;
+            bool exists = File.Exists(file);
+            var lines = ReadLines(file);
+            bool tooBig = ConfigTooLarge;
+            ConfigTooLarge = wasTooLarge || tooBig;
+            if (tooBig) return null;
+            if (exists && lines.Count == 0)
+            {
+                try { if (new FileInfo(file).Length > 0) return null; }
+                catch (Exception) { return null; }
+            }
+            var next = new List<string>();
+            foreach (string raw in lines)
+            {
+                if (IsNameLine(raw)) continue;
+                next.Add(raw);
+            }
+            if (value.Length > 0) next.Add("@name = " + value);
+            try
+            {
+                if (next.Count == 0)
+                {
+                    if (exists) File.Delete(file);
+                }
+                else
+                {
+                    Directory.CreateDirectory(System.IO.Path.GetDirectoryName(file));
+                    File.WriteAllLines(file, next, new UTF8Encoding(false));
+                }
+            }
+            catch (Exception) { return null; }
+            return value.Length == 0 ? Environment.MachineName : value;
         }
 
         public static bool ConfigTooLarge;
@@ -1789,7 +1875,9 @@ namespace DesktopVitals
         double diskFrac;
         string diskValue = "";
 
-        TextBlock subtitle, stateLabel;
+        TextBlock subtitle, stateLabel, titleLabel;
+        TextBox titleBox;
+        bool editingName;
         Border switchTrack;
         TranslateTransform knob;
         CardFlow body;
@@ -1828,6 +1916,7 @@ namespace DesktopVitals
         bool modelsBusy;
         HashSet<string> scriptFolders = new HashSet<string>(StringComparer.OrdinalIgnoreCase);   // where running scripts live, as of the last model scan
         DateTime configTime;   // watch.txt's last change, to read it again when it changes
+        DateTime reviewTime;   // review.txt's last change, so --name shows up on the next reload
         readonly Dictionary<long, string> useCache = new Dictionary<long, string>();      // command line + configs it names
         readonly Dictionary<long, string> sourceCache = new Dictionary<long, string>();   // script source, for GPU users
         Dictionary<string, string> settings;
@@ -1909,7 +1998,7 @@ namespace DesktopVitals
             Loaded += delegate { Prime(); };
             StateChanged += delegate { UpdateRunning(); };
             Closing += delegate { if (!Headless) SavePlacement(); };
-            KeyDown += (s, e) => { if (e.Key == Key.Escape) Close(); };
+            KeyDown += (s, e) => { if (e.Key == Key.Escape && !editingName && !e.Handled) Close(); };
         }
 
         void LoadConfig()
@@ -2024,10 +2113,41 @@ namespace DesktopVitals
             g.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
             var titles = new StackPanel();
-            var title = Theme.Label(Environment.MachineName, 19, Theme.Text, FontWeights.SemiBold);
-            title.FontFamily = Theme.Display;
+            var titleHost = new Grid();
+            titleLabel = Theme.Label("", 19, Theme.Text, FontWeights.SemiBold);
+            titleLabel.FontFamily = Theme.Display;
+            titleLabel.Cursor = Cursors.Hand;
+            titleLabel.MouseLeftButtonUp += delegate { BeginNameEdit(); };
+            WindowChrome.SetIsHitTestVisibleInChrome(titleLabel, true);
+            titleBox = new TextBox();
+            titleBox.FontFamily = Theme.Display;
+            titleBox.FontSize = 19;
+            titleBox.FontWeight = FontWeights.SemiBold;
+            titleBox.Foreground = Theme.Text;
+            titleBox.Background = Brushes.Transparent;
+            titleBox.BorderBrush = Theme.Link;
+            titleBox.BorderThickness = new Thickness(0, 0, 0, 1);
+            titleBox.Padding = new Thickness(0);
+            titleBox.CaretBrush = Theme.Text;
+            titleBox.MaxLength = WatchRule.NameMax;
+            titleBox.MinWidth = 80;
+            titleBox.MaxWidth = 240;
+            titleBox.AcceptsReturn = false;
+            titleBox.TextWrapping = TextWrapping.NoWrap;
+            titleBox.VerticalAlignment = VerticalAlignment.Center;
+            titleBox.Visibility = Visibility.Collapsed;
+            titleBox.PreviewKeyDown += delegate(object s, KeyEventArgs e)
+            {
+                if (e.Key == Key.Enter) { e.Handled = true; CommitNameEdit(); }
+                else if (e.Key == Key.Escape) { e.Handled = true; CancelNameEdit(); }
+            };
+            titleBox.LostFocus += delegate { if (editingName) CancelNameEdit(); };
+            WindowChrome.SetIsHitTestVisibleInChrome(titleBox, true);
+            titleHost.Children.Add(titleLabel);
+            titleHost.Children.Add(titleBox);
+            ApplyPcName();
             subtitle = Theme.Label("", 12, Theme.Sub, FontWeights.Normal);
-            titles.Children.Add(title);
+            titles.Children.Add(titleHost);
             titles.Children.Add(subtitle);
             g.Children.Add(titles);
 
@@ -2058,6 +2178,64 @@ namespace DesktopVitals
             right.Children.Add(CaptionButton("\uE8BB", "Close", delegate { Close(); }));
             g.Children.Add(right);
             return g;
+        }
+
+        // Saved "@name", or the computer name when that line is missing or empty.
+        string PcName()
+        {
+            string saved;
+            if (settings != null && settings.TryGetValue("name", out saved))
+            {
+                saved = WatchRule.CleanName(saved);
+                if (saved.Length > 0) return saved;
+            }
+            return Environment.MachineName;
+        }
+
+        void ApplyPcName()
+        {
+            string shown = Redact.Show(PcName());
+            if (titleLabel != null) titleLabel.Text = shown;
+            Title = shown;
+        }
+
+        void BeginNameEdit()
+        {
+            if (editingName || titleBox == null) return;
+            string raw;
+            if (settings == null || !settings.TryGetValue("name", out raw)) raw = "";
+            raw = WatchRule.CleanName(raw);
+            editingName = true;
+            titleBox.Text = raw.Length == 0 ? Environment.MachineName : raw;
+            titleLabel.Visibility = Visibility.Collapsed;
+            titleBox.Visibility = Visibility.Visible;
+            titleBox.Focus();
+            titleBox.SelectAll();
+        }
+
+        void EndNameEdit()
+        {
+            editingName = false;
+            if (titleBox != null) titleBox.Visibility = Visibility.Collapsed;
+            if (titleLabel != null) titleLabel.Visibility = Visibility.Visible;
+        }
+
+        void CancelNameEdit()
+        {
+            if (!editingName) return;
+            EndNameEdit();
+            ApplyPcName();
+        }
+
+        void CommitNameEdit()
+        {
+            if (!editingName || titleBox == null) return;
+            string value = WatchRule.CleanName(titleBox.Text);
+            EndNameEdit();
+            if (WatchRule.WriteName(value) == null) return;
+            LoadConfig();
+            try { reviewTime = File.GetLastWriteTimeUtc(WatchRule.ReviewFile()); } catch (Exception) { }
+            ApplyPcName();
         }
 
         UIElement CaptionButton(string glyph, string tip, MouseButtonEventHandler click)
@@ -2664,20 +2842,24 @@ namespace DesktopVitals
             });
         }
 
-        // Your settings, read again when watch.txt changes (the review screen, or you editing it).
+        // Your settings, read again when watch.txt or review.txt changes (the review screen, --name, or you editing it).
         void ReloadIfChanged()
         {
-            DateTime t;
+            DateTime t, r;
             try { t = File.GetLastWriteTimeUtc(WatchRule.ConfigFile()); } catch (Exception) { return; }
-            if (t == configTime) return;
+            try { r = File.GetLastWriteTimeUtc(WatchRule.ReviewFile()); } catch (Exception) { return; }
+            if (t == configTime && r == reviewTime) return;
             configTime = t;
+            reviewTime = r;
             LoadConfig();
+            if (!editingName) ApplyPcName();
         }
 
         // The refresh button: read settings, models and scheduled tasks again now, and look at every process afresh.
         void RefreshAll()
         {
             configTime = DateTime.MinValue;
+            reviewTime = DateTime.MinValue;
             ReloadIfChanged();
             aiCache.Clear(); scriptCache.Clear(); useCache.Clear(); sourceCache.Clear(); cmdCache.Clear();
             scriptFolders.Clear();
@@ -3245,13 +3427,15 @@ namespace DesktopVitals
             return row;
         }
 
-        // Writes "@hide", "@kind", and "@reviewed" to review.txt only. Never rewrites watch.txt.
+        // Writes "@hide", "@kind", and "@reviewed" to review.txt only. Keeps "@name". Never rewrites watch.txt.
         bool TryWriteReview(List<ReviewItem> items)
         {
             try
             {
                 string file = WatchRule.ReviewFile();
+                string keptName = WatchRule.NameLine(WatchRule.ReadLines(file));
                 var lines = new List<string>();
+                if (keptName != null) lines.Add(keptName);
                 if (items != null)
                 {
                     foreach (var it in items)
@@ -3277,8 +3461,12 @@ namespace DesktopVitals
             try
             {
                 string file = WatchRule.ReviewFile();
+                string keptName = WatchRule.NameLine(WatchRule.ReadLines(file));
+                var lines = new List<string>();
+                if (keptName != null) lines.Add(keptName);
+                lines.Add("@reviewed = " + DateTime.Now.ToString("yyyy-MM-dd"));
                 Directory.CreateDirectory(System.IO.Path.GetDirectoryName(file));
-                File.WriteAllLines(file, new[] { "@reviewed = " + DateTime.Now.ToString("yyyy-MM-dd") }, new UTF8Encoding(false));
+                File.WriteAllLines(file, lines, new UTF8Encoding(false));
             }
             catch (Exception) { }
         }
@@ -3353,7 +3541,7 @@ namespace DesktopVitals
         {
             var sb = new StringBuilder();
             sb.Append("{\n  \"version\": ").Append(Js(Program.Version));
-            sb.Append(",\n  \"machine\": ").Append(Js(Environment.MachineName));
+            sb.Append(",\n  \"machine\": ").Append(Js(PcName()));
             sb.Append(",\n  \"strip\": {\n");
             sb.Append("    \"processor\": ").Append(Js(cpuRow.Summary)).Append(",\n");
             sb.Append("    \"memory\": ").Append(Js(memRow.Summary)).Append(",\n");
@@ -3406,7 +3594,7 @@ namespace DesktopVitals
                 string pngPath = System.IO.Path.Combine(dir, "vitals.png");
 
                 var sb = new StringBuilder();
-                sb.AppendLine("Desktop Vitals  " + Environment.MachineName + "  " + DateTime.Now.ToString("yyyy-MM-dd HH:mm") + "  \u00B7  " + subtitle.Text);
+                sb.AppendLine("Desktop Vitals  " + PcName() + "  " + DateTime.Now.ToString("yyyy-MM-dd HH:mm") + "  \u00B7  " + subtitle.Text);
                 sb.AppendLine();
                 foreach (var r in new[] { cpuRow, memRow, gpuRow, vramRow, diskRow }) sb.AppendLine(r.Summary);
                 string busy = threadStrip.Busiest();
@@ -3605,7 +3793,7 @@ namespace DesktopVitals
             if (ex == null) return;
             try
             {
-                string dir = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "DesktopVitals");
+                string dir = WatchRule.AppRoot();
                 Directory.CreateDirectory(dir);
                 string file = System.IO.Path.Combine(dir, "errors.log");
                 var sb = new StringBuilder();
@@ -3642,6 +3830,11 @@ namespace DesktopVitals
         static void Main(string[] args)
         {
             AppDomain.CurrentDomain.UnhandledException += (s, e) => { ErrorLog.Write(e.ExceptionObject as Exception); };
+            if (HasArg(args, "--name"))
+            {
+                WriteNameAndExit(args);
+                return;
+            }
             if (HasArg(args, "--version") && !HasArg(args, "--json") && !HasArg(args, "--snapshot"))
             {
                 WriteVersion();
@@ -3690,6 +3883,23 @@ namespace DesktopVitals
             if (w == null) Environment.Exit(2);
             try { w.WriteLine(Version); w.Flush(); }
             catch (Exception) { Environment.Exit(2); }
+        }
+
+        // --name "<value>" stores the name and prints it. --name "" clears it and prints the computer name.
+        static void WriteNameAndExit(string[] args)
+        {
+            int nameAt = ArgIndex(args, "--name");
+            string value = "";
+            if (nameAt >= 0 && nameAt + 1 < args.Length && !args[nameAt + 1].StartsWith("--")) value = args[nameAt + 1];
+            string shown = WatchRule.WriteName(value);
+            if (shown == null) Environment.Exit(1);
+            TextWriter w = StdIo.Open();
+            if (w != null)
+            {
+                try { w.WriteLine(Redact.Show(shown)); w.Flush(); }
+                catch (Exception) { }
+            }
+            Environment.Exit(0);
         }
 
         static bool HasArg(string[] args, string name) { return ArgIndex(args, name) >= 0; }

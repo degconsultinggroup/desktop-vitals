@@ -37,6 +37,7 @@ The JSON has `strip` (processor, memory, graphics, video memory, disk) and `line
 ## Launch
 
 The install command starts the app. To open it again, run the exe or press Ctrl+Alt+P.
+Click the name to rename it, or run `DesktopVitals.exe --name "Studio PC"`.
 
 ## Tell the human
 
