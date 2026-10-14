@@ -137,8 +137,12 @@ namespace DesktopVitals {
                 if (!Path.IsPathRooted(full)) {
                     if (string.IsNullOrEmpty(cwd)) return null;
                     try { full = Path.GetFullPath(Path.Combine(cwd, a)); } catch (Exception) { return null; } }
-                if (SystemPath(full) || !File.Exists(full)) return null; return full; }
-            return null; } }
+                if (!File.Exists(full) || (SystemPath(full) && !TempScript(full))) return null; return full; }
+            return null; }
+        // A script the person started is still theirs when it lives under Temp. Temp exes stay stock.
+        static bool TempScript(string path) {
+            string temp = Path.GetTempPath(); if (string.IsNullOrEmpty(temp) || string.IsNullOrEmpty(path)) return false;
+            return path.StartsWith(temp.TrimEnd('\\') + "\\", StringComparison.OrdinalIgnoreCase); } }
     class InstalledModel {
         public string Name, Path; public long Bytes; }
     // On-disk weights: ~/models plus Hugging Face, Ollama, and LM Studio. Junctions are not followed.
