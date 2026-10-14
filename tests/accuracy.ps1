@@ -698,25 +698,40 @@ while ($true) { Start-Sleep -Seconds 2 }
         $need = [Math]::Max(0, 1001 - $before)
         # Cap spawn on CI to avoid runner OOM; still push past 1000 when feasible.
         $spawn = [Math]::Min($need, 400)
-        for ($i = 0; $i -lt $spawn; $i++) {
-            # Do not name this $fp: PowerShell variables are case-insensitive and would clobber $script:Fp.
-            $floodProc = Start-Process -FilePath 'cmd.exe' -ArgumentList @('/c', 'ping -n 60 127.0.0.1 >nul') -PassThru -WindowStyle Hidden
-            $Flood.Add($floodProc) | Out-Null
+        $spawned = 0
+        # The pass-time gate is at about 300 processes. The crash check still raises the count after that.
+        while ($spawned -lt $spawn) {
+            $have = @(Get-Process -ErrorAction SilentlyContinue).Count
+            if ($have -ge 300 -and $spawned -gt 0) { break }
+            $batch = [Math]::Min(20, $spawn - $spawned)
+            for ($i = 0; $i -lt $batch; $i++) {
+                # Do not name this $fp: PowerShell variables are case-insensitive and would clobber $script:Fp.
+                $floodProc = Start-Process -FilePath 'cmd.exe' -ArgumentList @('/c', 'ping -n 60 127.0.0.1 >nul') -PassThru -WindowStyle Hidden
+                $Flood.Add($floodProc) | Out-Null
+            }
+            $spawned += $batch
         }
         Start-Sleep -Seconds 1
-        $after = @(Get-Process -ErrorAction SilentlyContinue).Count
-        $floodDetail = "procs $before -> $after (spawned $spawn)"
+        $mid = @(Get-Process -ErrorAction SilentlyContinue).Count
         $bench = $null
         $benchErr = ''
         try { $bench = Invoke-Bench }
         catch { $benchErr = $_.Exception.Message }
         if ($bench) {
             $p50 = [double]$bench.P50
-            $passDetail = "p50_ms=$($bench.P50) n=$($bench.N) procs=$($bench.Procs); $floodDetail"
+            $passDetail = "p50_ms=$($bench.P50) n=$($bench.N) procs=$($bench.Procs); at=$mid"
             Write-Check 'pass-time' ($p50 -le 50) $passDetail
             [void]$report.Add($passDetail)
         }
         else { Write-Check 'pass-time' $false $benchErr }
+        while ($spawned -lt $spawn) {
+            $floodProc = Start-Process -FilePath 'cmd.exe' -ArgumentList @('/c', 'ping -n 60 127.0.0.1 >nul') -PassThru -WindowStyle Hidden
+            $Flood.Add($floodProc) | Out-Null
+            $spawned++
+        }
+        Start-Sleep -Seconds 1
+        $after = @(Get-Process -ErrorAction SilentlyContinue).Count
+        $floodDetail = "procs $before -> $after (spawned $spawned)"
         $null = Invoke-Snapshot -Dir (Join-Path $Work 'snap-flood') -TimeoutMs 90000
         if ($after -lt 1000 -and $spawn -eq $need) {
             # Could not reach 1000 on this host; still required no crash.

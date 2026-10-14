@@ -32,6 +32,7 @@ namespace DesktopVitals
                 public long Create;
                 public string Cmd = "", Cwd, Image, Script, Leaf = "";
                 public bool Yours, Services, Orphan, Plain, TaskHit, Mapped;
+                public int TaskGen = -1;
                 public string LaunchKind, LaunchName, TaskName, TaskPath, ProjectFull, Marker, Agent, Weight, AgentModel, Kind = "script";
                 public long LastIo, LastCpu, CpuBucket;
                 public DateTime LastActive, WriteChecked;
@@ -91,7 +92,12 @@ namespace DesktopVitals
                     foreach (Proc p in procs)
                     {
                         Memo m = Touch(p, byPid);
-                        if (!m.TaskHit && MatchTask(p, m)) m.Yours = true;
+                        int gen = TaskList.Generation;
+                        if (m.TaskGen != gen)
+                        {
+                            m.TaskGen = gen;
+                            if (!m.TaskHit && MatchTask(p, m)) { m.Yours = true; m.Plain = false; }
+                        }
                         if (Orphan(p, byPid) && ProjectHolds(m)) { m.Yours = true; m.Orphan = true; m.Plain = false; }
                         NoteActivity(m, p, now);
                         if (!string.IsNullOrEmpty(m.Script))

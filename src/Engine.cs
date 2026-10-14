@@ -608,6 +608,7 @@ namespace DesktopVitals
     static class TaskList
     {
         public static List<TaskInfo> Items = new List<TaskInfo>();
+        public static int Generation;
         public static bool Ready { get { return finished; } }
         public static bool Failed;
         static bool busy;
@@ -634,6 +635,7 @@ namespace DesktopVitals
                 }
                 catch (Exception) { failed = true; }
                 Items = found;
+                Generation++;
                 Failed = failed;
                 read = DateTime.Now;
                 finished = true;
