@@ -116,7 +116,7 @@ namespace DesktopVitals
             caption.Margin = new Thickness(0, 0, 0, 5);
             Children.Add(caption);
 
-            var row = new Grid { Height = 28 };
+            var row = new Grid { Height = 36 };
             int col = 0, prevEff = -1, coreNo = 0;
             foreach (var c in cores)
             {
@@ -272,7 +272,7 @@ namespace DesktopVitals
         string threadSig;
         string listSig;
         int rowCursor;
-        TextBlock nameText, headlineText, stateLabel;
+        TextBlock nameText, headlineText, stateLabel, nameMark;
         StatRow cpuRow, memRow, gpuRow, vramRow, diskRow;
         ThreadStrip threadStrip;
         TextBox nameEdit, rowEdit;
@@ -418,12 +418,11 @@ namespace DesktopVitals
             headlineText.Margin = new Thickness(0, 12, 0, 4);
             stack.Children.Add(headlineText);
 
-            // One grid for the whole list, so the eye can run down name, project, and state.
+            // Dot, then the name with its project beside it, then the right-hand note.
             list = new Grid();
             list.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(22) });
-            list.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.25, GridUnitType.Star) });
             list.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-            list.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(156) });
+            list.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(136) });
             scroll = new ScrollViewer();
             scroll.VerticalScrollBarVisibility = snapshotDir == null ? ScrollBarVisibility.Hidden : ScrollBarVisibility.Disabled;
             scroll.HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled;
@@ -458,14 +457,17 @@ namespace DesktopVitals
             nameText.MaxWidth = 280;
             nameText.MouseLeftButtonUp += delegate { BeginNameEdit(); };
             WindowChrome.SetIsHitTestVisibleInChrome(nameText, true);
-            var pencil = Theme.Label("\u270E", 13, Theme.Faint, FontWeights.Normal);
-            pencil.Margin = new Thickness(6, 1, 0, 0);
-            pencil.Cursor = Cursors.Hand;
-            pencil.MouseLeftButtonUp += delegate { BeginNameEdit(); };
-            WindowChrome.SetIsHitTestVisibleInChrome(pencil, true);
+            nameMark = Theme.Label("\u270E", 13, Theme.Faint, FontWeights.Normal);
+            nameMark.Margin = new Thickness(6, 1, 0, 0);
+            nameMark.Cursor = Cursors.Hand;
+            nameMark.Visibility = Visibility.Collapsed;
+            nameMark.MouseLeftButtonUp += delegate { BeginNameEdit(); };
+            WindowChrome.SetIsHitTestVisibleInChrome(nameMark, true);
             nameLine = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
             nameLine.Children.Add(nameText);
-            nameLine.Children.Add(pencil);
+            nameLine.Children.Add(nameMark);
+            nameLine.MouseEnter += delegate { if (nameMark != null) nameMark.Visibility = Visibility.Visible; };
+            nameLine.MouseLeave += delegate { if (nameMark != null) nameMark.Visibility = Visibility.Collapsed; };
             nameHost = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
             nameHost.Children.Add(nameLine);
             g.Children.Add(nameHost);
@@ -798,9 +800,9 @@ namespace DesktopVitals
         {
             NewRow();
             var t = Theme.Label(s.Text ?? "", 11.5, Theme.Faint, FontWeights.SemiBold);
-            t.Margin = new Thickness(2, rowCursor == 0 ? 8 : 16, 0, 5);
+            t.Margin = new Thickness(2, rowCursor == 0 ? 6 : 13, 0, 4);
             v.Name = t;
-            Add(t, 0, 4);
+            Add(t, 0, 3);
         }
 
         void BuildDataRow(View v)
@@ -809,23 +811,21 @@ namespace DesktopVitals
             var wash = new SolidColorBrush(Colors.Transparent);
             var flash = new Border { Background = wash, IsHitTestVisible = false, CornerRadius = new CornerRadius(8), Margin = new Thickness(-6, 1, -4, 1) };
             v.Wash = wash;
-            Add(flash, 0, 4);
+            Add(flash, 0, 3);
             v.Dot = Theme.Label("", 13, Theme.Sub, FontWeights.Normal);
             v.Dot.HorizontalAlignment = HorizontalAlignment.Center;
             v.Dot.Width = 16;
             v.Name = Theme.Label("", 13.5, Theme.Text, FontWeights.Medium);
-            v.Project = Theme.Label("", 12.5, Theme.Sub, FontWeights.Normal);
-            v.State = Theme.Label("", 12.5, Theme.Sub, FontWeights.Normal);
+            v.Name.TextWrapping = TextWrapping.NoWrap;
+            v.State = Theme.Label("", 12.5, Theme.Faint, FontWeights.Normal);
             v.State.HorizontalAlignment = HorizontalAlignment.Right;
             v.State.TextAlignment = TextAlignment.Right;
-            v.State.TextTrimming = TextTrimming.None;
+            v.State.TextWrapping = TextWrapping.NoWrap;
             Add(v.Dot, 0, 1);
             Add(v.Name, 1, 1);
-            Add(v.Project, 2, 1);
-            Add(v.State, 3, 1);
+            Add(v.State, 2, 1);
             HookLine(v, v.Dot, false);
             HookLine(v, v.Name, true);
-            HookLine(v, v.Project, false);
             HookLine(v, v.State, false);
             NewRow();
             v.Detail = new TextBlock();
@@ -835,14 +835,14 @@ namespace DesktopVitals
             v.Detail.TextWrapping = TextWrapping.Wrap;
             v.Detail.Visibility = Visibility.Collapsed;
             Typography.SetNumeralAlignment(v.Detail, FontNumeralAlignment.Tabular);
-            Add(v.Detail, 1, 3);
+            Add(v.Detail, 1, 2);
             HookLine(v, v.Detail, false);
         }
 
         void BuildRoll(View v)
         {
             NewRow();
-            var line = new StackPanel { Orientation = Orientation.Horizontal, Cursor = Cursors.Hand, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 5, 0, 4) };
+            var line = new StackPanel { Orientation = Orientation.Horizontal, Cursor = Cursors.Hand, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 4, 0, 3) };
             v.Name = Theme.Label("", 12.5, Theme.Faint, FontWeights.Normal);
             v.Chevron = Theme.Label("\u203A", 14, Theme.Sub, FontWeights.SemiBold);
             v.Chevron.Margin = new Thickness(8, 0, 0, 0);
@@ -851,7 +851,7 @@ namespace DesktopVitals
             v.Chevron.RenderTransform = v.Spin;
             line.Children.Add(v.Name);
             line.Children.Add(v.Chevron);
-            Add(line, 1, 3);
+            Add(line, 1, 2);
             line.MouseLeftButtonUp += delegate(object s, MouseButtonEventArgs e)
             {
                 e.Handled = true;
@@ -868,8 +868,8 @@ namespace DesktopVitals
         {
             NewRow();
             v.Name = Theme.Label("", 12, Theme.Faint, FontWeights.Normal);
-            v.Name.Margin = new Thickness(16, 0, 0, 2);
-            Add(v.Name, 1, 3);
+            v.Name.Margin = new Thickness(16, 0, 0, 1);
+            Add(v.Name, 1, 2);
             HookLine(v, v.Name, true);
         }
 
@@ -895,17 +895,17 @@ namespace DesktopVitals
             bool pin = t.pinned || (!string.IsNullOrEmpty(t.id) && Prefs.PinIds.Contains(t.id));
             v.Name.FontWeight = pin ? FontWeights.SemiBold : FontWeights.Medium;
             double inner = double.IsNaN(list.Width) ? 480 : list.Width;
-            double flex = Math.Max(120, inner - 178);
-            v.Name.MaxWidth = flex * 0.56;
-            v.Project.MaxWidth = flex * 0.44;
-            string shown = Redact.Show(ShownName(t));
-            if (v.Name.Text != shown) v.Name.Text = shown;
+            v.Name.MaxWidth = Math.Max(96, inner - 170);
             v.Name.Cursor = string.IsNullOrEmpty(t.folder) ? Cursors.Arrow : Cursors.Hand;
-            string proj = Redact.Show(t.project ?? "");
-            if (v.Project.Text != proj) v.Project.Text = proj;
-            string status = Redact.Show(StateLine(t));
-            if (v.State.Text != status) v.State.Text = status;
-            v.State.Foreground = StateInk(t.state);
+            string nsig = NameSig(t, pin);
+            if (v.NameSig != nsig)
+            {
+                v.NameSig = nsig;
+                FillName(v.Name, t, pin);
+            }
+            string right = Redact.Show(RightText(t));
+            if (v.State.Text != right) v.State.Text = right;
+            v.State.Foreground = WordState(t.state) ? StateInk(t.state) : Theme.Faint;
             v.Dot.Text = BoardText.Dot(t.state);
             v.Dot.Foreground = DotBrush(t.state);
             string why = Redact.Show(t.why ?? "");
@@ -916,13 +916,11 @@ namespace DesktopVitals
                 FillDetail(v.Detail, t);
             }
             bool any = v.Detail.Visibility == Visibility.Visible;
-            v.Dot.Margin = new Thickness(0, 5, 0, any ? 0 : 6);
-            v.Name.Margin = new Thickness(0, 5, 0, any ? 0 : 6);
-            v.Project.Margin = new Thickness(10, 5, 8, any ? 0 : 6);
-            v.State.Margin = new Thickness(6, 5, 0, any ? 0 : 6);
+            v.Dot.Margin = new Thickness(0, 4, 0, any ? 0 : 4);
+            v.Name.Margin = new Thickness(0, 4, 8, any ? 0 : 4);
+            v.State.Margin = new Thickness(6, 4, 0, any ? 0 : 4);
             Tip(v.Dot, why);
             Tip(v.Name, why);
-            Tip(v.Project, why);
             Tip(v.State, why);
             Tip(v.Detail, why);
             NoteState(v, t, instant);
@@ -966,37 +964,55 @@ namespace DesktopVitals
             Tip(v.Name, Redact.Show(s.Thing.why ?? ""));
         }
 
+        static void FillName(TextBlock tb, Thing t, bool pin)
+        {
+            tb.Inlines.Clear();
+            var name = new Run(Redact.Show(ShownName(t)));
+            name.Foreground = Theme.Text;
+            name.FontWeight = pin ? FontWeights.SemiBold : FontWeights.Medium;
+            tb.Inlines.Add(name);
+            string proj = Redact.Show(t.project ?? "");
+            if (proj.Length > 0)
+            {
+                var tail = new Run("  " + proj);
+                tail.Foreground = Theme.Sub;
+                tail.FontWeight = FontWeights.Normal;
+                tb.Inlines.Add(tail);
+            }
+            if (!string.IsNullOrEmpty(t.detail) || t.ports == null) return;
+            foreach (int port in t.ports) AddPort(tb, port, " \u00B7 ");
+        }
+
+        static void AddPort(TextBlock tb, int port, string lead)
+        {
+            if (!string.IsNullOrEmpty(lead))
+            {
+                var gap = new Run(lead);
+                gap.Foreground = Theme.Faint;
+                tb.Inlines.Add(gap);
+            }
+            string shown = port.ToString(CultureInfo.InvariantCulture);
+            var link = new Hyperlink(new Run(":" + shown));
+            link.Foreground = Theme.Link;
+            link.TextDecorations = new TextDecorationCollection();
+            link.Click += delegate { OpenPort(shown); };
+            tb.Inlines.Add(link);
+        }
+
         void FillDetail(TextBlock tb, Thing t)
         {
             tb.Inlines.Clear();
-            bool any = false;
-            if (!string.IsNullOrEmpty(t.detail))
+            if (string.IsNullOrEmpty(t.detail))
             {
-                tb.Inlines.Add(new Run(Redact.Show(t.detail)));
-                any = true;
+                tb.Visibility = Visibility.Collapsed;
+                tb.Margin = new Thickness(0);
+                return;
             }
+            tb.Inlines.Add(new Run(Redact.Show(t.detail)));
             if (t.ports != null)
-            {
-                foreach (int port in t.ports)
-                {
-                    if (any) tb.Inlines.Add(new Run("  \u00B7  "));
-                    int shown = port;
-                    var link = new Hyperlink(new Run(":" + shown.ToString(CultureInfo.InvariantCulture)));
-                    link.Foreground = Theme.Link;
-                    link.Click += delegate { OpenPort(shown.ToString(CultureInfo.InvariantCulture)); };
-                    tb.Inlines.Add(link);
-                    any = true;
-                }
-            }
-            string extra = ExtraLoad(t);
-            if (extra.Length > 0)
-            {
-                if (any) tb.Inlines.Add(new Run("  \u00B7  "));
-                tb.Inlines.Add(new Run(extra));
-                any = true;
-            }
-            tb.Visibility = any ? Visibility.Visible : Visibility.Collapsed;
-            tb.Margin = any ? new Thickness(0, 0, 8, 7) : new Thickness(0);
+                foreach (int port in t.ports) AddPort(tb, port, "  \u00B7  ");
+            tb.Visibility = Visibility.Visible;
+            tb.Margin = new Thickness(0, 1, 8, 5);
         }
 
         void NoteState(View v, Thing t, bool instant)
@@ -1039,6 +1055,7 @@ namespace DesktopVitals
             if (!opens) return;
             el.MouseLeftButtonUp += delegate(object s, MouseButtonEventArgs e)
             {
+                if (FromLink(e.OriginalSource)) return;
                 if (v.Thing == null || string.IsNullOrEmpty(v.Thing.folder)) return;
                 e.Handled = true;
                 OpenCode(v.Thing.folder);
@@ -1260,7 +1277,9 @@ namespace DesktopVitals
             Grid.SetRow(v.Name, row);
             Grid.SetColumn(v.Name, col);
             if (!list.Children.Contains(v.Name)) list.Children.Add(v.Name);
-            v.Name.Text = Redact.Show(ShownName(v.Thing));
+            bool pin = v.Thing != null && (v.Thing.pinned || (!string.IsNullOrEmpty(v.Thing.id) && Prefs.PinIds.Contains(v.Thing.id)));
+            v.NameSig = null;
+            if (v.Thing != null) FillName(v.Name, v.Thing, pin);
         }
 
         void BeginNameEdit()
@@ -1562,20 +1581,35 @@ namespace DesktopVitals
             return baseName;
         }
 
-        static string StateLine(Thing t)
+        // A word only when the person is needed. Otherwise a number, or nothing.
+        static string RightText(Thing t)
         {
             if (t == null) return "";
-            string status = BoardText.Phrase(t.state);
-            if (!string.IsNullOrEmpty(t.since)) status += " \u00B7 " + t.since;
-            return status;
+            string state = t.state ?? "";
+            if (state == "ended") return "";
+            if (WordState(state)) return BoardText.Phrase(state);
+            if (!string.IsNullOrEmpty(t.since)) return t.since;
+            if (t.cpu >= 5) return t.cpu.ToString("0", CultureInfo.InvariantCulture) + "%";
+            if (t.vram_mb >= 200) return Megs(t.vram_mb) + " VRAM";
+            if (t.ram_mb >= 200) return Megs(t.ram_mb);
+            return "";
         }
 
-        static string ExtraLoad(Thing t)
+        static bool WordState(string state)
         {
-            if (t == null || !string.IsNullOrEmpty(t.detail)) return "";
-            if (t.vram_mb >= 1) return Megs(t.vram_mb) + " VRAM";
-            if (t.ram_mb >= 1) return Megs(t.ram_mb);
-            return "";
+            return state == "waiting" || state == "quiet" || state == "failed";
+        }
+
+        static string NameSig(Thing t, bool pin)
+        {
+            var sb = new StringBuilder();
+            sb.Append(pin ? "1" : "0").Append('|');
+            sb.Append(ShownName(t)).Append('|');
+            sb.Append(t.project ?? "").Append('|');
+            sb.Append(t.detail ?? "").Append('|');
+            if (string.IsNullOrEmpty(t.detail) && t.ports != null)
+                foreach (int p in t.ports) sb.Append(p.ToString(CultureInfo.InvariantCulture)).Append(',');
+            return sb.ToString();
         }
 
         static string Megs(double mb)
@@ -1589,10 +1623,23 @@ namespace DesktopVitals
         {
             var sb = new StringBuilder();
             sb.Append(t.detail ?? "").Append('|');
-            if (t.ports != null) foreach (int p in t.ports) sb.Append(p.ToString(CultureInfo.InvariantCulture)).Append(',');
-            sb.Append('|').Append(t.ram_mb.ToString(CultureInfo.InvariantCulture));
-            sb.Append('|').Append(t.vram_mb.ToString(CultureInfo.InvariantCulture));
+            if (!string.IsNullOrEmpty(t.detail) && t.ports != null)
+                foreach (int p in t.ports) sb.Append(p.ToString(CultureInfo.InvariantCulture)).Append(',');
             return sb.ToString();
+        }
+
+        static bool FromLink(object src)
+        {
+            var d = src as DependencyObject;
+            while (d != null)
+            {
+                if (d is Hyperlink) return true;
+                DependencyObject next = LogicalTreeHelper.GetParent(d);
+                if (next == null && d is Visual) next = VisualTreeHelper.GetParent(d);
+                if (next == d) break;
+                d = next;
+            }
+            return false;
         }
 
         static void Tip(FrameworkElement el, string why)
@@ -1654,11 +1701,11 @@ namespace DesktopVitals
 
         class View
         {
-            public TextBlock Dot, Name, Project, State, Detail, Chevron;
+            public TextBlock Dot, Name, State, Detail, Chevron;
             public RotateTransform Spin;
             public SolidColorBrush Wash;
             public bool Flashing;
-            public string DetailSig;
+            public string NameSig, DetailSig;
             public Thing Thing;
         }
 
