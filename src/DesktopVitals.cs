@@ -568,6 +568,19 @@ namespace DesktopVitals
             if (n.StartsWith("java")) return "Java";
             return char.ToUpperInvariant(n[0]) + n.Substring(1);
         }
+
+        // Edge, updaters, OEM helpers, and svchost: Windows noise, not something you run yourself.
+        public static bool IsWindowsNoise(string name, string path)
+        {
+            string s = ((name ?? "") + "\n" + (path ?? "")).ToLowerInvariant();
+            if (s.IndexOf("svchost") >= 0) return true;
+            if (s.IndexOf("msedge") >= 0 || s.IndexOf("edgeupdate") >= 0 || s.IndexOf("\\microsoft\\edge") >= 0) return true;
+            if (s.IndexOf("microsoft edge") >= 0 || (s.IndexOf("edge") >= 0 && s.IndexOf("autolaunch") >= 0)) return true;
+            if (s.IndexOf("googleupdate") >= 0 || (s.IndexOf("zoom") >= 0 && s.IndexOf("update") >= 0)) return true;
+            if (s.IndexOf("dellsupport") >= 0 || s.IndexOf("lenovo") >= 0 || s.IndexOf("hpsupport") >= 0) return true;
+            if (s.IndexOf("asus") >= 0 && s.IndexOf("system") >= 0) return true;
+            return false;
+        }
     }
 
     // A model on disk: one weights file (or its shards), or one folder of them.
@@ -918,8 +931,8 @@ namespace DesktopVitals
                         if (info.Script == null && Scripts.IsScriptFile(exe) && !Scripts.IsSystemPath(exe)) info.Script = exe;
                         if (info.Script != null || (exe.Length > 0 && System.IO.Path.IsPathRooted(exe) && !Scripts.IsSystemPath(exe))) mine = true;
                     }
-                    // App updaters (Zoom, Google, Adobe ...) are noise unless they run a script.
-                    if (info.Script == null && info.Name.IndexOf("update", StringComparison.OrdinalIgnoreCase) >= 0) mine = false;
+                    // App updaters, Edge, OEM helpers, and svchost are noise unless they run a script of yours.
+                    if (info.Script == null && (info.Name.IndexOf("update", StringComparison.OrdinalIgnoreCase) >= 0 || Scripts.IsWindowsNoise(info.Name, info.Exe))) mine = false;
                     if (mine) found.Add(info);
                 }
                 catch (Exception) { }
@@ -1005,6 +1018,7 @@ namespace DesktopVitals
                         catch (Exception) { }
                     }
                     else if (Scripts.IsScriptFile(f)) item.Script = f;
+                    if (item.Script == null && Scripts.IsWindowsNoise(item.Name, item.Exe ?? f)) continue;
                     found.Add(item);
                 }
             }
@@ -1034,6 +1048,7 @@ namespace DesktopVitals
                                 label = Regex.Replace(name, "(AutoLaunch)?_[0-9A-Fa-f]{16,}$", "");
                                 try { string d = FileVersionInfo.GetVersionInfo(exe).FileDescription; if (!string.IsNullOrWhiteSpace(d)) label = d.Trim(); } catch (Exception) { }
                             }
+                            if (Scripts.IsWindowsNoise(label, exe)) continue;
                             int at = cmd.IndexOf(exe, StringComparison.OrdinalIgnoreCase);
                             string rest = at < 0 ? "" : cmd.Substring(at + exe.Length).TrimStart('"');
                             found.Add(new StartItem { Name = label, Where = "Startup apps", Exe = exe, Script = ScriptIn(rest) });
