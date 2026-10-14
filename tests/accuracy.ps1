@@ -442,8 +442,9 @@ try {
         # Cap spawn on CI to avoid runner OOM; still push past 1000 when feasible.
         $spawn = [Math]::Min($need, 400)
         for ($i = 0; $i -lt $spawn; $i++) {
-            $fp = Start-Process -FilePath 'cmd.exe' -ArgumentList @('/c', 'ping -n 60 127.0.0.1 >nul') -PassThru -WindowStyle Hidden
-            $Flood.Add($fp) | Out-Null
+            # Do not name this $fp: PowerShell variables are case-insensitive and would clobber $script:Fp.
+            $floodProc = Start-Process -FilePath 'cmd.exe' -ArgumentList @('/c', 'ping -n 60 127.0.0.1 >nul') -PassThru -WindowStyle Hidden
+            $Flood.Add($floodProc) | Out-Null
         }
         Start-Sleep -Seconds 1
         $after = @(Get-Process -ErrorAction SilentlyContinue).Count
