@@ -41,15 +41,7 @@ Hover over a line to see what a click will do:
 
 You need Windows 10 or 11.
 
-### Download the exe
-
-1. Open the latest [GitHub Release](https://github.com/degconsultinggroup/desktop-vitals/releases).
-2. Download `DesktopVitals.exe` (and `SHA256SUMS.txt` if you want to check the hash).
-3. Run the exe. No installer and no admin prompt.
-
-The release exe is not code-signed yet (TODO). Windows SmartScreen may say "Windows protected your PC". Click **More info**, then **Run anyway**.
-
-### Build from source
+### Build from source (works today)
 
 ```powershell
 git clone https://github.com/degconsultinggroup/desktop-vitals.git
@@ -59,9 +51,21 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1
 
 `install.ps1` builds `bin\DesktopVitals.exe` and adds two shortcuts: one on the desktop, and one in the Start menu that opens with **Ctrl+Alt+P**. `build.ps1` builds without adding shortcuts. The build uses the C# compiler that ships with Windows, so there is nothing else to install.
 
+### Download the exe (after a release tag)
+
+There is no GitHub Release yet. When someone pushes tag `v0.1.0` (or any `v*`), CI builds `DesktopVitals.exe`, writes `SHA256SUMS.txt`, and publishes both on the [Releases](https://github.com/degconsultinggroup/desktop-vitals/releases) page. Until then, use Build from source above.
+
+After a release exists:
+
+1. Open the latest [GitHub Release](https://github.com/degconsultinggroup/desktop-vitals/releases).
+2. Download `DesktopVitals.exe` (and `SHA256SUMS.txt` if you want to check the hash).
+3. Run the exe. No installer and no admin prompt.
+
+The release exe is not code-signed yet (TODO). Windows SmartScreen may say "Windows protected your PC". Click **More info**, then **Run anyway**.
+
 ## First run
 
-The first time it opens, Desktop Vitals shows **Here's what I found**: everything it detected and everything in your settings, grouped by kind. Untick anything that shouldn't be shown, and click a tag if something is the wrong kind (a script that is really a bot, say). **Looks good** saves your answers to your settings file. The gear button at the top brings this screen back any time.
+The first time it opens, the board fills with what is already running. Then **Here's what I found** lists everything it detected and everything in your settings, grouped by kind. Untick a line to hide it; click a tag to change its kind. **Looks good** saves those answers to `%APPDATA%\DesktopVitals\review.txt`. The gear button at the top brings this screen back any time.
 
 ## Use
 
@@ -79,7 +83,7 @@ Everything works without settings. To add your own Pinned or Bots lines, or an o
 - **Pinned:** `Label = match` keeps an eye on an app or a command. A match ending in `.exe` is a process name. Anything else is text found in the command line.
 - **Bots:** add `| check:` to a line to track whether a bot is still doing work, not just running. The check is a file the bot rewrites, a folder it writes into, or a local http health address (`127.0.0.1`, `::1`, or `localhost` only). A bot turns amber when its check goes quiet for 5 minutes. Add `| code:` to open its folder in your editor.
 - **AI:** lines that name a known AI program (Claude, Cursor, Ollama, OpenClaw ...) go in the AI card instead of Bots or Pinned. Add `| ai` to put any other line there, and `| kind: Agent` (or `App`, `Model`, `Bot`, `Watching`) to choose its tag (`Watching` shows as Pinned).
-- **Hidden and re-tagged items:** the review screen writes `@hide = <name>` for things you untick and `@kind = <name> | Agent` for things you re-tag. Delete those lines to undo them.
+- **Hidden and re-tagged items:** the review screen writes `@hide = <name>` and `@kind = <name> | Agent` into `review.txt`. Delete those lines to undo them.
 - **Processor temperature:** Windows doesn't give CPU temperature to normal apps. If a sensor tool already writes a JSON file, point `@temperature-file` at it. Desktop Vitals only reads that file; it never starts a sensor task.
 
 `watch.example.txt` explains each one with examples.
