@@ -1,7 +1,7 @@
 # Launch harden audit
 
 Branch: `launch/harden`  
-Tip at write-up: `c31e611` (includes Danny `132b376` install + Frontier credit, audit, Live-cost wording)  
+Tip includes Danny `132b376` (install points at Releases + Frontier credit), plus audit and Live-cost wording on this branch.  
 PR: https://github.com/degconsultinggroup/desktop-vitals/pull/3  
 Author of agent commits: Desktop Vitals. Did not touch `cursor/vitals-complete`. No tag, no merge to main.
 
