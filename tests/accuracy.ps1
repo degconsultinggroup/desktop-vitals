@@ -506,6 +506,9 @@ while ($true) {
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $mappedA = [System.IO.MemoryMappedFiles.MemoryMappedFile]::CreateFromFile((Join-Path $root 'models\fixture-weights-00001-of-00002.gguf'))
 $mappedB = [System.IO.MemoryMappedFiles.MemoryMappedFile]::CreateFromFile((Join-Path $root 'models\fixture-weights-00002-of-00002.gguf'))
+$viewA = $mappedA.CreateViewAccessor()
+$viewB = $mappedB.CreateViewAccessor()
+$keep = $viewA.ReadByte(0) + $viewB.ReadByte(0)
 while ($true) { Start-Sleep -Seconds 2 }
 '@ | Set-Content -LiteralPath $mapScript -Encoding ASCII
     $AgentA = @()

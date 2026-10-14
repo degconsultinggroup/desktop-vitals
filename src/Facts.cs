@@ -369,14 +369,16 @@ namespace DesktopVitals
                 foreach (TaskInfo t in TaskList.Items)
                 {
                     if (t == null) continue;
-                    if (CmdHas(m.Cmd, t.Script) || CmdHas(m.Cmd, ScriptFile(t.Exe)) || SamePath(m.Image, t.Exe))
-                    {
-                        m.TaskHit = true;
-                        m.TaskName = t.Name;
-                        m.TaskPath = string.IsNullOrEmpty(t.Path) ? t.Name : t.Path;
-                        if (string.IsNullOrEmpty(m.ProjectFull) && !string.IsNullOrEmpty(t.Script)) AssignProjectPath(m, t.Script);
-                        return true;
-                    }
+                    // A task that launches powershell.exe matches its script, not every PowerShell on the machine.
+                    bool hit = CmdHas(m.Cmd, t.Script);
+                    if (!hit && Scripts.IsScriptFile(t.Exe ?? "")) hit = CmdHas(m.Cmd, t.Exe);
+                    if (!hit && !Scripts.IsInterpreter(t.Exe ?? "")) hit = SamePath(m.Image, t.Exe);
+                    if (!hit) continue;
+                    m.TaskHit = true;
+                    m.TaskName = t.Name;
+                    m.TaskPath = string.IsNullOrEmpty(t.Path) ? t.Name : t.Path;
+                    if (string.IsNullOrEmpty(m.ProjectFull) && !string.IsNullOrEmpty(t.Script)) AssignProjectPath(m, t.Script);
+                    return true;
                 }
                 return false;
             }
