@@ -77,7 +77,7 @@ namespace DesktopVitals
 
     class VitalsWindow : Window
     {
-        static readonly string StateDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "DesktopVitals");
+        static readonly string StateDir = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "DesktopVitals");
         static readonly string[] Editor = FindEditor();
 
         readonly DispatcherTimer timer = new DispatcherTimer(DispatcherPriority.Background);
@@ -456,7 +456,7 @@ namespace DesktopVitals
         {
             try
             {
-                string local = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Programs", "cursor", "Cursor.exe");
+                string local = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Programs", "cursor", "Cursor.exe");
                 if (File.Exists(local)) return new[] { local, "Cursor" };
             }
             catch (Exception) { }
@@ -469,9 +469,9 @@ namespace DesktopVitals
                     {
                         for (int up = 0; up < 4 && d != null; up++)
                         {
-                            string exe = Path.Combine(d, e[0]);
+                            string exe = System.IO.Path.Combine(d, e[0]);
                             if (File.Exists(exe)) return new[] { exe, e[1] };
-                            d = Path.GetDirectoryName(d);
+                            d = System.IO.Path.GetDirectoryName(d);
                         }
                     }
                     catch (Exception) { }
@@ -512,7 +512,7 @@ namespace DesktopVitals
             if (!SafePath(path)) return;
             try
             {
-                string explorer = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), "explorer.exe");
+                string explorer = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), "explorer.exe");
                 string args = (File.Exists(path) ? "/select," : "") + QuotePath(path);
                 using (Process.Start(new ProcessStartInfo(explorer, args) { UseShellExecute = false })) { }
             }
@@ -532,10 +532,10 @@ namespace DesktopVitals
         {
             try
             {
-                string dir = Path.GetFullPath(snapshotDir);
+                string dir = System.IO.Path.GetFullPath(snapshotDir);
                 Directory.CreateDirectory(dir);
-                string txtPath = Path.Combine(dir, "vitals.txt");
-                string pngPath = Path.Combine(dir, "vitals.png");
+                string txtPath = System.IO.Path.Combine(dir, "vitals.txt");
+                string pngPath = System.IO.Path.Combine(dir, "vitals.png");
                 ShowBoard(Engine.Current);
                 UpdateLayout();
                 string text = BoardText.Render(Engine.Current);
@@ -576,14 +576,14 @@ namespace DesktopVitals
                     if (g.things != null)
                         foreach (Thing t in g.things)
                             if (!string.IsNullOrEmpty(t.why)) sb.Append("why=").Append(t.why).Append('\n');
-            File.WriteAllText(Path.Combine(dir, "privacy.txt"), sb.ToString(), new UTF8Encoding(false));
+            File.WriteAllText(System.IO.Path.Combine(dir, "privacy.txt"), sb.ToString(), new UTF8Encoding(false));
         }
 
         void RestorePlacement()
         {
             try
             {
-                string f = Path.Combine(StateDir, "window.txt");
+                string f = System.IO.Path.Combine(StateDir, "window.txt");
                 if (!File.Exists(f)) return;
                 string[] parts = File.ReadAllText(f).Split(',');
                 if (parts.Length < 3) return;
@@ -605,7 +605,7 @@ namespace DesktopVitals
             {
                 Directory.CreateDirectory(StateDir);
                 var r = RestoreBounds.IsEmpty ? new Rect(Left, Top, Width, Height) : RestoreBounds;
-                File.WriteAllText(Path.Combine(StateDir, "window.txt"),
+                File.WriteAllText(System.IO.Path.Combine(StateDir, "window.txt"),
                     PlacementFormat.Join(new[] { r.Left, r.Top, r.Height, r.Width }));
             }
             catch (Exception) { }
