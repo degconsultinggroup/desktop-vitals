@@ -1,7 +1,4 @@
-// Desktop Vitals: a small glass window that shows what this PC is doing: system load, scripts, scheduled tasks, bots.
-// One NtQuerySystemInformation call per tick covers every process. Nothing is
-// collected while the switch is off or the window is minimized.
-// Built with the C# 5 compiler that ships with Windows (see build.ps1).
+// Desktop Vitals: glass window for load, scripts, tasks, bots. One NtQuerySystemInformation per tick; idle when off or minimized. C# 5 via build.ps1.
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -47,7 +44,7 @@ namespace DesktopVitals
         [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
         [DllImport("kernel32.dll")] static extern bool GetLogicalProcessorInformationEx(int rel, IntPtr buf, ref int len);
 
-        // Logical processors grouped by physical core, fastest cores first. Each entry is (efficiency class, thread numbers).
+        // Logical processors by physical core, fastest first: (efficiency class, thread numbers).
         static List<KeyValuePair<int, int[]>> FlatCores(int n)
         {
             var list = new List<KeyValuePair<int, int[]>>(n);
@@ -113,7 +110,7 @@ namespace DesktopVitals
         public const int StatusBufferTooSmall = unchecked((int)0xC0000023);
     }
 
-    // NVIDIA's management library ships with the driver. Missing or failing calls leave the GPU rows blank.
+    // NVIDIA NVML via the driver. Missing or failing calls leave GPU rows blank.
     static class Nvml
     {
         [DllImport("nvml.dll")] static extern int nvmlInit_v2();
@@ -130,7 +127,6 @@ namespace DesktopVitals
         static bool ready, tried;
         public static string Name;
 
-        // Out values stay negative when that sensor call failed so the UI does not invent zeros.
         public static bool Read(out double util, out double usedGb, out double totalGb, out int temp, out double watts)
         {
             util = usedGb = totalGb = watts = -1; temp = -1;
@@ -246,8 +242,7 @@ namespace DesktopVitals
             finally { Marshal.FreeHGlobal(b); Native.CloseHandle(h); }
         }
 
-        // Working folder from the PEB: display-only, best-effort on 64-bit processes you own.
-        // PROCESS_VM_READ is the minimum needed; never execute what is read; skip on any failure.
+        // PEB current directory: display-only, PROCESS_VM_READ, skip on failure; never execute.
         public static string CurrentDirectory(int pid)
         {
             IntPtr h = Native.OpenProcess(Native.QueryLimited | 0x0010, false, pid);   // PROCESS_VM_READ
@@ -350,7 +345,7 @@ namespace DesktopVitals
         static readonly string[] AiWords = { "claude", "openclaw", "codex", "gemini", "chatgpt", "openai", "anthropic", "grok", "cursor", "windsurf", "copilot", "aider", "ollama", "llama", "lm studio", "koboldcpp", "vllm", "perplexity", "meetily" };
         public static bool SoundsLikeAi(string s) { return AiWords.Any(w => s.IndexOf(w, StringComparison.OrdinalIgnoreCase) >= 0); }
 
-        // watch.txt is yours; review answers go in review.txt. Both live under %APPDATA%\DesktopVitals.
+        // watch.txt and review.txt live under %APPDATA%\DesktopVitals.
         public static string ConfigFile()
         {
             return System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "DesktopVitals", "watch.txt");
@@ -376,7 +371,6 @@ namespace DesktopVitals
             return list;
         }
 
-        // Lines that start with @ are settings: "@temperature-file = <json>", "@hide = <name>", and similar.
         public static Dictionary<string, string> ParseSettings(List<string> lines)
         {
             var d = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -390,7 +384,6 @@ namespace DesktopVitals
             return d;
         }
 
-        // Every value of a setting that can repeat, such as "@hide = <name>".
         public static List<string> ParseMany(List<string> lines, string key)
         {
             var list = new List<string>();
@@ -404,7 +397,6 @@ namespace DesktopVitals
             return list;
         }
 
-        // "Label = something.exe" matches a process name; anything else matches text in the command line.
         public static List<WatchRule> ParseRules(List<string> lines)
         {
             var rules = new List<WatchRule>();
@@ -442,7 +434,7 @@ namespace DesktopVitals
         }
     }
 
-    // A script some interpreter is running: python bot.py, node server.js, powershell -File job.ps1, python -m app.
+    // Interpreter script: python/node/powershell -File, or python -m.
     static class Scripts
     {
         static readonly string[] Interpreters = { "python", "pythonw", "py", "pyw", "node", "bun", "deno", "powershell", "pwsh", "wscript", "cscript", "cmd", "ruby", "php", "perl", "java", "javaw", "bash" };
@@ -495,7 +487,6 @@ namespace DesktopVitals
             return list;
         }
 
-        // The script file this process runs, as a full path, or "module:<name>" for python -m. Null when it isn't running a script of yours.
         public static string Find(Proc p, Func<string> cwd)
         {
             try { return FindScript(p, cwd); }
@@ -529,7 +520,6 @@ namespace DesktopVitals
             return null;
         }
 
-        // A short name: the file name, with its folder when the name alone says little (run.py, main.py, index.js).
         public static string Label(string key)
         {
             if (key.StartsWith("module:"))
@@ -596,9 +586,7 @@ namespace DesktopVitals
         public List<string> NameKeys = new List<string>();   // looked for in the source of a script using the GPU
     }
 
-    // Finds the AI models installed on this PC: folders named "models" at a drive root or in your user folder,
-    // apps' own "models" folders in AppData (Meetily, Whisper apps ...), a "model" or "models" folder beside a running
-    // script, the Hugging Face, Ollama and LM Studio stores, and any "@models = <folder>" lines in watch.txt.
+    // Installed models: drive/user/AppData models folders, beside scripts, HF/Ollama/LM Studio, @models in watch.txt.
     static class ModelStore
     {
         static readonly string[] WeightExts = { ".gguf", ".safetensors", ".ggml", ".onnx", ".bin", ".pt", ".pth", ".ckpt" };
@@ -672,8 +660,7 @@ namespace DesktopVitals
             return Merge(list);
         }
 
-        // The same weights kept in two places (an app's copy and a script's copy) are one model with both paths.
-        // The line keeps the installed copy's name ("parakeet-tdt-0.6b-v3-int8") over the script folder's ("push-to-talk").
+        // Same weights in two places stay one model; prefer the installed copy's name.
         static List<InstalledModel> Merge(List<InstalledModel> list)
         {
             var output = new List<InstalledModel>();
@@ -691,8 +678,7 @@ namespace DesktopVitals
             return output;
         }
 
-        // A folder of models. A subfolder whose own subfolders each hold weights (hf\<model>, a publisher in LM Studio)
-        // is opened up; any other folder with weights in it is one model.
+        // One folder of models: shelf of weight-subfolders, else each weights file or subfolder is a model.
         static void Folder(DirectoryInfo dir, string root, int depth, List<InstalledModel> list)
         {
             var shards = new Dictionary<string, List<FileInfo>>(StringComparer.OrdinalIgnoreCase);
@@ -941,16 +927,14 @@ namespace DesktopVitals
         }
     }
 
-    // Something that starts when you sign in: a Startup folder shortcut, a "Run" entry in the registry, or a
-    // scheduled task whose only trigger is sign-in or boot.
+    // Sign-in start: Startup folder, registry Run, or a logon/boot-only scheduled task.
     class StartItem
     {
         public string Name, Where, Exe, Script;
         public TaskInfo Task;
     }
 
-    // The programs Windows starts for you at sign-in, the ones you'd see under Startup apps, minus those you turned
-    // off there. Read off the UI thread at most once a minute.
+    // Sign-in programs (Startup apps), minus off switches. Refresh at most once a minute off UI thread.
     static class StartupList
     {
         public static List<StartItem> Items = new List<StartItem>();
@@ -1073,7 +1057,7 @@ namespace DesktopVitals
         }
     }
 
-    // Graphics load and memory from Windows' own counters, for cards without NVIDIA's library (AMD, Intel).
+    // GPU load/memory from Windows counters when NVML is absent (AMD, Intel).
     static class GpuCounters
     {
         public static string Name;
@@ -1085,7 +1069,6 @@ namespace DesktopVitals
         static DateTime read = DateTime.MinValue;
         static readonly Dictionary<string, string> perfNames = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
-        // English Perflib\009 name to the local counter name (or the English name if lookup fails).
         public static string PerfName(string english)
         {
             string have;
@@ -1670,12 +1653,12 @@ namespace DesktopVitals
             if (!hovering && count.Text != c) count.Text = c;
             if (cpu.Text != cp) cpu.Text = cp;
             if (mem.Text != m) mem.Text = m;
-            if (!object.Equals(ToolTip, tip)) ToolTip = tip;
+            string safe = tip == null ? null : Privacy.Show(tip);
+            if (!object.Equals(ToolTip, safe)) ToolTip = safe;
         }
     }
 
-    // Lays the cards out in columns as the window widens, instead of stretching each card across it.
-    // Each card goes, in order, to the shortest column. Columns never grow past MaxCol, and the set is centered.
+    // Shortest-column card flow; columns at most MaxCol, centered.
     class CardFlow : Panel
     {
         const double MinCol = 360, MaxCol = 540, Gap = 12;
@@ -2307,8 +2290,8 @@ namespace DesktopVitals
             for (int i = 0; i < shownWatch.Count; i++)
             {
                 var hits = procs.Where(shownWatch[i].Hit).ToList();
-                var tip = hits.Count == 0 ? null : string.Join("\n", hits.Select(h => h.Pid + "  " + Trim(h.Cmd.Length > 0 ? h.Cmd : h.Exe, 140)));
-                watchRows[i].SetWatched(shownWatch[i].Label, hits.Count > 0, hits.Count, hits.Sum(h => h.Cpu), hits.Sum(h => h.Private), tip);
+                watchRows[i].SetWatched(shownWatch[i].Label, hits.Count > 0, hits.Count, hits.Sum(h => h.Cpu), hits.Sum(h => h.Private),
+                    hits.Count == 0 ? null : CmdTip(hits));
                 watchRows[i].Pids = hits.Select(h => h.Pid).ToArray();
             }
 
@@ -2353,8 +2336,7 @@ namespace DesktopVitals
             {
                 var items = scripts[i].Value;
                 TimeSpan sUp = DateTime.UtcNow - DateTime.FromFileTimeUtc(items.Min(h => h.CreateTime));
-                string tip = scripts[i].Key.StartsWith("module:") ? Scripts.Folder(scripts[i].Key) : scripts[i].Key;
-                tip += "\n\n" + string.Join("\n", items.Select(h => h.Pid + "  " + Trim(h.Cmd, 140)));
+                string tip = (scripts[i].Key.StartsWith("module:") ? Scripts.Folder(scripts[i].Key) : scripts[i].Key) + "\n\n" + CmdTip(items);
                 scriptRows[i].Script = scripts[i].Key;
                 scriptRows[i].Pids = items.Select(h => h.Pid).ToArray();
                 scriptRows[i].SetPlain(Scripts.Label(scripts[i].Key), Theme.Green, Scripts.Language(items[0].Exe) + " \u00B7 up " + Ago(sUp),
@@ -2377,7 +2359,7 @@ namespace DesktopVitals
                 var s = starts[i].Item;
                 var hits = starts[i].Hits;
                 bool running = hits.Count > 0 || (s.Task != null && s.Task.Running);
-                string tip = s.Where + "\n" + (s.Script ?? s.Exe ?? "") + (hits.Count == 0 ? "" : "\n\n" + string.Join("\n", hits.Take(12).Select(h => h.Pid + "  " + Trim(h.Cmd.Length > 0 ? h.Cmd : h.Exe, 140))));
+                string tip = s.Where + "\n" + (s.Script ?? s.Exe ?? "") + (hits.Count == 0 ? "" : "\n\n" + CmdTip(hits));
                 startRows[i].Task = s.Task;
                 startRows[i].Script = s.Script;
                 startRows[i].Pids = hits.Select(h => h.Pid).ToArray();
@@ -2453,8 +2435,9 @@ namespace DesktopVitals
         }
 
         static string Trim(string s, int n) { return s.Length <= n ? s : s.Substring(0, n) + "\u2026"; }
+        static string CmdTip(IEnumerable<Proc> hits) { return string.Join("\n", hits.Take(12).Select(h => h.Pid + "  " + Trim(h.Cmd.Length > 0 ? h.Cmd : h.Exe, 140))); }
 
-        // The processes a startup entry started: an interpreter running its script, or its program by name.
+        // Processes a startup entry started: its script under an interpreter, or its program by name.
         static List<Proc> StartProcs(StartItem s, List<Proc> procs)
         {
             if (s.Script != null)
@@ -2485,7 +2468,7 @@ namespace DesktopVitals
             BotStatus st;
             if (!botStatus.TryGetValue(r.Label, out st)) botStatus[r.Label] = st = new BotStatus();
             st.Refresh(r);
-            tip = hits.Count == 0 ? null : string.Join("\n", hits.Select(h => h.Pid + "  " + Trim(h.Cmd.Length > 0 ? h.Cmd : h.Exe, 140)));
+            tip = hits.Count == 0 ? null : CmdTip(hits);
             if (r.Code != null) tip = tip == null ? OpenInEditor : OpenInEditor + "\n\n" + tip;
             state = 0; detail = ""; right = "not running";
             if (hits.Count == 0) return;
@@ -2662,9 +2645,6 @@ namespace DesktopVitals
 
         long VramOf(Proc p) { long b; return vramByPid.TryGetValue(p.Pid, out b) ? b : 0; }
 
-        // One line per installed model, holding the processes that use it: a server whose command line (or the config
-        // file it names) points at the model, or a script on the GPU whose source names it. Then a line for any script
-        // or model server holding 1 GB or more of video memory that no model was found for, so nothing big hides.
         void AddModels(List<AiLine> lines, List<Proc> procs)
         {
             var models = installed;
@@ -2760,8 +2740,7 @@ namespace DesktopVitals
             if (l.GpuOnly) who = "model not found";
             // What a model costs is mostly video memory, so that is what its right-hand column shows when it has any.
             bool onGpu = vram >= 32L << 20;
-            string tip = (about.Length > 0 ? about + "\n\n" : "") + (vram > 0 ? Theme.Mem(vram) + " of video memory\n" : "")
-                + string.Join("\n", l.Procs.Take(12).Select(h => h.Pid + "  " + Trim(h.Cmd.Length > 0 ? h.Cmd : h.Exe, 140)));
+            string tip = (about.Length > 0 ? about + "\n\n" : "") + (vram > 0 ? Theme.Mem(vram) + " of video memory\n" : "") + CmdTip(l.Procs);
             row.SetAi(l.Name, l.Kind, 1, who, Theme.Pct(l.Procs.Sum(h => h.Cpu)), onGpu ? Theme.Mem(vram) + " GPU" : Theme.Mem(l.Procs.Sum(h => h.Private)), tip);
         }
 
@@ -2799,13 +2778,11 @@ namespace DesktopVitals
             else
             {
                 if (l.Procs.Count > 1) text = "\u00D7" + l.Procs.Count + " \u00B7 " + text;
-                tip = string.Join("\n", l.Procs.Take(12).Select(h => h.Pid + "  " + Trim(h.Cmd.Length > 0 ? h.Cmd : h.Exe, 140)));
+                tip = CmdTip(l.Procs);
             }
             row.SetAi(l.Name, l.Kind, 1, text, Theme.Pct(cpu), Theme.Mem(mem), tip);
         }
 
-        // Optional: "@temperature-file" points at a JSON file a sensor tool keeps writing, with "cpu_temp_c",
-        // "cpu_pkg_power_w" and "ts". Read only; nothing is started when the file goes stale.
         string SensorDetail()
         {
             string file;
@@ -3273,8 +3250,10 @@ namespace DesktopVitals
                 Section(sb, "Scheduled", taskRows, "");
                 Section(sb, "Pinned", watchRows, "");
                 Section(sb, "Top apps", topRows, "");
-                string text = sb.ToString();
+                string text = Privacy.Show(sb.ToString());
                 File.WriteAllText(txtPath, text, new UTF8Encoding(false));
+                if (string.Equals(Environment.GetEnvironmentVariable("DESKTOPVITALS_PRIVACY_TEST"), "1", StringComparison.Ordinal))
+                    WritePrivacyProof(dir);
 
                 var root = (FrameworkElement)Content;
                 double scale = 2;
@@ -3305,6 +3284,15 @@ namespace DesktopVitals
             sb.AppendLine();
             sb.AppendLine(title + (shown.Count == 0 ? ": " + empty : ""));
             foreach (var r in shown) sb.AppendLine("  " + r.Summary);
+        }
+
+        void WritePrivacyProof(string dir)
+        {
+            const string sample = @"C:\Users\Sam\x.ps1 --api-key sk-dvsmokeTESTKEY0001 --token ghp_dvsmokeTESTTOKEN0123456789 password=dvsmokePass99 Bearer dvsmokeBearerTok99 https://u:dvsmokeUrlPass@example.com/x API_KEY=dvsmokeEnv99";
+            var tips = aiRows.Concat(botRows).Concat(scriptRows).Concat(startRows).Concat(taskRows).Concat(watchRows).Concat(topRows)
+                .Where(r => r.Visibility == Visibility.Visible && r.ToolTip != null).Select(r => "tip=" + r.ToolTip);
+            File.WriteAllText(System.IO.Path.Combine(dir, "privacy.txt"),
+                "show=" + Privacy.Show(sample) + "\nlog=" + Privacy.Log(sample) + "\n" + string.Join("\n", tips) + "\n", new UTF8Encoding(false));
         }
 
         // ---------- window position ----------
@@ -3338,7 +3326,7 @@ namespace DesktopVitals
             catch (Exception) { }
         }
 
-        // Second launch (the Ctrl+Alt+P shortcut): bring the window up, or tuck it away if it is already in front.
+        // Ctrl+Alt+P: raise window, or minimize if already frontmost.
         public void Toggle()
         {
             IntPtr h = new WindowInteropHelper(this).Handle;
@@ -3352,6 +3340,18 @@ namespace DesktopVitals
             Topmost = true; Topmost = false;
             Focus();
         }
+    }
+
+    // Scrub secrets and user folder names for tips, vitals.txt, errors.log. Matching still uses raw Cmd.
+    static class Privacy
+    {
+        static readonly Regex Secret = new Regex(@"(?i)(?:--?(?:api[_-]?key|token|access[_-]?token|secret|password|passwd|pwd)\b\s*[=:]?\s*)\S+|(?:(?:api[_-]?key|token|password|passwd|secret)\s*=\s*)\S+|\b(?:sk-[A-Za-z0-9_\-]{8,}|ghp_[A-Za-z0-9]{20,}|gho_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|xox[baprs]-[A-Za-z0-9\-]{10,})\b|\bBearer\s+\S+|(?:https?|ftp)://[^/\s:@]+:[^/\s:@]+@[^\s]+", RegexOptions.Compiled);
+        static readonly Regex UserDir = new Regex(@"(?i)([A-Za-z]:\\|\\\\)Users([/\\])[^/\\]+", RegexOptions.Compiled);
+        static readonly Regex EnvAssign = new Regex(@"\b[A-Z][A-Z0-9_]{1,64}=[^\s""]+", RegexOptions.Compiled);
+        static readonly Regex EnvPct = new Regex(@"%[A-Za-z_][A-Za-z0-9_]{0,64}%", RegexOptions.Compiled);
+        static readonly Regex CmdLine = new Regex(@"(?i)(?:""?[A-Za-z]:\\[^""\r\n]{0,200}\.(?:exe|bat|cmd|ps1|com)""?(?:\s+/[cCkK]\s+""[^""]*"")?|\bcmd\.exe\b[^\r\n]*)", RegexOptions.Compiled);
+        public static string Show(string s) { return string.IsNullOrEmpty(s) ? (s ?? "") : UserDir.Replace(Secret.Replace(s, "<redacted>"), "$1Users$2<user>"); }
+        public static string Log(string s) { return string.IsNullOrEmpty(s) ? "" : CmdLine.Replace(EnvPct.Replace(EnvAssign.Replace(Show(s), "<env>"), "%<env>%"), "<command>"); }
     }
 
     static class ErrorLog
@@ -3370,8 +3370,8 @@ namespace DesktopVitals
                 var sb = new StringBuilder();
                 sb.Append(DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture)).Append(" ver=").Append(Ver);
                 sb.Append(" type=").Append(ex.GetType().FullName);
-                sb.Append(" msg=").Append(ex.Message).Append('\n');
-                if (ex.StackTrace != null) sb.Append(ex.StackTrace).Append('\n');
+                sb.Append(" msg=").Append(Privacy.Log(ex.Message)).Append('\n');
+                if (ex.StackTrace != null) sb.Append(Privacy.Log(ex.StackTrace)).Append('\n');
                 sb.Append('\n');
                 byte[] add = Encoding.UTF8.GetBytes(sb.ToString());
                 byte[] prior = File.Exists(file) ? File.ReadAllBytes(file) : new byte[0];
