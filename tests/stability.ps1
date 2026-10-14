@@ -91,14 +91,15 @@ function Get-Sample {
     param([int]$ProcId)
     $p = Get-Process -Id $ProcId -ErrorAction Stop
     $gui = Get-GuiCounts -Proc $p
-    return [ordered]@{
-        Utc = (Get-Date).ToUniversalTime().ToString('o')
-        Handles = $p.HandleCount
-        Threads = $p.Threads.Count
-        PrivateBytes = $p.PrivateMemorySize64
-        WorkingSet = $p.WorkingSet64
-        Gdi = $gui.Gdi
-        User = $gui.User
+    # Plain hashtable with explicit CLR types (OrderedDictionary + -f caused "Argument types do not match" in CI).
+    return @{
+        Utc = [string](Get-Date).ToUniversalTime().ToString('o')
+        Handles = [int]$p.HandleCount
+        Threads = [int]$p.Threads.Count
+        PrivateBytes = [int64]$p.PrivateMemorySize64
+        WorkingSet = [int64]$p.WorkingSet64
+        Gdi = [int]$gui.Gdi
+        User = [int]$gui.User
         TotalProcessorTimeMs = [int64]$p.TotalProcessorTime.TotalMilliseconds
     }
 }
@@ -134,19 +135,21 @@ function Invoke-Snapshot {
 
 New-Item -ItemType Directory -Force -Path $Work, $ResultsDir | Out-Null
 Save-Config
-$report = [ordered]@{
+$reportNotes = New-Object System.Collections.Generic.List[string]
+$report = @{
     machine = @{
-        os = [Environment]::OSVersion.VersionString
-        arch = $env:PROCESSOR_ARCHITECTURE
-        cores = [Environment]::ProcessorCount
+        os = [string][Environment]::OSVersion.VersionString
+        arch = [string]$env:PROCESSOR_ARCHITECTURE
+        cores = [int][Environment]::ProcessorCount
         computer = '<redacted>'
     }
-    soakSecondsRequested = $SoakSeconds
+    soakSecondsRequested = [int]$SoakSeconds
     soakSecondsActual = 0
     checks = @{}
     samples = @()
     idle = @{}
-    notes = New-Object System.Collections.Generic.List[string]
+    liveCost = $null
+    notes = @()
 }
 
 try {
@@ -252,33 +255,39 @@ try {
             $live.Refresh()
             if ($live.HasExited) { throw "process exited during soak code $($live.ExitCode)" }
             $s = Get-Sample -ProcId $live.Id
-            $samples.Add($s) | Out-Null
-            Write-Host ("soak sample t={0}s handles={1} gdi={2} privateMB={3:N1} threads={4} cpuMs={5}" -f `
-                [int]((Get-Date) - $start).TotalSeconds, $s.Handles, $s.Gdi, ($s.PrivateBytes / 1MB), $s.Threads, $s.TotalProcessorTimeMs)
+            [void]$samples.Add($s)
+            $tSec = [int]((Get-Date) - $start).TotalSeconds
+            $privMb = [double]($s.PrivateBytes / 1MB)
+            Write-Host ("soak sample t={0}s handles={1} gdi={2} privateMB={3} threads={4} cpuMs={5}" -f `
+                $tSec, $s.Handles, $s.Gdi, ([Math]::Round($privMb, 1)), $s.Threads, $s.TotalProcessorTimeMs)
             $remain = ($deadline - (Get-Date)).TotalSeconds
             if ($remain -le 0) { break }
-            Start-Sleep -Seconds ([Math]::Min($interval, [Math]::Ceiling($remain)))
+            $sleepSec = [int][Math]::Min([double]$interval, [Math]::Ceiling($remain))
+            if ($sleepSec -lt 1) { $sleepSec = 1 }
+            Start-Sleep -Seconds $sleepSec
         }
         $live.Refresh()
         if ($live.HasExited) { throw "process exited at soak end code $($live.ExitCode)" }
-        $endSample = Get-Sample -ProcId $live.Id
-        $samples.Add($endSample) | Out-Null
+        [void]$samples.Add((Get-Sample -ProcId $live.Id))
         $report.soakSecondsActual = [int]((Get-Date) - $start).TotalSeconds
-        $report.samples = @($samples)
+        $report.samples = [object[]]@($samples.ToArray())
 
         if ($samples.Count -lt 2) { throw 'need at least 2 samples' }
         $firstS = $samples[0]
         $lastS = $samples[$samples.Count - 1]
-        $handleDelta = $lastS.Handles - $firstS.Handles
-        $gdiDelta = $lastS.Gdi - $firstS.Gdi
-        $privDelta = $lastS.PrivateBytes - $firstS.PrivateBytes
-        $threadDelta = $lastS.Threads - $firstS.Threads
-        $cpuDeltaMs = $lastS.TotalProcessorTimeMs - $firstS.TotalProcessorTimeMs
-        $wallMs = [Math]::Max(1, $report.soakSecondsActual * 1000)
-        $cores = [Math]::Max(1, [Environment]::ProcessorCount)
-        $pctOfMachine = (100.0 * $cpuDeltaMs) / ($wallMs * $cores)
+        $handleDelta = [int]($lastS.Handles - $firstS.Handles)
+        $gdiDelta = [int]($lastS.Gdi - $firstS.Gdi)
+        $privDelta = [int64]($lastS.PrivateBytes - $firstS.PrivateBytes)
+        $threadDelta = [int]($lastS.Threads - $firstS.Threads)
+        $cpuDeltaMs = [int64]($lastS.TotalProcessorTimeMs - $firstS.TotalProcessorTimeMs)
+        $wallMs = [int64][Math]::Max(1, $report.soakSecondsActual * 1000)
+        $cores = [int][Math]::Max(1, [Environment]::ProcessorCount)
+        $pctOfMachine = [double]((100.0 * $cpuDeltaMs) / ($wallMs * $cores))
+        $pctRounded = [double][Math]::Round($pctOfMachine, 3)
+        $privFirstMb = [double][Math]::Round(($firstS.PrivateBytes / 1MB), 1)
+        $privLastMb = [double][Math]::Round(($lastS.PrivateBytes / 1MB), 1)
 
-        $report.liveCost = [ordered]@{
+        $report.liveCost = @{
             handleDelta = $handleDelta
             gdiDelta = $gdiDelta
             privateBytesDelta = $privDelta
@@ -286,7 +295,7 @@ try {
             cpuDeltaMs = $cpuDeltaMs
             wallMs = $wallMs
             cores = $cores
-            pctOfMachine = [Math]::Round($pctOfMachine, 3)
+            pctOfMachine = $pctRounded
             claimTargetPct = 0.1
         }
 
@@ -294,19 +303,15 @@ try {
         if ($handleDelta -gt 200) { throw "handle leak delta=$handleDelta" }
         if ($gdiDelta -gt 50) { throw "GDI leak delta=$gdiDelta" }
         if ($threadDelta -gt 20) { throw "thread leak delta=$threadDelta" }
-        if ($privDelta -gt (80MB)) { throw ("private bytes grew {0:N0}" -f $privDelta) }
+        if ($privDelta -gt 80MB) { throw "private bytes grew $privDelta" }
 
         $soakOk = $true
-        $soakDetail = ("{0}s live; handles {1}->{2} (d{3}); gdi {4}->{5} (d{6}); privateMB {7:N1}->{8:N1}; threads {9}->{10}; cpu {11:N3}% of machine" -f `
-            $report.soakSecondsActual, $firstS.Handles, $lastS.Handles, $handleDelta, `
-            $firstS.Gdi, $lastS.Gdi, $gdiDelta, `
-            ($firstS.PrivateBytes / 1MB), ($lastS.PrivateBytes / 1MB), `
-            $firstS.Threads, $lastS.Threads, $pctOfMachine)
+        $soakDetail = "$(($report.soakSecondsActual))s live; handles $($firstS.Handles)->$($lastS.Handles) (d$handleDelta); gdi $($firstS.Gdi)->$($lastS.Gdi) (d$gdiDelta); privateMB $privFirstMb->$privLastMb; threads $($firstS.Threads)->$($lastS.Threads); cpu $pctRounded% of machine"
         if ($SoakSeconds -lt 7200) {
-            $report.notes += "Soak shorter than 2h: ran $($report.soakSecondsActual)s (SOAK_SECONDS=$SoakSeconds)."
+            [void]$reportNotes.Add("Soak shorter than 2h: ran $($report.soakSecondsActual)s (SOAK_SECONDS=$SoakSeconds).")
         }
         if ($pctOfMachine -gt 1.0) {
-            $report.notes += ("Live cost {0:N3}% of machine exceeds ~0.1% README claim on this runner; not treated as crash/leak ship-blocker." -f $pctOfMachine)
+            [void]$reportNotes.Add("Live cost $pctRounded% of machine exceeds ~0.1% README claim on this runner; not treated as crash/leak ship-blocker.")
         }
     }
     catch { $soakDetail = $_.Exception.Message }
@@ -328,16 +333,16 @@ try {
         $live.Refresh()
         if ($live.HasExited) { throw 'exited while minimized' }
         $after = Get-Sample -ProcId $live.Id
-        $cpuIdleDelta = $after.TotalProcessorTimeMs - $before.TotalProcessorTimeMs
+        $cpuIdleDelta = [int64]($after.TotalProcessorTimeMs - $before.TotalProcessorTimeMs)
         # Allow a little scheduler noise; Live tick is every 1.5s and would burn far more.
         $idleOk = ($cpuIdleDelta -le 250)
-        $idleDetail = ("minimized 20s; cpuMs delta={0}; handles {1}->{2}" -f $cpuIdleDelta, $before.Handles, $after.Handles)
-        $report.idle = [ordered]@{
+        $idleDetail = "minimized 20s; cpuMs delta=$cpuIdleDelta; handles $($before.Handles)->$($after.Handles)"
+        $report.idle = @{
             mode = 'minimized'
             wallSeconds = 20
             cpuDeltaMs = $cpuIdleDelta
-            handlesBefore = $before.Handles
-            handlesAfter = $after.Handles
+            handlesBefore = [int]$before.Handles
+            handlesAfter = [int]$after.Handles
             note = 'Live-off shares UpdateRunning() timer.Stop path with minimize (src DesktopVitals.cs).'
         }
         if (-not $idleOk) { throw $idleDetail }
@@ -350,28 +355,28 @@ try {
     Write-Check 'minimized-idle-cpu' $idleOk $idleDetail
     $report.checks['minimized-idle-cpu'] = @{ ok = $idleOk; detail = $idleDetail }
 
-    $report.notes += 'Sleep/resume, RDP reconnect, Fast User Switching, and display topology changes were not exercised on this runner. Known limits.'
+    [void]$reportNotes.Add('Sleep/resume, RDP reconnect, Fast User Switching, and display topology changes were not exercised on this runner. Known limits.')
 }
 finally {
     Stop-Own
     Restore-Config
     try {
+        $report.notes = [string[]]@($reportNotes.ToArray())
         $jsonPath = Join-Path $ResultsDir 'stability.json'
         $txtPath = Join-Path $ResultsDir 'stability.txt'
         ($report | ConvertTo-Json -Depth 8) | Set-Content -LiteralPath $jsonPath -Encoding UTF8
         $lines = New-Object System.Collections.Generic.List[string]
-        $lines.Add('Desktop Vitals stability report')
-        $lines.Add(("soakSecondsRequested={0} soakSecondsActual={1}" -f $report.soakSecondsRequested, $report.soakSecondsActual))
-        foreach ($k in $report.checks.Keys) {
+        [void]$lines.Add('Desktop Vitals stability report')
+        [void]$lines.Add("soakSecondsRequested=$($report.soakSecondsRequested) soakSecondsActual=$($report.soakSecondsActual)")
+        foreach ($k in @($report.checks.Keys)) {
             $c = $report.checks[$k]
-            $lines.Add(("{0}: ok={1} {2}" -f $k, $c.ok, $c.detail))
+            [void]$lines.Add("${k}: ok=$($c.ok) $($c.detail)")
         }
-        if ($report.liveCost) {
-            $lines.Add(("liveCost pctOfMachine={0} handleDelta={1} gdiDelta={2} privateBytesDelta={3} threadDelta={4}" -f `
-                $report.liveCost.pctOfMachine, $report.liveCost.handleDelta, $report.liveCost.gdiDelta, `
-                $report.liveCost.privateBytesDelta, $report.liveCost.threadDelta))
+        if ($null -ne $report.liveCost) {
+            $lc = $report.liveCost
+            [void]$lines.Add("liveCost pctOfMachine=$($lc.pctOfMachine) handleDelta=$($lc.handleDelta) gdiDelta=$($lc.gdiDelta) privateBytesDelta=$($lc.privateBytesDelta) threadDelta=$($lc.threadDelta)")
         }
-        foreach ($n in $report.notes) { $lines.Add("NOTE: $n") }
+        foreach ($n in $report.notes) { [void]$lines.Add("NOTE: $n") }
         $lines | Set-Content -LiteralPath $txtPath -Encoding UTF8
     }
     catch { }
