@@ -189,8 +189,8 @@ namespace DesktopVitals {
                     if (!string.IsNullOrEmpty(path)) {
                         string full = Path.GetFullPath(path); string dir = Path.GetDirectoryName(full);
                         if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
-                        File.WriteAllText(full, json, new UTF8Encoding(false)); }
-                    Console.Out.WriteLine(json); Console.Out.Flush(); }
+                        File.WriteAllText(full, json, Utf8); }
+                    WriteOut(json); }
                 catch (Exception) { Environment.Exit(1); }
                 return; }
             int benchAt = Find(args, "--bench");
@@ -237,14 +237,18 @@ namespace DesktopVitals {
                 string full = Path.GetFullPath(path); string dir = Path.GetDirectoryName(full);
                 if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
                 File.WriteAllText(full, line + "\n", new UTF8Encoding(false)); }
-            try { Console.Out.WriteLine(line); Console.Out.Flush(); }
+            try { WriteOut(line); }
             catch (Exception) { } }
+        static readonly Encoding Utf8 = new UTF8Encoding(false);
+        static void WriteOut(string text) {
+            byte[] b = Utf8.GetBytes((text ?? "") + "\n"); Stream s = Console.OpenStandardOutput();
+            s.Write(b, 0, b.Length); s.Flush(); }
         static Board ReadLiveBoard() {
-            Engine.Prime(); var start = DateTime.UtcNow;
+            Engine.Prime(); var start = DateTime.UtcNow; Board board = null;
             while (true) {
-                Engine.Tick(); double sec = (DateTime.UtcNow - start).TotalSeconds;
-                if (sec >= 2.5 && (Engine.ScansComplete || sec >= 45)) break; Thread.Sleep(250); }
-            return Engine.Tick(); }
+                board = Engine.Tick(); double sec = (DateTime.UtcNow - start).TotalSeconds;
+                if ((Engine.TasksReady && sec >= 0.7) || sec >= 1.8) break; Thread.Sleep(120); }
+            return board; }
         static string ArgValue(string[] args, string flag) {
             int at = Find(args, flag); if (at < 0 || at + 1 >= args.Length || args[at + 1].StartsWith("--")) return null;
             return args[at + 1]; }

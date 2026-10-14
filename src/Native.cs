@@ -64,6 +64,11 @@ namespace DesktopVitals {
         [DllImport("kernel32.dll", SetLastError = true)] public static extern IntPtr VirtualQueryEx(IntPtr h, IntPtr addr, IntPtr info, IntPtr len);
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode)] public static extern uint QueryDosDevice(string name, char[] buf, uint cap);
         [DllImport("kernel32.dll")] public static extern bool GetExitCodeProcess(IntPtr h, out uint code);
+        public const int TokenQuery = 8;
+        [DllImport("advapi32.dll", SetLastError = true)] public static extern bool OpenProcessToken(IntPtr proc, int access, out IntPtr token);
+        [DllImport("advapi32.dll", SetLastError = true)] public static extern bool GetTokenInformation(IntPtr token, int cls, IntPtr buf, int len, out int ret);
+        [DllImport("advapi32.dll", CharSet = CharSet.Unicode)] public static extern bool ConvertSidToStringSid(IntPtr sid, out IntPtr str);
+        [DllImport("kernel32.dll")] public static extern IntPtr LocalFree(IntPtr h);
         [DllImport("winsqlite3.dll", CallingConvention = CallingConvention.Cdecl)]
         public static extern int sqlite3_open_v2([MarshalAs(UnmanagedType.LPStr)] string filename, out IntPtr db, int flags, IntPtr vfs);
         [DllImport("winsqlite3.dll", CallingConvention = CallingConvention.Cdecl)]

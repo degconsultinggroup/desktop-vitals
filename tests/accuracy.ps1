@@ -20,6 +20,9 @@ $ModelCreated = $false
 $TaskRun = "DVAccRun$Stamp"
 $TaskFail = "DVAccFail$Stamp"
 $TaskNoise = "DVAccNoiseUpdate$Stamp"
+$TaskShim = "DVAccShim$Stamp"
+$TaskGate = "DVAccGate$Stamp"
+$SetupExe = Join-Path $env:TEMP ("DVAccSetup" + $Stamp + ".exe")
 $StartLnk = Join-Path ([Environment]::GetFolderPath('Startup')) ("DVAccStart$Stamp.lnk")
 $DisabledName = "DVAccDisabled$Stamp"
 $DisabledExe = Join-Path $Work 'dv_acc_disabled.exe'
@@ -344,12 +347,17 @@ function Remove-StartupApproved {
 }
 
 function Register-UserTask {
-    param([string]$Name, [string]$ScriptPath, [switch]$FailOnce)
-    $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument ("-NoProfile -ExecutionPolicy Bypass -File `"$ScriptPath`"")
+    param([string]$Name, [string]$ScriptPath, [switch]$FailOnce, [switch]$NoStart, [string]$Execute, [string]$Arguments)
+    if (-not $Execute) {
+        $Execute = 'powershell.exe'
+        $Arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$ScriptPath`""
+    }
+    $action = New-ScheduledTaskAction -Execute $Execute -Argument $Arguments
     # Once = timed trigger (shows under Scheduled, not Starts with Windows).
     $trigger = New-ScheduledTaskTrigger -Once -At ((Get-Date).AddHours(6))
     $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Hours 1)
     Register-ScheduledTask -TaskName $Name -Action $action -Trigger $trigger -Settings $settings -Force | Out-Null
+    if ($NoStart) { return }
     Start-ScheduledTask -TaskName $Name
     if ($FailOnce) {
         $deadline = (Get-Date).AddSeconds(25)
@@ -370,7 +378,8 @@ function Remove-UserTask {
 function Clear-Fixtures {
     Stop-ProcessList $Children
     Stop-ProcessList $Flood
-    foreach ($n in @($TaskRun, $TaskFail, $TaskNoise)) { Remove-UserTask $n }
+    foreach ($n in @($TaskRun, $TaskFail, $TaskNoise, $TaskShim, $TaskGate)) { Remove-UserTask $n }
+    if ($SetupExe -and (Test-Path -LiteralPath $SetupExe)) { Remove-Item -LiteralPath $SetupExe -Force -ErrorAction SilentlyContinue }
     if (Test-Path -LiteralPath $StartLnk) { Remove-Item -LiteralPath $StartLnk -Force -ErrorAction SilentlyContinue }
     Remove-StartupApproved -List 'Run' -Name $DisabledName
     $runKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
@@ -533,6 +542,91 @@ while ($true) { Start-Sleep -Seconds 2 }
         if ($botProc) { $Children.Add($botProc) | Out-Null }
     }
 
+    # Real-box cases: shim parent/child, gateway chain, idle shell, Windows cwd, temp installer.
+    $ShimRepo = Join-Path $Work 'shim-repo'
+    $GateRepo = Join-Path $Work 'gate-repo'
+    $WinRepo = Join-Path $Work 'win-cwd-repo'
+    New-GitRepo $ShimRepo
+    New-GitRepo $GateRepo
+    New-GitRepo $WinRepo
+    $runPy = Join-Path $ShimRepo 'run.py'
+    @'
+import os, sys, time, subprocess
+path = os.path.abspath(__file__)
+if os.environ.get("DV_SHIM") != "1":
+    env = os.environ.copy()
+    env["DV_SHIM"] = "1"
+    subprocess.Popen([sys.executable, path], env=env, cwd=os.path.dirname(path))
+beat = os.path.join(os.path.dirname(path), "beat.txt")
+while True:
+    open(beat, "w").write("x")
+    time.sleep(0.25)
+'@ | Set-Content -LiteralPath $runPy -Encoding ASCII
+    $gateJs = Join-Path $GateRepo 'gateway.js'
+    $gateCmd = Join-Path $GateRepo 'gateway.cmd'
+    $gateVbs = Join-Path $GateRepo 'gateway.vbs'
+    @'
+var net = require("net");
+var fs = require("fs");
+var path = require("path");
+var srv = net.createServer(function () {});
+srv.listen(0, "127.0.0.1", function () {
+  fs.writeFileSync(path.join(__dirname, "port.txt"), String(srv.address().port));
+});
+setInterval(function () {}, 1000);
+'@ | Set-Content -LiteralPath $gateJs -Encoding ASCII
+    Set-Content -LiteralPath $gateCmd -Value "@echo off`r`nnode `"%~dp0gateway.js`"`r`n" -Encoding ASCII
+    @'
+Dim dir
+dir = Replace(WScript.ScriptFullName, WScript.ScriptName, "")
+CreateObject("Wscript.Shell").Run "cmd.exe /c " & Chr(34) & dir & "gateway.cmd" & Chr(34), 0, False
+'@ | Set-Content -LiteralPath $gateVbs -Encoding ASCII
+    $windirScript = Join-Path $WinRepo 'dv_acc_windir.ps1'
+    Set-Content -LiteralPath $windirScript -Value "while (`$true) { Start-Sleep -Seconds 2 }`r`n" -Encoding ASCII
+    if ($py) {
+        $shimLaunch = Join-Path $ShimRepo 'launch.cmd'
+        Set-Content -LiteralPath $shimLaunch -Value ("@echo off`r`nstart `"`" /b `"{0}`" `"{1}`"`r`n" -f $py, $runPy) -Encoding ASCII
+        $shimHost = Start-Process -FilePath 'cmd.exe' -ArgumentList @('/c', $shimLaunch) -WorkingDirectory $ShimRepo -WindowStyle Hidden -PassThru
+        if (-not $shimHost.WaitForExit(20000)) { try { Stop-Process -Id $shimHost.Id -Force -ErrorAction SilentlyContinue } catch { } }
+        Register-UserTask -Name $TaskShim -Execute $py -Arguments ('"' + $runPy + '"') -NoStart
+        $shimDeadline = (Get-Date).AddSeconds(15)
+        while ((Get-Date) -lt $shimDeadline) {
+            $pys = @(Get-CimInstance Win32_Process | Where-Object { $_.Name -match '^(python|py)\.exe$' -and $_.CommandLine -and $_.CommandLine -like '*run.py*' -and $_.CommandLine -like "*$Stamp*" })
+            if ($pys.Count -ge 1) {
+                foreach ($hit in $pys) {
+                    $proc = Get-Process -Id $hit.ProcessId -ErrorAction SilentlyContinue
+                    if ($proc) { $Children.Add($proc) | Out-Null }
+                }
+                break
+            }
+            Start-Sleep -Milliseconds 200
+        }
+    }
+    if ($nodeCmd) {
+        $null = Start-Child -FilePath 'wscript.exe' -ArgumentList @($gateVbs) -WorkingDirectory $GateRepo
+        Register-UserTask -Name $TaskGate -Execute 'wscript.exe' -Arguments ('"' + $gateVbs + '"') -NoStart
+        $gateDeadline = (Get-Date).AddSeconds(15)
+        while ((Get-Date) -lt $gateDeadline) {
+            $nodes = @(Get-CimInstance Win32_Process -Filter "Name = 'node.exe'" | Where-Object { $_.CommandLine -and $_.CommandLine -like '*gateway.js*' })
+            if ($nodes.Count -ge 1) {
+                foreach ($hit in $nodes) {
+                    $proc = Get-Process -Id $hit.ProcessId -ErrorAction SilentlyContinue
+                    if ($proc) { $Children.Add($proc) | Out-Null }
+                }
+                break
+            }
+            Start-Sleep -Milliseconds 200
+        }
+    }
+    $idleMarker = "DVAccIdle$Stamp"
+    $null = Start-Child -FilePath 'cmd.exe' -ArgumentList @('/d', '/c', "ping -n 80 127.0.0.1 >nul & rem $idleMarker") -WorkingDirectory $env:WINDIR
+    $null = Start-Child -FilePath 'powershell.exe' -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $windirScript) -WorkingDirectory $env:WINDIR
+    Copy-Item -LiteralPath (Join-Path $env:WINDIR 'System32\cmd.exe') -Destination $SetupExe -Force
+    $null = Start-Child -FilePath $SetupExe -ArgumentList @('/d', '/c', 'ping -n 80 127.0.0.1 >nul') -WorkingDirectory $env:TEMP
+    $ghost = "DVAccGhost$Stamp"
+    if (-not (Test-Path -LiteralPath $PrefsFile)) { New-Item -ItemType Directory -Force -Path $ConfigDir | Out-Null; Set-Content -LiteralPath $PrefsFile -Value '' -Encoding ASCII }
+    Add-Content -LiteralPath $PrefsFile -Value ("pinmatch=1|" + $ghost + "|" + $env:WINDIR + "\System32\" + $ghost + ".exe") -Encoding ASCII
+
     Start-Sleep -Seconds 3
 
     # Main accuracy snapshot
@@ -562,13 +656,31 @@ while ($true) { Start-Sleep -Seconds 2 }
 
     # Scheduled task names, with running or failed on that line.
     $schedOk = $true
-    $runLine = @($text -split "`r?`n" | Where-Object { $_ -match [regex]::Escape($TaskRun) } | Select-Object -First 1)
-    $failLine = @($text -split "`r?`n" | Where-Object { $_ -match [regex]::Escape($TaskFail) } | Select-Object -First 1)
+    $lines = @($text -split "`r?`n")
+    $runLine = @($lines | Where-Object { $_ -match [regex]::Escape($TaskRun) } | Select-Object -First 1)
+    $failLine = @($lines | Where-Object { $_ -match [regex]::Escape($TaskFail) } | Select-Object -First 1)
+    $runBlob = $runLine
+    $failBlob = $failLine
+    for ($i = 0; $i -lt $lines.Length; $i++) {
+        if ($lines[$i] -match [regex]::Escape($TaskRun)) {
+            $runBlob = $lines[$i]
+            if ($i -gt 0) { $runBlob = $lines[$i - 1] + ' ' + $runBlob }
+            if ($i + 1 -lt $lines.Length) { $runBlob = $runBlob + ' ' + $lines[$i + 1] }
+            break
+        }
+    }
+    for ($i = 0; $i -lt $lines.Length; $i++) {
+        if ($lines[$i] -match [regex]::Escape($TaskFail)) {
+            $failBlob = $lines[$i]
+            if ($i -gt 0) { $failBlob = $lines[$i - 1] + ' ' + $failBlob }
+            break
+        }
+    }
     if (-not $runLine) { $schedOk = $false; [void]$script:Fn.Add("missing $TaskRun") }
-    elseif ($runLine -notmatch '(?i)running') { $schedOk = $false; [void]$script:Fn.Add("$TaskRun line is not running") }
+    elseif ($runBlob -notmatch '(?i)running') { $schedOk = $false; [void]$script:Fn.Add("$TaskRun line is not running") }
     if (-not $failLine) { $schedOk = $false; [void]$script:Fn.Add("missing $TaskFail") }
-    elseif ($failLine -notmatch '(?i)failed') { $schedOk = $false; [void]$script:Fn.Add("$TaskFail line is not failed") }
-    $taskText = (@($runLine) + @($failLine)) -join "`n"
+    elseif ($failBlob -notmatch '(?i)failed') { $schedOk = $false; [void]$script:Fn.Add("$TaskFail line is not failed") }
+    $taskText = (@($runBlob) + @($failBlob)) -join "`n"
     if (-not (Assert-NoNoise 'tasks' $taskText)) { $schedOk = $false }
     Write-Check 'scheduled-cards' $schedOk
 
@@ -660,6 +772,64 @@ while ($true) { Start-Sleep -Seconds 2 }
     }
     Write-Check 'v2-board' $v2Ok $v2Detail
 
+    # Real machine cases: one bot per script, one gateway server with its port, no idle shell,
+    # no Windows project, no temp installer, no phantom pin.
+    $boxOk = $true
+    $boxDetail = ''
+    try {
+        $gatePortFile = Join-Path $GateRepo 'port.txt'
+        $portDeadline = (Get-Date).AddSeconds(10)
+        while (-not (Test-Path -LiteralPath $gatePortFile) -and (Get-Date) -lt $portDeadline) { Start-Sleep -Milliseconds 200 }
+        if (-not (Test-Path -LiteralPath $gatePortFile)) { throw 'gateway port file missing' }
+        $gatePort = [int](Get-Content -LiteralPath $gatePortFile -Raw).Trim()
+        $board = Invoke-BoardJson -HomeDir $AgentHome
+        $things = @(Get-Things $board)
+        $blobOf = {
+            param($t)
+            return "$($t.Name) $($t.Detail) $($t.Why) $($t.Id) $($t.Project) $($t.Group)"
+        }
+        if ($py) {
+            $shim = @($things | Where-Object { $_.Name -eq 'run.py' })
+            if ($shim.Count -ne 1) { $boxOk = $false; [void]$script:Fn.Add("shim lines=$($shim.Count)") }
+            elseif ($shim[0].Kind -ne 'bot' -or $shim[0].State -ne 'running' -or $shim[0].Project -ne 'shim-repo' -or $shim[0].Detail -notmatch [regex]::Escape($TaskShim) -or $shim[0].Detail -notmatch 'works every') {
+                $boxOk = $false
+                [void]$script:Fn.Add("shim kind=$($shim[0].Kind) state=$($shim[0].State) project=$($shim[0].Project) detail=$($shim[0].Detail)")
+            }
+            if (@($things | Where-Object { $_.Name -eq $TaskShim }).Count -ne 0) { $boxOk = $false; [void]$script:Fn.Add('shim task is its own line') }
+        }
+        else { [void]$script:Fn.Add('python missing for shim'); $boxOk = $false }
+        $gate = @($things | Where-Object { $_.Name -match 'gateway' -and $_.Kind -eq 'server' })
+        if ($gate.Count -ne 1 -or -not ($gate[0].Ports -contains $gatePort) -or $gate[0].Detail -notmatch [regex]::Escape($TaskGate)) {
+            $boxOk = $false
+            $shown = if ($gate.Count -ge 1) { "ports=$($gate[0].Ports -join ',') detail=$($gate[0].Detail)" } else { 'none' }
+            [void]$script:Fn.Add("gateway count=$($gate.Count) $shown")
+        }
+        if (@($things | Where-Object { $_.Name -eq $TaskGate }).Count -ne 0) { $boxOk = $false; [void]$script:Fn.Add('gateway task is its own line') }
+        $idleHit = @($things | Where-Object { (& $blobOf $_) -match [regex]::Escape($idleMarker) })
+        if ($idleHit.Count -ne 0) { $boxOk = $false; [void]$script:Fp.Add('idle shell listed') }
+        $wind = @($things | Where-Object { $_.Name -eq 'dv_acc_windir.ps1' })
+        if ($wind.Count -ne 1 -or $wind[0].Project -ne 'win-cwd-repo') {
+            $boxOk = $false
+            $shown = if ($wind.Count -ge 1) { $wind[0].Project } else { 'missing' }
+            [void]$script:Fn.Add("windir project=$shown")
+        }
+        $badGroup = @($things | Where-Object { $_.Project -match '^(Windows|system32|SysWOW64|WINDOWS)$' -or $_.Group -match '^(Windows|system32|SysWOW64|WINDOWS)$' })
+        if ($badGroup.Count -ne 0) { $boxOk = $false; [void]$script:Fp.Add('windows cwd became a project') }
+        $setupName = [System.IO.Path]::GetFileNameWithoutExtension($SetupExe)
+        if (@($things | Where-Object { $_.Name -eq $setupName -or $_.Name -like "$setupName*" }).Count -ne 0) { $boxOk = $false; [void]$script:Fp.Add('temp installer listed') }
+        if (@($things | Where-Object { $_.Name -eq $ghost }).Count -ne 0) { $boxOk = $false; [void]$script:Fp.Add('phantom pin listed') }
+        if (-not $boxOk) {
+            $boxDetail = ((@($script:Fn) + @($script:Fp)) -join '; ')
+            $names = ($things | ForEach-Object { "$($_.Kind):$($_.Name):$($_.Project):$($_.State):$($_.Detail)" }) -join ' | '
+            $boxDetail = "$boxDetail things=$names"
+        }
+    }
+    catch {
+        $boxOk = $false
+        $boxDetail = $_.Exception.Message
+    }
+    Write-Check 'real-box' $boxOk $boxDetail
+
     # Exit mid-scan: kill during snapshot; host must stay clean and a later snapshot must work
     $midOk = $false
     $midDetail = ''
@@ -747,7 +917,7 @@ while ($true) { Start-Sleep -Seconds 2 }
     Clear-Fixtures
     $leftOk = $true
     $leftDetail = ''
-    foreach ($n in @($TaskRun, $TaskFail, $TaskNoise)) {
+    foreach ($n in @($TaskRun, $TaskFail, $TaskNoise, $TaskShim, $TaskGate)) {
         $t = Get-ScheduledTask -TaskName $n -ErrorAction SilentlyContinue
         if ($t) { $leftOk = $false; $leftDetail = "leftover task $n" }
     }
