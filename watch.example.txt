@@ -10,22 +10,22 @@
 # My server = my-project\server.js
 
 # ---- Bots: things that should keep working, not just keep running ----
-# Add "| check:" to a line to put it in the Bots card. The check is the bot's last sign of work:
-#   a file it rewrites (a heartbeat or health file), a folder it writes into, or a local http
-#   health address (127.0.0.1, ::1, or localhost only). A bot turns amber when its check goes
-#   quiet for 5 minutes.
-# "| code:"  the bot's folder. Clicking the bot opens it in Cursor or VS Code.
+# Add "| check:" to put a line in the Bots card. The check is the bot's last sign of work:
+#   a file it rewrites, a folder it writes into, or a local http health address
+#   (127.0.0.1, ::1, or localhost only). Amber after 5 quiet minutes.
+# "| code:"  the bot's folder. Click opens it in Cursor or VS Code.
 #
 # Price bot = price_bot.py | check: C:\bots\price\heartbeat.json | code: C:\bots\price
 # Local API = uvicorn | check: http://127.0.0.1:8000/health
 
 # ---- AI ----
-# Lines that name a known AI program (Claude, Cursor, Ollama, OpenClaw ...) go in the AI card, not Bots or Pinned.
-# "| ai" puts any other line there. "| kind:" sets its tag: Agent, App, Model, Bot or Watching (shown as Pinned).
+# Known AI names (Claude, Cursor, Ollama, OpenClaw ...) go in the AI card, not Bots or Pinned.
+# "| ai" puts any other line there. "| kind:" sets its tag: Agent, App, Model, Bot or Watching
+# (Watching shows as Pinned).
 #
 # Research agent = agent_loop.py | ai | kind: Agent
 #
-# Installed models are found in "models" folders (C:\models, %USERPROFILE%\models) and the Hugging Face,
+# Models are found in "models" folders (C:\models, %USERPROFILE%\models) and the Hugging Face,
 # Ollama and LM Studio stores. Add other folders, one line each:
 # @models = D:\my-models
 #

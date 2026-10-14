@@ -99,7 +99,8 @@ function Invoke-Snapshot {
     param(
         [string]$Dir,
         [switch]$Review,
-        [switch]$AcceptReview
+        [switch]$AcceptReview,
+        [switch]$PrivacyTest
     )
     New-Item -ItemType Directory -Force -Path $Dir | Out-Null
     $exe = Join-Path $Root 'bin\DesktopVitals.exe'
@@ -109,19 +110,34 @@ function Invoke-Snapshot {
     [void]$argList.Add($Dir)
     if ($Review) { [void]$argList.Add('--review') }
     if ($AcceptReview) { [void]$argList.Add('--accept-review') }
-    $p = Start-Process -FilePath $exe -ArgumentList $argList.ToArray() -PassThru -WindowStyle Hidden
-    # ARM x64 emulation can need well over 20s for the first WPF cold start.
-    if (-not $p.WaitForExit(40000)) {
-        try { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue } catch { }
-        throw 'snapshot exceeded 40 seconds'
+    $prevPriv = $env:DESKTOPVITALS_PRIVACY_TEST
+    try {
+        if ($PrivacyTest) { $env:DESKTOPVITALS_PRIVACY_TEST = '1' }
+        else { Remove-Item Env:\DESKTOPVITALS_PRIVACY_TEST -ErrorAction SilentlyContinue }
+        $p = Start-Process -FilePath $exe -ArgumentList $argList.ToArray() -PassThru -WindowStyle Hidden
+        # ARM x64 emulation can need well over 20s for the first WPF cold start.
+        if (-not $p.WaitForExit(40000)) {
+            try { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue } catch { }
+            throw 'snapshot exceeded 40 seconds'
+        }
+        if ($p.ExitCode -ne 0) { throw "snapshot exit $($p.ExitCode)" }
     }
-    if ($p.ExitCode -ne 0) { throw "snapshot exit $($p.ExitCode)" }
+    finally {
+        if ([string]::IsNullOrEmpty($prevPriv)) { Remove-Item Env:\DESKTOPVITALS_PRIVACY_TEST -ErrorAction SilentlyContinue }
+        else { $env:DESKTOPVITALS_PRIVACY_TEST = $prevPriv }
+    }
     $txt = Join-Path $Dir 'vitals.txt'
     $png = Join-Path $Dir 'vitals.png'
     if (-not (Test-Path -LiteralPath $txt)) { throw 'missing vitals.txt' }
     if (-not (Test-Path -LiteralPath $png)) { throw 'missing vitals.png' }
     if ($AcceptReview) { $null = Wait-ReviewFile -TimeoutSeconds 15 }
-    return @{ Txt = $txt; Png = $png; Text = [System.IO.File]::ReadAllText($txt) }
+    $priv = Join-Path $Dir 'privacy.txt'
+    return @{
+        Txt = $txt
+        Png = $png
+        Text = [System.IO.File]::ReadAllText($txt)
+        Privacy = $(if (Test-Path -LiteralPath $priv) { [System.IO.File]::ReadAllText($priv) } else { $null })
+    }
 }
 
 function Get-PythonCommand {
@@ -145,10 +161,138 @@ function Test-HasCommandLines {
     return $false
 }
 
+# README safety promises as failing CI checks (static source + manifest).
+function Invoke-SafetyStaticChecks {
+    $srcPath = Join-Path $Root 'src\DesktopVitals.cs'
+    $manifestPath = Join-Path $Root 'src\app.manifest'
+    if (-not (Test-Path -LiteralPath $srcPath)) { throw "missing $srcPath" }
+    if (-not (Test-Path -LiteralPath $manifestPath)) { throw "missing $manifestPath" }
+    $src = [System.IO.File]::ReadAllText($srcPath)
+    $manifest = [System.IO.File]::ReadAllText($manifestPath)
+    $srcLines = $src -split "`r?`n"
+
+    # Process.Start only at editor / Explorer / notepad sites.
+    $startHits = @()
+    for ($i = 0; $i -lt $srcLines.Length; $i++) {
+        if ($srcLines[$i] -match 'Process\.Start\s*\(') {
+            $startHits += [pscustomobject]@{ Line = ($i + 1); Text = $srcLines[$i].Trim() }
+        }
+    }
+    if ($startHits.Count -ne 3) {
+        throw ("Process.Start count {0} (want 3 editor/Explorer/notepad): {1}" -f $startHits.Count, (($startHits | ForEach-Object { "$($_.Line):$($_.Text)" }) -join ' | '))
+    }
+    $joined = ($startHits | ForEach-Object { $_.Text }) -join "`n"
+    if ($joined -notmatch 'ProcessStartInfo\(Editor\[0\]') { throw 'missing editor Process.Start' }
+    if ($joined -notmatch 'ProcessStartInfo\(explorer') { throw 'missing explorer Process.Start' }
+    if ($joined -notmatch 'ProcessStartInfo\("notepad\.exe"') { throw 'missing notepad Process.Start' }
+    $editorLine = ($startHits | Where-Object { $_.Text -match 'Editor\[0\]' } | Select-Object -First 1).Text
+    $explorerLine = ($startHits | Where-Object { $_.Text -match 'ProcessStartInfo\(explorer' } | Select-Object -First 1).Text
+    if ($editorLine -notmatch 'UseShellExecute\s*=\s*false') { throw 'editor Process.Start must UseShellExecute=false' }
+    if ($explorerLine -notmatch 'UseShellExecute\s*=\s*false') { throw 'explorer Process.Start must UseShellExecute=false' }
+
+    # Nothing launches cmd/powershell/pwsh/schtasks as a process image.
+    $badLaunch = [regex]::Matches($src, '(?i)ProcessStartInfo\s*\(\s*"(cmd\.exe|powershell\.exe|pwsh\.exe|schtasks\.exe)"')
+    if ($badLaunch.Count -gt 0) { throw ("forbidden launcher: " + $badLaunch[0].Value) }
+    if ($src -match '(?i)Process\.Start\s*\(\s*"(cmd|powershell|pwsh|schtasks)') {
+        throw 'forbidden Process.Start string launcher'
+    }
+
+    # No kill / close / service or task control APIs.
+    foreach ($pat in @(
+            'Process\.Kill\s*\(',
+            'CloseMainWindow\s*\(',
+            'ServiceController',
+            '(?i)\bsc\.exe\b',
+            '(?i)\btaskkill\b',
+            '(?i)\bnet\.exe\b',
+            '(?i)schtasks\.exe'
+        )) {
+        if ($src -match $pat) { throw "forbidden control API match: $pat" }
+    }
+
+    # Registry: read only (OpenSubKey / GetValue*). No writes.
+    foreach ($pat in @('CreateSubKey\s*\(', 'SetValue\s*\(', 'DeleteSubKey(?:Tree)?\s*\(')) {
+        if ($src -match $pat) { throw "registry write API: $pat" }
+    }
+    if ($src -notmatch 'OpenSubKey\s*\(') { throw 'expected registry OpenSubKey reads' }
+
+    # Network: only HttpWebRequest/WebRequest after IsLoopback; no sockets/clients/other HTTP stacks.
+    foreach ($pat in @(
+            'System\.Net\.Sockets',
+            '\bTcpClient\b',
+            '\bUdpClient\b',
+            '\bSocket\b',
+            '\bHttpClient\b',
+            '\bWebClient\b',
+            '\bDns\.GetHost',
+            'FtpWebRequest'
+        )) {
+        if ($src -match $pat) { throw "forbidden network API: $pat" }
+    }
+    $httpHits = [regex]::Matches($src, 'HttpWebRequest|WebRequest\.Create')
+    if ($httpHits.Count -lt 1) { throw 'expected HttpWebRequest for local bot checks' }
+    if ($src -notmatch 'uri\.IsLoopback') { throw 'ReadHttp must require uri.IsLoopback' }
+    if ($src -notmatch 'AllowAutoRedirect\s*=\s*false') { throw 'ReadHttp must disable redirects' }
+    if ($src -notmatch 'string\.Equals\(uri\.Scheme,\s*"http"') { throw 'ReadHttp must allow only http scheme' }
+
+    # No hardcoded outbound product URLs. RFC 2606 example.* (and loopback) may appear in
+    # privacy/redaction sample strings; those are not network destinations.
+    $urlHits = [regex]::Matches($src, 'https?://[^\s"<>]+')
+    foreach ($m in $urlHits) {
+        $u = $m.Value
+        if ($u -match '(?i)(^https?://([^/@]*@)?(example\.(com|org|net)|localhost|127\.0\.0\.1|\[::1\])(:|/|$))') {
+            continue
+        }
+        throw ("hardcoded outbound URL in DesktopVitals.cs: " + $u)
+    }
+
+    # No telemetry / auto-update hooks.
+    foreach ($pat in @(
+            '(?i)\btelemetry\b',
+            '(?i)ApplicationInsights',
+            '(?i)\bSentry\b',
+            '(?i)auto.?update',
+            '(?i)CheckForUpdate',
+            '(?i)Sparkle'
+        )) {
+        if ($src -match $pat) { throw "telemetry/update match: $pat" }
+    }
+
+    # Writes stay under APPDATA\DesktopVitals, LOCALAPPDATA\DesktopVitals, or the snapshot dir.
+    # Snapshot path comes from --snapshot (caller-chosen). Config/review/errors use ApplicationData.
+    if ($src -notmatch 'SpecialFolder\.ApplicationData\),\s*"DesktopVitals"') {
+        throw 'expected APPDATA\\DesktopVitals config/error roots'
+    }
+    if ($src -notmatch 'SpecialFolder\.LocalApplicationData\),\s*"DesktopVitals"') {
+        throw 'expected LOCALAPPDATA\\DesktopVitals state/snapshot roots'
+    }
+
+    # Manifest: asInvoker, never requireAdministrator.
+    if ($manifest -notmatch 'requestedExecutionLevel\s+level="asInvoker"') {
+        throw 'app.manifest missing asInvoker'
+    }
+    if ($manifest -match 'requireAdministrator') { throw 'app.manifest must not requireAdministrator' }
+    if ($manifest -notmatch 'uiAccess="false"') { throw 'app.manifest uiAccess must be false' }
+
+    return ("starts={0}; http+loopback; registry-read; asInvoker" -f $startHits.Count)
+}
+
 New-Item -ItemType Directory -Force -Path $Work, $ResultsDir | Out-Null
 Save-Config
 
 try {
+    # 0. README safety promises as static CI gates
+    $staticOk = $false
+    $staticDetail = ''
+    try {
+        $staticDetail = Invoke-SafetyStaticChecks
+        $staticOk = $true
+    }
+    catch {
+        $staticDetail = $_.Exception.Message
+    }
+    Write-Check 'safety-static' $staticOk $staticDetail
+
     # 1. Build (csc already uses /warnaserror+; also reject warning text)
     $buildOk = $false
     $buildDetail = ''
@@ -163,6 +307,69 @@ try {
     }
     Write-Check 'build' $buildOk $buildDetail
 
+    # 1b. Built exe embeds asInvoker; session need not be admin (GHA runners often are).
+    $elevOk = $false
+    $elevDetail = ''
+    if (-not $buildOk) {
+        Write-Check 'asInvoker-non-admin' $false 'skipped: build failed'
+    }
+    else {
+        try {
+            $exe = Join-Path $Root 'bin\DesktopVitals.exe'
+            if (-not (Test-Path -LiteralPath $exe)) { throw "missing $exe" }
+            $bytes = [System.IO.File]::ReadAllBytes($exe)
+            $ascii = [System.Text.Encoding]::ASCII.GetString($bytes)
+            if ($ascii -notmatch 'asInvoker') { throw 'DesktopVitals.exe missing asInvoker in embedded manifest' }
+            if ($ascii -match 'requireAdministrator') { throw 'DesktopVitals.exe embeds requireAdministrator' }
+            $id = [Security.Principal.WindowsIdentity]::GetCurrent()
+            $principal = New-Object Security.Principal.WindowsPrincipal($id)
+            $isAdmin = $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+            if ($isAdmin) { $elevDetail = 'asInvoker embedded; runner is elevated (app does not request admin)' }
+            else { $elevDetail = 'asInvoker embedded; non-admin session' }
+            $elevOk = $true
+        }
+        catch {
+            $elevDetail = $_.Exception.Message
+        }
+        Write-Check 'asInvoker-non-admin' $elevOk $elevDetail
+    }
+
+    # 1c. Short runtime outbound + write-root gate (also see tests\safety-runtime.ps1)
+    $rtOk = $false
+    $rtDetail = ''
+    if (-not $buildOk) {
+        Write-Check 'safety-runtime' $false 'skipped: build failed'
+    }
+    else {
+        try {
+            $rtScript = Join-Path $Root 'tests\safety-runtime.ps1'
+            if (-not (Test-Path -LiteralPath $rtScript)) { throw "missing $rtScript" }
+            # Child process so safety-runtime's exit code cannot end this smoke session.
+            $shell = (Get-Command pwsh -ErrorAction SilentlyContinue)
+            if (-not $shell) { $shell = Get-Command powershell }
+            $argList = @(
+                '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $rtScript,
+                '-Seconds', '45', '-ResultsDir', $ResultsDir, '-SkipBuild'
+            )
+            $p = Start-Process -FilePath $shell.Source -ArgumentList $argList -Wait -PassThru -NoNewWindow
+            if ($p.ExitCode -ne 0) {
+                $log = Join-Path $ResultsDir 'safety-runtime.log'
+                $tail = ''
+                if (Test-Path -LiteralPath $log) {
+                    $tail = (Get-Content -LiteralPath $log -Tail 8 | Out-String).Trim()
+                }
+                throw ("safety-runtime exit $($p.ExitCode) $tail")
+            }
+            $rtDetail = '45s gate; see safety-runtime.log'
+            $rtOk = $true
+        }
+        catch {
+            $rtDetail = $_.Exception.Message
+            if ($rtDetail.Length -gt 240) { $rtDetail = $rtDetail.Substring(0, 240) }
+        }
+        Write-Check 'safety-runtime' $rtOk $rtDetail
+    }
+
     # 2. Snapshot and review snapshot
     $snapOk = $false
     $snapDetail = ''
@@ -170,9 +377,11 @@ try {
         $snapDir = Join-Path $Work 'snap-basic'
         $basic = Invoke-Snapshot -Dir $snapDir
         $reviewDir = Join-Path $Work 'snap-review'
-        $null = Invoke-Snapshot -Dir $reviewDir -Review
+        $review = Invoke-Snapshot -Dir $reviewDir -Review
         Copy-Item -LiteralPath $basic.Png -Destination (Join-Path $ResultsDir 'vitals.png') -Force
         Copy-Item -LiteralPath $basic.Txt -Destination (Join-Path $ResultsDir 'vitals.txt') -Force
+        Copy-Item -LiteralPath $review.Png -Destination (Join-Path $ResultsDir 'review.png') -Force
+        Copy-Item -LiteralPath $review.Txt -Destination (Join-Path $ResultsDir 'review.txt') -Force
         $snapOk = $true
     }
     catch {
@@ -454,6 +663,123 @@ try {
         $logDetail = $_.Exception.Message
     }
     Write-Check 'errors-log' $logOk $logDetail
+
+    # 12. Perflib locale map (fixture de-DE/ja-JP + live registry + PerfName source gate)
+    $localeOk = $false
+    $localeDetail = ''
+    try {
+        $localeScript = Join-Path $Root 'tests\locale-perflib.ps1'
+        $localeOut = & $localeScript *>&1 | Out-String
+        if ($LASTEXITCODE -ne 0) { throw ("exit $LASTEXITCODE; " + ($localeOut -replace '\s+', ' ').Trim()) }
+        $localeOk = $true
+        $n = @($localeOut -split "`r?`n" | Where-Object { $_ -match '^PASS ' }).Count
+        $localeDetail = if ($n -gt 0) { "$n subchecks" } else { 'nested exit 0' }
+    }
+    catch {
+        $localeDetail = $_.Exception.Message
+    }
+    Write-Check 'locale-perflib' $localeOk $localeDetail
+
+    # 13. Models scan must not hang on a junction/symlink loop (BFS + reparse skip)
+    $loopOk = $false
+    $loopDetail = ''
+    $loopRoot = Join-Path $Work 'models-loop'
+    try {
+        New-Item -ItemType Directory -Force -Path $loopRoot | Out-Null
+        $a = Join-Path $loopRoot 'a'
+        $b = Join-Path $loopRoot 'b'
+        New-Item -ItemType Directory -Force -Path $a, $b | Out-Null
+        # Directory junctions (no admin). a\to-b -> b, b\to-a -> a.
+        cmd.exe /c "mklink /J `"$a\to-b`" `"$b`"" | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "mklink a->b exit $LASTEXITCODE" }
+        cmd.exe /c "mklink /J `"$b\to-a`" `"$a`"" | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "mklink b->a exit $LASTEXITCODE" }
+        # No weight files needed: the hang risk is walking the junction cycle.
+        Set-ConfigText ("@models = {0}`n" -f $loopRoot)
+        $sw = [System.Diagnostics.Stopwatch]::StartNew()
+        $null = Invoke-Snapshot -Dir (Join-Path $Work 'snap-models-loop')
+        $sw.Stop()
+        $loopOk = $true
+        $loopDetail = ("{0} ms" -f $sw.ElapsedMilliseconds)
+    }
+    catch {
+        $loopDetail = $_.Exception.Message
+    }
+    finally {
+        Restore-Config
+        try {
+            # Remove junctions before recursive delete.
+            $j1 = Join-Path $loopRoot 'a\to-b'
+            $j2 = Join-Path $loopRoot 'b\to-a'
+            if (Test-Path -LiteralPath $j1) { cmd.exe /c "rmdir `"$j1`"" | Out-Null }
+            if (Test-Path -LiteralPath $j2) { cmd.exe /c "rmdir `"$j2`"" | Out-Null }
+            Remove-Item -LiteralPath $loopRoot -Recurse -Force -ErrorAction SilentlyContinue
+        }
+        catch { }
+    }
+    Write-Check 'models-symlink-loop' $loopOk $loopDetail
+
+    # 14. Secrets in process args never appear in snapshot text, privacy tips, png bytes, or errors.log
+    $privOk = $false
+    $privDetail = ''
+    try {
+        $secrets = @(
+            'sk-dvsmokeTESTKEY0001',
+            'ghp_dvsmokeTESTTOKEN0123456789',
+            'dvsmokePass99',
+            'dvsmokeBearerTok99',
+            'dvsmokeUrlPass',
+            'dvsmokeEnv99'
+        )
+        $privScript = Join-Path $Work 'dv_smoke_priv.ps1'
+        Set-Content -LiteralPath $privScript -Value 'Start-Sleep -Seconds 60' -Encoding UTF8
+        $null = Start-Child -FilePath 'powershell.exe' -ArgumentList @(
+            '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $privScript,
+            '--api-key', 'sk-dvsmokeTESTKEY0001',
+            '--token', 'ghp_dvsmokeTESTTOKEN0123456789',
+            'password=dvsmokePass99',
+            'Bearer', 'dvsmokeBearerTok99',
+            'https://u:dvsmokeUrlPass@example.com/x',
+            'API_KEY=dvsmokeEnv99',
+            'dvsmokePrivMarker'
+        )
+        Set-ConfigText "PrivSmoke = dvsmokePrivMarker`n"
+        Start-Sleep -Seconds 2
+        $privSnap = Invoke-Snapshot -Dir (Join-Path $Work 'snap-privacy') -PrivacyTest
+        if ($privSnap.Text -notmatch 'PrivSmoke') { throw 'PrivSmoke watching row missing' }
+        if (-not $privSnap.Privacy) { throw 'missing privacy.txt' }
+        if ($privSnap.Privacy -notmatch '(?m)^show=') { throw 'privacy.txt missing show=' }
+        if ($privSnap.Privacy -notmatch '(?m)^log=') { throw 'privacy.txt missing log=' }
+        if ($privSnap.Privacy -notmatch 'Users\\<user>') { throw 'privacy.txt missing username-agnostic path' }
+        if ($privSnap.Privacy -notmatch '<redacted>') { throw 'privacy.txt missing <redacted>' }
+        $blobs = @(
+            $privSnap.Text,
+            $privSnap.Privacy,
+            [System.IO.File]::ReadAllText($privSnap.Txt),
+            [System.Text.Encoding]::ASCII.GetString([System.IO.File]::ReadAllBytes($privSnap.Png))
+        )
+        $logPath = Join-Path $ConfigDir 'errors.log'
+        if (Test-Path -LiteralPath $logPath) {
+            $blobs += [System.IO.File]::ReadAllText($logPath)
+        }
+        foreach ($secret in $secrets) {
+            foreach ($blob in $blobs) {
+                if ($blob.IndexOf($secret, [System.StringComparison]::Ordinal) -ge 0) {
+                    throw "secret leaked: $secret"
+                }
+            }
+        }
+        $privOk = $true
+        $privDetail = 'sample+tips redacted'
+    }
+    catch {
+        $privDetail = $_.Exception.Message
+    }
+    finally {
+        Stop-Children
+        Restore-Config
+    }
+    Write-Check 'privacy-secrets' $privOk $privDetail
 }
 finally {
     Stop-Children

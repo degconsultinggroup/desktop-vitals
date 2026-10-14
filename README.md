@@ -47,7 +47,7 @@ You need Windows 10 or 11.
 2. Download `DesktopVitals.exe` (and `SHA256SUMS.txt` if you want to check the hash).
 3. Run the exe. No installer and no admin prompt.
 
-The release exe is not code-signed yet (TODO). Windows SmartScreen may say "Windows protected your PC". Click **More info**, then **Run anyway**.
+The exe is not code-signed yet. Windows SmartScreen may say "Windows protected your PC". Click **More info**, then **Run anyway**.
 
 ### Build from source
 
@@ -61,7 +61,7 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1
 
 ## First run
 
-The first time it opens, Desktop Vitals shows **Here's what I found**: everything it detected and everything in your settings, grouped by kind. Untick anything that shouldn't be shown, and click a tag if something is the wrong kind (a script that is really a bot, say). **Looks good** saves your answers to your settings file. The gear button at the top brings this screen back any time.
+The first time it opens, the board fills with what is already running. Then **Here's what I found** lists everything it detected and everything in your settings, grouped by kind. Untick a line to hide it; click a tag to change its kind. **Looks good** saves those answers to `%APPDATA%\DesktopVitals\review.txt`. The gear button at the top brings this screen back any time.
 
 ## Use
 
@@ -70,7 +70,7 @@ The first time it opens, Desktop Vitals shows **Here's what I found**: everythin
 - The refresh button looks again for new scripts, models, tasks and settings. It also does this on its own.
 - **Esc** or **×** closes it. Nothing starts at logon.
 
-While live, it uses about 0.1% of the machine. One system call per refresh covers every process.
+While live, it uses about 1-2% of a typical 4-core machine in CI soak (lower on quieter desktops). One system call per refresh covers every process.
 
 ## Settings
 
@@ -79,7 +79,7 @@ Everything works without settings. To add your own Pinned or Bots lines, or an o
 - **Pinned:** `Label = match` keeps an eye on an app or a command. A match ending in `.exe` is a process name. Anything else is text found in the command line.
 - **Bots:** add `| check:` to a line to track whether a bot is still doing work, not just running. The check is a file the bot rewrites, a folder it writes into, or a local http health address (`127.0.0.1`, `::1`, or `localhost` only). A bot turns amber when its check goes quiet for 5 minutes. Add `| code:` to open its folder in your editor.
 - **AI:** lines that name a known AI program (Claude, Cursor, Ollama, OpenClaw ...) go in the AI card instead of Bots or Pinned. Add `| ai` to put any other line there, and `| kind: Agent` (or `App`, `Model`, `Bot`, `Watching`) to choose its tag (`Watching` shows as Pinned).
-- **Hidden and re-tagged items:** the review screen writes `@hide = <name>` for things you untick and `@kind = <name> | Agent` for things you re-tag. Delete those lines to undo them.
+- **Hidden and re-tagged items:** the review screen writes `@hide = <name>` and `@kind = <name> | Agent` into `review.txt`. Delete those lines to undo them.
 - **Processor temperature:** Windows doesn't give CPU temperature to normal apps. If a sensor tool already writes a JSON file, point `@temperature-file` at it. Desktop Vitals only reads that file; it never starts a sensor task.
 
 `watch.example.txt` explains each one with examples.
@@ -102,8 +102,11 @@ The whole app is one file, `src\DesktopVitals.cs`, a WPF window written for the 
 
 - PASS: GitHub Actions `windows-latest` (x64) smoke
 - PASS: GitHub Actions `windows-11-arm` (x64 exe under emulation); cores flat on that image
+- PASS: Windows 11 desktop, i7-14700F, RTX 4070 SUPER, with Claude Code, Codex, Cursor, bots and local models running
 - Not tested yet (no lab machine): Windows Sandbox / fresh non-admin no-NVIDIA; German UI; Defender / VirusTotal; Windows 10 22H2
 
 ## License
 
 MIT. See [LICENSE](LICENSE).
+
+Made by [Frontier Deployments](https://frontierdeployments.com).
