@@ -70,7 +70,7 @@ The first time it opens, the board fills with what is already running. Then **He
 - The refresh button looks again for new scripts, models, tasks and settings. It also does this on its own.
 - **Esc** or **×** closes it. Nothing starts at logon.
 
-While live, it uses about 0.1% of the machine. One system call per refresh covers every process.
+While live, it uses about 1-2% of a typical 4-core machine in CI soak (lower on quieter desktops). One system call per refresh covers every process.
 
 ## Settings
 
