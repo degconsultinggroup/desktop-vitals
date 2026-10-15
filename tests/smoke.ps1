@@ -112,6 +112,22 @@ function Wait-ReviewFile {
     throw 'review.txt not written'
 }
 
+function Write-BoardJson {
+    param([string]$Label)
+    $exe = Join-Path $Root 'bin\DesktopVitals.exe'
+    $out = Join-Path $Work ("fail-" + $Label + ".json")
+    Write-Host ("----- --json {0} -----" -f $Label)
+    try {
+        & $exe --json $out
+        if ($LASTEXITCODE -ne 0) { Write-Host ("--json exit {0}" -f $LASTEXITCODE) }
+        if (-not (Test-Path -LiteralPath $out)) { Write-Host '(no json file)' }
+    }
+    catch {
+        Write-Host ("--json failed: " + $_.Exception.Message)
+    }
+    Write-Host '----- end --json -----'
+}
+
 function Invoke-Snapshot {
     param(
         [string]$Dir,
@@ -430,6 +446,7 @@ try {
         $scriptsOk = $true
     }
     catch {
+        Write-BoardJson 'scripts-listed'
         if (-not $scriptsDetail) { $scriptsDetail = $_.Exception.Message }
         else { $scriptsDetail = "$scriptsDetail; $($_.Exception.Message)" }
     }
@@ -624,6 +641,7 @@ Checked = something | check: http://example.com
         $v6Ok = $true
     }
     catch {
+        Write-BoardJson 'http-ipv6-loopback'
         $v6Detail = $_.Exception.Message
     }
     finally {
@@ -646,6 +664,7 @@ Checked = something | check: http://example.com
         $cmdOk = $true
     }
     catch {
+        Write-BoardJson 'long-command-line'
         $cmdDetail = $_.Exception.Message
     }
     finally {
@@ -783,6 +802,7 @@ Checked = something | check: http://example.com
         $privDetail = 'sample+tips redacted'
     }
     catch {
+        Write-BoardJson 'privacy-secrets'
         $privDetail = $_.Exception.Message
     }
     finally {

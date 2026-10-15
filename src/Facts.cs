@@ -83,9 +83,12 @@ using System.Security.Cryptography; using System.Text; using System.Text.Regular
                     else if (Container(parent.Exe) && m.LaunchKind == null) { m.LaunchKind = "terminal"; m.LaunchName = RoleLabel(parent.Exe); }
                     cur = parent; }
                 AssignProject(p, m); }
-            static string mineSid; static int Who(Proc p) {
+            static string mineSid; static int mineSession = -2; static int Who(Proc p) {
                 if (p == null) return 0; if (mineSid == null) {
-                    try { mineSid = System.Security.Principal.WindowsIdentity.GetCurrent().User.Value ?? ""; } catch (Exception) { mineSid = ""; } }
+                    try { mineSid = System.Security.Principal.WindowsIdentity.GetCurrent().User.Value ?? ""; } catch (Exception) { mineSid = ""; }
+                    try { mineSession = System.Diagnostics.Process.GetCurrentProcess().SessionId; } catch (Exception) { mineSession = -1; } }
+                // This process's session, including 0. Not the console session.
+                if (mineSession >= 0 && p.Session != mineSession) return 0;
                 if (mineSid.Length == 0) return -1; string sid = UserSid(p.Pid); if (sid == null) return -1;
                 return string.Equals(sid, mineSid, StringComparison.OrdinalIgnoreCase) ? 1 : 0; }
             static bool ProfileScript(string script) {
@@ -147,10 +150,12 @@ using System.Security.Cryptography; using System.Text; using System.Text.Regular
             static bool Owned(Proc p, Memo m, Dictionary<int, Proc> byPid) {
                 Proc cur = p; var guard = new HashSet<int>(); for (int n = 0; n < 40 && guard.Add(cur.Pid); n++) {
                     Proc parent; if (!byPid.TryGetValue(cur.Parent, out parent)) return false;
-                    if (parent.CreateTime == 0 || p.CreateTime == 0 || parent.CreateTime >= p.CreateTime) return false;
+                    if (parent.CreateTime == 0 || cur.CreateTime == 0 || parent.CreateTime >= cur.CreateTime) return false;
                     Memo pm = memo(parent); if (pm == null || !pm.Yours) return false; if (SameScript(m, pm) || SameStem(m, pm)) return true;
+                    // A different script stays its own line. A runner with no script is not its owner.
+                    if (!string.IsNullOrEmpty(m.Script)) { cur = parent; continue; }
                     if (Container(parent.Exe)) { cur = parent; continue; } if (m.Agent != null || DifferentProject(m, pm)) return false;
-                    if (!string.IsNullOrEmpty(m.Script) && !string.IsNullOrEmpty(pm.Script)) return false; return true; }
+                    if (!string.IsNullOrEmpty(pm.Script)) return false; return true; }
                 return false; }
             static bool IsRoot(Proc p, Memo m, Dictionary<int, Proc> byPid) {
                 if (p == null || m == null || !m.Yours || Infra(p.Exe)) return false;
