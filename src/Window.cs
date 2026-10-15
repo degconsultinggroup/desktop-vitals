@@ -59,28 +59,17 @@ namespace DesktopVitals
 
         static Brush Solid(byte a, byte r, byte g, byte b)
         {
-            var br = new SolidColorBrush(Color.FromArgb(a, r, g, b));
-            br.Freeze();
-            return br;
+            var br = new SolidColorBrush(Color.FromArgb(a, r, g, b)); br.Freeze(); return br;
         }
 
         static Brush Gradient(Color a, Color b, bool horizontal)
         {
-            var br = new LinearGradientBrush(a, b, horizontal ? new Point(0, 0) : new Point(0, 0), horizontal ? new Point(1, 0) : new Point(0, 1));
-            br.Freeze();
-            return br;
+            var br = new LinearGradientBrush(a, b, horizontal ? new Point(0, 0) : new Point(0, 0), horizontal ? new Point(1, 0) : new Point(0, 1)); br.Freeze(); return br;
         }
 
         public static TextBlock Label(string s, double size, Brush color, FontWeight weight)
         {
-            var t = new TextBlock();
-            t.Text = s;
-            t.FontSize = size;
-            t.Foreground = color;
-            t.FontWeight = weight;
-            t.FontFamily = Font;
-            t.TextTrimming = TextTrimming.CharacterEllipsis;
-            t.VerticalAlignment = VerticalAlignment.Center;
+            var t = new TextBlock { Text = s, FontSize = size, Foreground = color, FontWeight = weight, FontFamily = Font, TextTrimming = TextTrimming.CharacterEllipsis, VerticalAlignment = VerticalAlignment.Center };
             System.Windows.Documents.Typography.SetNumeralAlignment(t, FontNumeralAlignment.Tabular);
             return t;
         }
@@ -580,7 +569,7 @@ namespace DesktopVitals
             string sig = sb.ToString();
             if (sig == listSig && lines.Count == next.Count)
             {
-                for (int i = 0; i < next.Count; i++) { lines[i].Thing = next[i].Thing; lines[i].Title = next[i].Title; lines[i].Open = next[i].Open; Paint(lines[i], instant); }
+                for (int i = 0; i < next.Count; i++) { lines[i].Thing = next[i].Thing; lines[i].Title = next[i].Title; lines[i].Group = next[i].Group; lines[i].Open = next[i].Open; Paint(lines[i], instant); }
                 return;
             }
             double y = scroll == null ? 0 : scroll.VerticalOffset;
@@ -624,12 +613,12 @@ namespace DesktopVitals
                     bool disk = IsRollup(t);
                     bool open = disk && !string.IsNullOrEmpty(t.id) && expanded.Contains(t.id);
                     string id = string.IsNullOrEmpty(t.id) ? (t.name ?? "") : t.id;
-                    planned.Add(new Entry { Thing = t, Roll = disk, Open = open, Key = (disk ? "r:" : "n:") + id + (open ? ":o" : "") });
+                    planned.Add(new Entry { Thing = t, Roll = disk, Open = open, Group = g.kind, Title = g.title, Key = (disk ? "r:" : "n:") + id + (open ? ":o" : "") });
                     if (!open) continue;
                     List<Thing> bucket;
                     if (!string.IsNullOrEmpty(t.id) && kids.TryGetValue(t.id, out bucket))
                     {
-                        foreach (Thing c in bucket) planned.Add(new Entry { Thing = c, Indent = 1, Key = "c:" + (c.id ?? "") });
+                        foreach (Thing c in bucket) planned.Add(new Entry { Thing = c, Indent = 1, Group = g.kind, Title = g.title, Key = "c:" + (c.id ?? "") });
                         continue;
                     }
                     string[] parts = (t.why ?? "").Split(new[] { " \u00B7 " }, StringSplitOptions.RemoveEmptyEntries);
@@ -772,11 +761,10 @@ namespace DesktopVitals
             e.Name.Inlines.Clear();
             var name = new Run(Redact.Show(ShownName(t))) { Foreground = e.Indent > 0 ? Theme.Faint : Theme.Text, FontWeight = pin ? FontWeights.SemiBold : FontWeights.Medium };
             e.Name.Inlines.Add(name);
-            string proj = Redact.Show(t.project ?? "");
+            string proj = Redact.Show(BoardText.Aside(t, e.Group, e.Title));
             if (proj.Length > 0) e.Name.Inlines.Add(new Run("  " + proj) { Foreground = Theme.Sub, FontWeight = FontWeights.Normal });
             string story = Story(t);
-            if (story.Length == 0 && t.ports != null)
-                foreach (int port in t.ports) AddPort(e.Name, port, " \u00B7 ");
+            if (story.Length == 0) ShowPorts(e.Name, t, " \u00B7 ");
             e.Detail.Inlines.Clear();
             if (story.Length == 0)
             {
@@ -785,9 +773,17 @@ namespace DesktopVitals
                 return;
             }
             e.Detail.Inlines.Add(new Run(Redact.Show(story)));
-            if (t.ports != null) foreach (int port in t.ports) AddPort(e.Detail, port, "  \u00B7  ");
+            ShowPorts(e.Detail, t, "  \u00B7  ");
             e.Detail.Visibility = Visibility.Visible;
             e.Detail.Margin = new Thickness(e.Indent * 16, 0, 8, 3);
+        }
+        static void ShowPorts(TextBlock tb, Thing t, string lead)
+        {
+            var show = new List<int>(); if (t != null && t.ports != null) foreach (int p in t.ports) if (p != 9229 && p != 9222) show.Add(p);
+            if (show.Count == 0 && t != null && t.ports != null) foreach (int p in t.ports) show.Add(p);
+            show.Sort(); int extra = show.Count > 3 ? show.Count - 3 : 0; int n = extra > 0 ? 3 : show.Count;
+            for (int i = 0; i < n; i++) AddPort(tb, show[i], lead);
+            if (extra > 0) tb.Inlines.Add(new Run(lead + "+" + extra.ToString(CultureInfo.InvariantCulture)) { Foreground = Theme.Faint });
         }
         static void AddPort(TextBlock tb, int port, string lead)
         {
@@ -1278,7 +1274,7 @@ namespace DesktopVitals
         }
         class Entry
         {
-            public string Key, Title, Sig;
+            public string Key, Title, Sig, Group;
             public Thing Thing;
             public bool Section, Roll, Open, Flashing;
             public int Indent;

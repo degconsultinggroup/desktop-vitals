@@ -488,6 +488,19 @@ namespace DesktopVitals {
                         best = pct; bestCpu = cpu;
                         bestName = "Thread " + cpu.ToString(CultureInfo.InvariantCulture) + "  \u00B7  " + kind + coreNo.ToString(CultureInfo.InvariantCulture); } } }
             if (bestCpu < 0) return ""; return "Busiest thread: " + bestName + " at " + BarPct(best); }
+        public static string Aside(Thing t, string group, string title) {
+            if (t == null) return ""; string proj = t.project ?? "", name = t.name ?? "";
+            if (group == "agents") return proj;
+            if (proj.Length > 0 && !proj.Equals(title ?? "", StringComparison.OrdinalIgnoreCase)) return proj;
+            if (t.kind == "task") return "task"; string file = Bit(t.id);
+            if (file.Length > 0 && !file.Equals(name, StringComparison.OrdinalIgnoreCase)) return file;
+            string n = (file.Length > 0 ? file : name).ToLowerInvariant();
+            string host = n.EndsWith(".py") || n.EndsWith(".pyw") || n == "http.server" ? "Python" : (n.EndsWith(".js") || n.EndsWith(".mjs") || n.EndsWith(".cjs") || n.EndsWith(".ts") ? "node" : "");
+            return host.Length == 0 || host.Equals(name, StringComparison.OrdinalIgnoreCase) ? "" : host; }
+        static string Bit(string id) {
+            if (string.IsNullOrEmpty(id)) return ""; int c = id.IndexOf(':'); string r = c < 0 ? id : id.Substring(c + 1);
+            if (r.StartsWith("module:", StringComparison.Ordinal)) { r = r.Substring(7); int b = r.IndexOf('|'); return b < 0 ? r : r.Substring(0, b); }
+            int s = Math.Max(r.LastIndexOf('\\'), r.LastIndexOf('/')); return s >= 0 ? r.Substring(s + 1) : ""; }
         public static string Render(Board b) {
             if (b == null) b = new Board(); var sb = new StringBuilder();
             sb.Append("Desktop Vitals  ").Append(b.name ?? "").Append("  ");
@@ -504,7 +517,7 @@ namespace DesktopVitals {
                     sb.Append('\n'); sb.Append(g.title ?? "").Append('\n'); if (g.things == null) continue;
                     foreach (Thing t in g.things) {
                         sb.Append("  ").Append(Dot(t.state)).Append(' ').Append(DisplayName(t));
-                        if (!string.IsNullOrEmpty(t.project)) sb.Append("  ").Append(t.project);
+                        string aside = Aside(t, g.kind, g.title); if (aside.Length > 0) sb.Append("  ").Append(aside);
                         sb.Append("  ").Append(Phrase(t.state));
                         if (!string.IsNullOrEmpty(t.since)) sb.Append(" \u00B7 ").Append(t.since); sb.Append('\n');
                         if (!string.IsNullOrEmpty(t.detail)) sb.Append("    ").Append(t.detail).Append('\n');
@@ -531,62 +544,43 @@ namespace DesktopVitals {
             haveThreads = false; prevWall = cpuIdle = cpuKernel = cpuUser = 0;
             threadBusy = threadTotal = prevThreadBusy = prevThreadTotal = null; LiveBoard.Clear(); }
         public static void Prime() {
-            SampleCpu(); SampleThreads(null);
-            try { SampleProcs(Procs.Snapshot()); } catch (Exception) { }
-            try { TaskList.Refresh(null); } catch (Exception) { }
-            try { GpuCounters.Refresh(); } catch (Exception) { }
-            try { Vram.Refresh(); } catch (Exception) { } }
+            SampleCpu(); SampleThreads(null); try { SampleProcs(Procs.Snapshot()); } catch (Exception) { }
+            try { TaskList.Refresh(null); } catch (Exception) { } try { GpuCounters.Refresh(); } catch (Exception) { } try { Vram.Refresh(); } catch (Exception) { } }
         public static Board Tick() {
-            try {
-                Current = Build(); logged = false; }
-            catch (Exception ex) {
-                if (!logged) { ErrorLog.Write(ex); logged = true; } }
+            try { Current = Build(); logged = false; }
+            catch (Exception ex) { if (!logged) { ErrorLog.Write(ex); logged = true; } }
             return Current; }
         static Board Empty() {
-            var b = new Board(); b.name = Environment.MachineName; b.headline = new Headline(); b.headline.text = "All good";
-            return b; }
+            var b = new Board(); b.name = Environment.MachineName; b.headline = new Headline(); b.headline.text = "All good"; return b; }
         static string KeyOf(Proc p) { return p.Pid.ToString(CultureInfo.InvariantCulture) + ":" + p.CreateTime.ToString(CultureInfo.InvariantCulture); }
         static string CmdOf(Proc p) {
-            if (!string.IsNullOrEmpty(p.Cmd)) return p.Cmd; string key = KeyOf(p); string cmd;
-            if (cmds.TryGetValue(key, out cmd)) { p.Cmd = cmd; return cmd; }
-            try { cmd = Procs.CommandLine(p.Pid) ?? ""; }
-            catch (Exception) { cmd = ""; }
+            if (!string.IsNullOrEmpty(p.Cmd)) return p.Cmd; string key = KeyOf(p), cmd; if (cmds.TryGetValue(key, out cmd)) { p.Cmd = cmd; return cmd; }
+            try { cmd = Procs.CommandLine(p.Pid) ?? ""; } catch (Exception) { cmd = ""; }
             if (cmds.Count > 4000) cmds.Clear(); cmds[key] = cmd; p.Cmd = cmd; return cmd; }
         static string CwdOf(Proc p) {
-            string key = KeyOf(p); string dir; if (cwds.TryGetValue(key, out dir)) return dir;
-            try { dir = Procs.CurrentDirectory(p.Pid); }
-            catch (Exception) { dir = null; }
+            string key = KeyOf(p), dir; if (cwds.TryGetValue(key, out dir)) return dir;
+            try { dir = Procs.CurrentDirectory(p.Pid); } catch (Exception) { dir = null; }
             if (cwds.Count > 4000) cwds.Clear(); cwds[key] = dir; return dir; }
         static double SampleCpu() {
             long idle, kernel, user; if (!Native.GetSystemTimes(out idle, out kernel, out user)) return 0; double pct = 0;
-            if (haveCpu) {
-                long dIdle = idle - cpuIdle; long dTotal = (kernel - cpuKernel) + (user - cpuUser);
-                if (dTotal > 0) {
-                    pct = (dTotal - dIdle) * 100.0 / dTotal; if (pct < 0) pct = 0; if (pct > 100) pct = 100; } }
+            if (haveCpu) { long dIdle = idle - cpuIdle; long dTotal = (kernel - cpuKernel) + (user - cpuUser);
+                if (dTotal > 0) { pct = (dTotal - dIdle) * 100.0 / dTotal; if (pct < 0) pct = 0; if (pct > 100) pct = 100; } }
             cpuIdle = idle; cpuKernel = kernel; cpuUser = user; haveCpu = true; return pct; }
         static void SampleThreads(List<double> into) {
             int n = Math.Max(1, Environment.ProcessorCount);
-            if (threadBusy == null || threadBusy.Length != n) {
-                threadBusy = new long[n]; threadTotal = new long[n]; prevThreadBusy = new long[n]; prevThreadTotal = new long[n];
-                haveThreads = false; }
-            if (into != null) {
-                into.Clear(); for (int i = 0; i < n; i++) into.Add(0); }
-            try {
-                if (!Native.ThreadTimes(threadBusy, threadTotal)) return; }
-            catch (Exception) { return; }
-            if (haveThreads && into != null) {
-                for (int i = 0; i < n; i++) {
-                    long dt = threadTotal[i] - prevThreadTotal[i]; double p = 0;
-                    if (dt > 0) {
-                        p = (threadBusy[i] - prevThreadBusy[i]) * 100.0 / dt; if (p < 0) p = 0; if (p > 100) p = 100; }
-                    into[i] = p; } }
+            if (threadBusy == null || threadBusy.Length != n) { threadBusy = new long[n]; threadTotal = new long[n]; prevThreadBusy = new long[n]; prevThreadTotal = new long[n]; haveThreads = false; }
+            if (into != null) { into.Clear(); for (int i = 0; i < n; i++) into.Add(0); }
+            try { if (!Native.ThreadTimes(threadBusy, threadTotal)) return; } catch (Exception) { return; }
+            if (haveThreads && into != null) for (int i = 0; i < n; i++) {
+                long dt = threadTotal[i] - prevThreadTotal[i]; double p = 0;
+                if (dt > 0) { p = (threadBusy[i] - prevThreadBusy[i]) * 100.0 / dt; if (p < 0) p = 0; if (p > 100) p = 100; }
+                into[i] = p; }
             long[] swap = prevThreadBusy; prevThreadBusy = threadBusy; threadBusy = swap; swap = prevThreadTotal;
             prevThreadTotal = threadTotal; threadTotal = swap; haveThreads = true; }
         static List<CoreGroup> CoreGroups() {
             if (cachedGroups != null) return cachedGroups; List<KeyValuePair<int, int[]>> cores;
             try { cores = Native.CoreLayout(); }
-            catch (Exception) {
-                cores = new List<KeyValuePair<int, int[]>>(); int n = Math.Max(1, Environment.ProcessorCount);
+            catch (Exception) { cores = new List<KeyValuePair<int, int[]>>(); int n = Math.Max(1, Environment.ProcessorCount);
                 for (int i = 0; i < n; i++) cores.Add(new KeyValuePair<int, int[]>(0, new[] { i })); }
             int top = 0; for (int i = 0; i < cores.Count; i++) if (cores[i].Key > top) top = cores[i].Key; bool hybrid = false;
             for (int i = 0; i < cores.Count; i++) if (cores[i].Key != top) hybrid = true; cachedGroups = new List<CoreGroup>();
@@ -604,26 +598,17 @@ namespace DesktopVitals {
             var next = new Dictionary<int, Proc>(); foreach (Proc p in list) next[p.Pid] = p; prevProcs = next; prevWall = wall;
             haveWall = true; }
         static string FormatSpan(TimeSpan span) {
-            int sec = (int)span.TotalSeconds; if (sec < 0) sec = 0;
-            if (sec < 60) return sec.ToString(CultureInfo.InvariantCulture) + "s";
+            int sec = (int)span.TotalSeconds; if (sec < 0) sec = 0; if (sec < 60) return sec.ToString(CultureInfo.InvariantCulture) + "s";
             int days = (int)span.TotalDays; if (days >= 1) return days.ToString(CultureInfo.InvariantCulture) + "d"; int mins = (int)span.TotalMinutes;
-            if (mins < 60) return mins.ToString(CultureInfo.InvariantCulture) + "m"; int h = mins / 60; int m = mins % 60;
-            if (m == 0) return h.ToString(CultureInfo.InvariantCulture) + "h";
-            return h.ToString(CultureInfo.InvariantCulture) + "h " + m.ToString(CultureInfo.InvariantCulture) + "m"; }
+            if (mins < 60) return mins.ToString(CultureInfo.InvariantCulture) + "m"; int h = mins / 60, m = mins % 60;
+            return m == 0 ? h.ToString(CultureInfo.InvariantCulture) + "h" : h.ToString(CultureInfo.InvariantCulture) + "h " + m.ToString(CultureInfo.InvariantCulture) + "m"; }
         static string Age(long fileTime) {
-            if (fileTime <= 0) return "";
-            try {
-                TimeSpan span = DateTime.Now - DateTime.FromFileTime(fileTime); return FormatSpan(span); }
-            catch (Exception) { return ""; } }
+            if (fileTime <= 0) return ""; try { return FormatSpan(DateTime.Now - DateTime.FromFileTime(fileTime)); } catch (Exception) { return ""; } }
         static string SinceWhen(DateTime t) {
-            if (t.Year < 2000) return "";
-            try { return FormatSpan(DateTime.Now - t); }
-            catch (Exception) { return ""; } }
-        static string Cap(string s) {
-            if (string.IsNullOrEmpty(s)) return ""; return s.Length <= 2000 ? s : s.Substring(0, 2000); }
+            if (t.Year < 2000) return ""; try { return FormatSpan(DateTime.Now - t); } catch (Exception) { return ""; } }
+        static string Cap(string s) { if (string.IsNullOrEmpty(s)) return ""; return s.Length <= 2000 ? s : s.Substring(0, 2000); }
         static bool Hidden(string id, string name) {
-            if (!string.IsNullOrEmpty(id) && Prefs.Hides.Contains(id)) return true;
-            if (!string.IsNullOrEmpty(name) && Prefs.Hides.Contains(name)) return true; return false; }
+            return (!string.IsNullOrEmpty(id) && Prefs.Hides.Contains(id)) || (!string.IsNullOrEmpty(name) && Prefs.Hides.Contains(name)); }
         static void Finish(Thing t) {
             if (t.ports == null) t.ports = new List<int>(); string renamed;
             if (!string.IsNullOrEmpty(t.id) && Prefs.Rename.TryGetValue(t.id, out renamed) && !string.IsNullOrEmpty(renamed)) {
@@ -634,9 +619,7 @@ namespace DesktopVitals {
         static long VramOf(int pid) {
             long bytes; var map = Vram.ByPid; if (map != null && map.TryGetValue(pid, out bytes)) return bytes; return 0; }
         static Board Build() {
-            var clock = Stopwatch.StartNew();
-            try { return BuildBoard(); }
-            finally { LastPassMs = clock.Elapsed.TotalMilliseconds; } }
+            var clock = Stopwatch.StartNew(); try { return BuildBoard(); } finally { LastPassMs = clock.Elapsed.TotalMilliseconds; } }
         static Board BuildBoard() {
             var board = Empty(); string named = Prefs.Name;
             board.name = Redact.Show(string.IsNullOrEmpty(named) ? Environment.MachineName : named);

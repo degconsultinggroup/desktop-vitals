@@ -28,7 +28,7 @@ using System.Security.Cryptography; using System.Text; using System.Text.Regular
                     Agents(procs, byPid, listeners, things, used); foreach (Proc p in procs) {
                         if (used.Contains(p.Pid)) continue; Memo m = memo(p); if (!IsRoot(p, m, byPid, listeners)) continue;
                         Thing t = WorkThing(p, m, byPid, listeners, used); if (t == null) continue; things.Add(t); } }
-                Tasks(things); Models(things); Ended(things); Pins(things); return Order(things); }
+                Tasks(things); Models(things); Ended(things); Pins(things); Fold(things); return Order(things); }
             static Memo Touch(Proc p, Dictionary<int, Proc> byPid) {
                 Memo m; if (memos.TryGetValue(p.Pid, out m) && m.Create == p.CreateTime) return m;
                 if (m != null) Forget(p.Pid, m, DateTime.UtcNow); m = new Memo(); m.Create = p.CreateTime;
@@ -139,7 +139,10 @@ using System.Security.Cryptography; using System.Text; using System.Text.Regular
                             if (e == ".gguf" || e == ".safetensors" || e == ".ggml") return true; } } }
                 catch (Exception) { } return false; }
             static bool SameScript(Memo a, Memo b) {
-                return a != null && b != null && !string.IsNullOrEmpty(a.Script) && string.Equals(a.Script, b.Script, StringComparison.OrdinalIgnoreCase); }
+                if (a == null || b == null || string.IsNullOrEmpty(a.Script) || string.IsNullOrEmpty(b.Script)) return false;
+                if (string.Equals(a.Script, b.Script, StringComparison.OrdinalIgnoreCase)) return true; string ma = Mod(a.Script), mb = Mod(b.Script);
+                return ma != null && string.Equals(ma, mb, StringComparison.OrdinalIgnoreCase); }
+            static string Mod(string s) { if (s == null || !s.StartsWith("module:", StringComparison.Ordinal)) return null; s = s.Substring(7); int b = s.IndexOf('|'); return b < 0 ? s : s.Substring(0, b); }
             static bool SameStem(Memo a, Memo b) { return a != null && b != null && SameFileStem(ScriptFile(a.Script), ScriptFile(b.Script)); }
             static bool SameFileStem(string fa, string fb) {
                 if (string.IsNullOrEmpty(fa) || string.IsNullOrEmpty(fb)) return false; string xa, ya, da, db; try {
@@ -335,7 +338,7 @@ using System.Security.Cryptography; using System.Text; using System.Text.Regular
                 bool quiet = ports.Count == 0 && m.CadenceSec == 0 && string.IsNullOrEmpty(m.RecentWrite) && AgeMin(p) >= 5 && (DateTime.UtcNow - m.LastActive).TotalMinutes >= 5;
                 var t = new Thing(); t.kind = kind; t.state = quiet ? "quiet" : "running"; t.name = kind == "model" ? m.Weight : ShownName(p, m, members, kind);
                 t.id = IdOf(m, p, kind, t.name); t.project = ProjectLabel(m); t.folder = FolderOf(m); t.cpu = cpu; t.ram_mb = ram;
-                t.vram_mb = vram; t.ports = ports; t.since = Age(p.CreateTime); t.count = 1; t.why = Why(m, ports); string starter = StartedBy(p, byPid);
+                ports.Sort(); t.vram_mb = vram; t.ports = ports; t.since = Age(p.CreateTime); t.count = 1; t.why = Why(m, ports); string starter = StartedBy(p, byPid);
                 if (!string.IsNullOrEmpty(starter)) t.why = "started by " + starter + (string.IsNullOrEmpty(t.why) ? "" : "; " + t.why);
                 t.detail = DetailOf(m, kind, p.Exe, t.name);
                 m.Kind = kind; m.Leaf = t.name; if (Hidden(t.id, t.name)) return null; Finish(t); return t; }
@@ -432,6 +435,17 @@ using System.Security.Cryptography; using System.Text; using System.Text.Regular
                     AddGroup(order, titles[key], "project", by[key]); }
                 AddGroup(order, "MODELS", "models", models); AddGroup(order, "OTHER", "other", other);
                 AddGroup(order, "ENDED IN THE LAST HOUR", "ended", ended); return order; }
+            static void Fold(List<Thing> things) {
+                for (int i = 0; i < things.Count; i++) { Thing a = things[i]; if (SkipFold(a)) continue;
+                    for (int j = things.Count - 1; j > i; j--) { Thing b = things[j]; if (b == null || !SameLine(a, b)) continue;
+                        a.cpu += b.cpu; a.ram_mb += b.ram_mb; a.vram_mb += b.vram_mb; if (a.ports != null && b.ports != null) foreach (int p in b.ports) if (!a.ports.Contains(p)) a.ports.Add(p);
+                        things.RemoveAt(j); } } }
+            static bool SkipFold(Thing a) { return a == null || a.kind == "agent" || a.kind == "model" || (a.id != null && a.id.StartsWith("ended:", StringComparison.Ordinal)); }
+            static bool SameLine(Thing a, Thing b) {
+                if (!string.Equals(a.name, b.name, StringComparison.OrdinalIgnoreCase) || !string.Equals(a.project ?? "", b.project ?? "", StringComparison.OrdinalIgnoreCase)) return false;
+                bool al = a.ports != null && a.ports.Count > 0, bl = b.ports != null && b.ports.Count > 0;
+                if (al && bl) { foreach (int p in a.ports) if (b.ports.Contains(p)) return true; return false; }
+                if (al == bl) return false; return a.id != null && b.id != null && a.id.IndexOf("module:", StringComparison.OrdinalIgnoreCase) >= 0 && b.id.IndexOf("module:", StringComparison.OrdinalIgnoreCase) >= 0; }
             static void AddGroup(List<Group> order, string title, string kind, List<Thing> things) {
                 if (things == null || things.Count == 0) return; var g = new Group(); g.title = Redact.Show(title ?? "");
                 g.kind = kind; g.things = things; order.Add(g); }
@@ -496,12 +510,13 @@ using System.Security.Cryptography; using System.Text; using System.Text.Regular
                 string file = ScriptFile(m.Script); if (string.IsNullOrEmpty(file)) return null;
                 try { string dir = Path.GetDirectoryName(file); return string.IsNullOrEmpty(dir) ? null : Path.GetFileName(dir.TrimEnd('\\')); } catch (Exception) { return null; } }
             static string ShortTask(string name) {
-                if (string.IsNullOrEmpty(name)) return name; int sp = name.IndexOf(' '); if (sp < 2 || sp > 6) return name;
+                if (string.IsNullOrEmpty(name)) return name; int sp = SepAt(name); if (sp < 0) return name;
                 string first = name.Substring(0, sp); if (!CapsToken(first)) return name;
                 foreach (TaskInfo t in TaskList.Items) {
-                    if (t == null || string.IsNullOrEmpty(t.Name)) continue; int s = t.Name.IndexOf(' '); if (s < 2 || s > 6) continue;
+                    if (t == null || string.IsNullOrEmpty(t.Name)) continue; int s = SepAt(t.Name); if (s < 0) continue;
                     string tok = t.Name.Substring(0, s); if (CapsToken(tok) && !first.Equals(tok, StringComparison.OrdinalIgnoreCase)) return name; }
                 string rest = name.Substring(sp + 1).Trim(); return rest.Length == 0 ? name : rest; }
+            static int SepAt(string s) { for (int i = 0; i < s.Length && i <= 6; i++) { char c = s[i]; if (c == ' ' || c == '-' || c == '_') return i >= 2 ? i : -1; } return -1; }
             static bool CapsToken(string s) { if (string.IsNullOrEmpty(s)) return false; foreach (char c in s) if (c < 'A' || c > 'Z') return false; return true; }
             static string ScriptName(string script) {
                 if (string.IsNullOrEmpty(script)) return null; if (script.StartsWith("module:", StringComparison.Ordinal)) {
@@ -783,7 +798,7 @@ using System.Security.Cryptography; using System.Text; using System.Text.Regular
                     if (nt.StartsWith(kv.Key, StringComparison.OrdinalIgnoreCase)) return kv.Value + nt.Substring(kv.Key.Length);
                 return nt; }
             static Dictionary<int, List<int>> Listeners() {
-                var map = new Dictionary<int, List<int>>(); ReadPorts(2, 24, 8, 20, -1, 3, map); ReadPorts(23, 56, 20, 52, -1, 3, map);
+                var map = new Dictionary<int, List<int>>(); ReadPorts(2, 24, 8, 20, 0, 3, map); ReadPorts(23, 56, 20, 52, 48, 3, map);
                 ReadPorts(2, 24, 8, 20, 0, 5, map); ReadPorts(23, 56, 20, 52, 48, 5, map); return map; }
             static void ReadPorts(int af, int row, int portOff, int pidOff, int stateOff, int table, Dictionary<int, List<int>> map) {
                 int len = 65536; for (int attempt = 0; attempt < 4; attempt++) {

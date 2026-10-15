@@ -11,7 +11,7 @@ namespace DesktopVitals {
         public static string Show(string s) { return string.IsNullOrEmpty(s) ? (s ?? "") : UserDir.Replace(Secret.Replace(s, "<redacted>"), "$1Users$2<user>"); }
         public static string Log(string s) { return string.IsNullOrEmpty(s) ? "" : CmdLine.Replace(EnvPct.Replace(EnvAssign.Replace(Show(s), "<env>"), "%<env>%"), "<command>"); } }
     static class ErrorLog {
-        public const string Ver = "2.0"; const int Cap = 256 * 1024;
+        public const string Ver = "0.2.0"; const int Cap = 256 * 1024;
         public static void Write(Exception ex) {
             if (ex == null) return;
             try {
@@ -169,6 +169,7 @@ namespace DesktopVitals {
     static class Program {
         [STAThread]
         static void Main(string[] args) {
+            if (Find(args, "--version") >= 0) { try { WriteOut(ErrorLog.Ver); } catch (Exception) { } return; }
             AppDomain.CurrentDomain.UnhandledException += delegate(object s, UnhandledExceptionEventArgs e) { ErrorLog.Write(e.ExceptionObject as Exception); };
             try { Prefs.Load(); Prefs.Migrate(); }
             catch (Exception ex) { ErrorLog.Write(ex); }
