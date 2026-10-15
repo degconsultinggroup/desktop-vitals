@@ -254,6 +254,85 @@ function Wait-CommandLine {
     return 0
 }
 
+function Test-Listener {
+    param([int]$Port)
+    if ($Port -le 0) { return $false }
+    $client = New-Object System.Net.Sockets.TcpClient
+    try {
+        $wait = $client.BeginConnect('127.0.0.1', $Port, $null, $null)
+        if (-not $wait.AsyncWaitHandle.WaitOne(400)) { return $false }
+        $client.EndConnect($wait)
+        return $client.Connected
+    }
+    catch { return $false }
+    finally { try { $client.Close() } catch { } }
+}
+
+function Read-PortFile {
+    param([string]$Path)
+    if ([string]::IsNullOrEmpty($Path) -or -not (Test-Path -LiteralPath $Path)) { return 0 }
+    try {
+        $raw = (Get-Content -LiteralPath $Path -TotalCount 1 -ErrorAction Stop | Out-String).Trim()
+        $n = 0
+        if ([int]::TryParse($raw, [ref]$n) -and $n -gt 0) { return $n }
+    }
+    catch { }
+    return 0
+}
+
+# Snapshot only after the slow runner has the fixtures actually doing work.
+function Wait-FixturesReady {
+    param([int]$Seconds = 60)
+    $deadline = (Get-Date).AddSeconds($Seconds)
+    $pats = New-Object System.Collections.Generic.List[string]
+    foreach ($p in @('*dv_acc_ps.ps1*', '*dv_acc_bat.bat*', '*dv_acc_bot.ps1*', '*dv_acc_listen.ps1*', '*dv_acc_map.ps1*', '*dv_acc_windir.ps1*', '*dv_acc_tree_parent.ps1*', '*dv_acc_tree_child.ps1*', '*dv_acc_tree_listen.ps1*', '*dv_acc_task_run.ps1*', '*hold.ps1*', "*$idleMarker*", "*DVAccSetup$Stamp*")) { $pats.Add($p) }
+    $beats = New-Object System.Collections.Generic.List[string]
+    $beats.Add((Join-Path $BotRepo 'beat.txt'))
+    $ports = New-Object System.Collections.Generic.List[string]
+    $ports.Add($ListenPortFile)
+    $ports.Add($script:TreePortFile)
+    if ($py) {
+        foreach ($p in @('*dv_acc_py.py*', '*http.server*', '*shim-repo*run.py*', '*sup-repo*desk*run.py*', '*ptt.py*')) { $pats.Add($p) }
+        $beats.Add((Join-Path $ShimRepo 'beat.txt'))
+        if ($script:HttpPort -gt 0) { $ports.Add([string]$script:HttpPort) }
+    }
+    if ($nodeCmd) {
+        foreach ($p in @('*dv_acc_node.js*', '*node_modules\openclaw\dist\index.js*', '*dv-acc-gate-child*', '*dv-acc-gate-deep*')) { $pats.Add($p) }
+        $ports.Add($gatePortPath)
+    }
+    $needAgents = 0
+    if ($nodeCmd) { $needAgents = 4 }
+    $missing = @()
+    while ((Get-Date) -lt $deadline) {
+        $cmds = @()
+        try { $cmds = @(Get-CimInstance Win32_Process | Where-Object { $_.CommandLine } | ForEach-Object { $_.CommandLine }) } catch { $cmds = @() }
+        $missing = @()
+        foreach ($pat in $pats) {
+            $hit = $false
+            foreach ($cmd in $cmds) { if ($cmd -like $pat) { $hit = $true; break } }
+            if (-not $hit) { $missing += $pat }
+        }
+        if ($needAgents -gt 0) {
+            $agents = @($cmds | Where-Object { $_ -like '*dv_agent.js*' })
+            if ($agents.Count -lt $needAgents) { $missing += "dv_agent.js=$($agents.Count)/$needAgents" }
+        }
+        foreach ($beat in $beats) {
+            $wrote = $false
+            try { $wrote = (Test-Path -LiteralPath $beat) -and ((Get-Item -LiteralPath $beat).Length -gt 0) } catch { $wrote = $false }
+            if (-not $wrote) { $missing += $beat }
+        }
+        foreach ($port in $ports) {
+            $n = 0
+            if ($port -match '^\d+$') { $n = [int]$port }
+            else { $n = Read-PortFile $port }
+            if ($n -le 0 -or -not (Test-Listener $n)) { $missing += "port:$port" }
+        }
+        if ($missing.Count -eq 0) { return '' }
+        Start-Sleep -Milliseconds 400
+    }
+    return ($missing -join ', ')
+}
+
 function Invoke-BoardJson {
     param([string]$HomeDir)
     $exe = Join-Path $Root 'bin\DesktopVitals.exe'
@@ -780,7 +859,8 @@ while ($true) { Start-Sleep -Seconds 2 }
     Copy-Item -LiteralPath (Join-Path $env:WINDIR 'System32\cmd.exe') -Destination (Join-Path $RgbDir 'OpenRGB.exe') -Force
     Register-UserTask -Name $TaskRgb -Execute (Join-Path $RgbDir 'OpenRGB.exe') -NoStart
 
-    Start-Sleep -Seconds 3
+    $notReady = Wait-FixturesReady -Seconds 60
+    if ($notReady) { [void]$report.Add("fixtures not ready: $notReady") }
 
     # Main accuracy snapshot
     $snap = Invoke-Snapshot -Dir (Join-Path $Work 'snap-main')
@@ -983,7 +1063,12 @@ while ($true) { Start-Sleep -Seconds 2 }
         }
         if (@($things | Where-Object { $_.Kind -eq 'task' -and $_.State -eq 'ended' }).Count -ne 0) { $boxOk = $false; [void]$script:Fp.Add('successful task marked ended') }
         if (@($things | Where-Object { $_.Detail -match 'works on its own' }).Count -ne 0) { $boxOk = $false; [void]$script:Fp.Add('works on its own') }
-        if (@($things | Where-Object { $_.Group -eq 'Other' }).Count -ne 0) { $boxOk = $false; [void]$script:Fp.Add('project titled Other') }
+        $other = @($things | Where-Object { $_.Group -eq 'Other' })
+        if ($other.Count -ne 0) {
+            $boxOk = $false
+            $shown = ($other | ForEach-Object { "$($_.Kind):$($_.Name) why=$($_.Why)" }) -join ', '
+            [void]$script:Fp.Add("project titled Other $shown")
+        }
         $splitNode = @($things | Where-Object { $_.Name -eq 'node' -and $_.Kind -eq 'server' -and ($_.Project -eq 'gate-repo' -or $_.Folder -like '*gate-repo*') })
         if ($splitNode.Count -ne 0) { $boxOk = $false; [void]$script:Fp.Add('gateway node is its own server') }
         if ($py) {
