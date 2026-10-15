@@ -1,8 +1,8 @@
 # Desktop Vitals
 
-A small window for Windows that shows what's running on your PC: scripts, bots, scheduled tasks, AI agents, local models, and CPU/GPU/memory.
+Task Manager isn't enough in the age of AI. I run Claude Code, Codex, Cursor, a few bots and local models on one PC, and I wanted one window to see all of it.
 
-It only looks. It never starts or stops anything and doesn't need admin.
+Desktop Vitals just reads what's running and shows you. It never starts or stops anything and doesn't need admin.
 
 <img src="docs/screenshot.png" alt="Desktop Vitals" width="400">
 
@@ -12,7 +12,7 @@ It only looks. It never starts or stops anything and doesn't need admin.
 irm https://raw.githubusercontent.com/degconsultinggroup/desktop-vitals/main/install.ps1 | iex
 ```
 
-Windows 10 or 11. Or grab `DesktopVitals.exe` from [Releases](https://github.com/degconsultinggroup/desktop-vitals/releases). It isn't signed yet, so SmartScreen may warn you: click **More info**, then **Run anyway**.
+Works on Windows 10 or 11. You can also grab `DesktopVitals.exe` from [Releases](https://github.com/degconsultinggroup/desktop-vitals/releases). It isn't signed yet, so Windows may warn you - click **More info**, then **Run anyway**.
 
 To build it yourself, run `build.ps1`.
 
@@ -26,7 +26,7 @@ To build it yourself, run `build.ps1`.
 - Your own bots and pinned apps
 - Top apps by CPU and memory
 
-Ctrl+Alt+P opens it. To add your own bots or apps, copy `watch.example.txt` to `%APPDATA%\DesktopVitals\watch.txt` and edit it.
+Ctrl+Alt+P opens it. If you want your own bots or apps on there, copy `watch.example.txt` to `%APPDATA%\DesktopVitals\watch.txt` and edit it.
 
 ## License
 
