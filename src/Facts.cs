@@ -34,12 +34,12 @@ using System.Security.Cryptography; using System.Text; using System.Text.Regular
             static Memo Touch(Proc p, Dictionary<int, Proc> byPid) {
                 Memo m; if (memos.TryGetValue(p.Pid, out m) && m.Create == p.CreateTime) return m;
                 if (m != null) Forget(p.Pid, m, DateTime.UtcNow); m = new Memo(); m.Create = p.CreateTime;
-                m.LastActive = DateTime.UtcNow; m.LastCpu = p.CpuTime; m.LastIo = p.Io; memos[p.Pid] = m; m.Yours = RunsAsYou(p);
-                if (m.Yours && !Infra(p.Exe)) {
+                m.LastActive = DateTime.UtcNow; m.LastCpu = p.CpuTime; m.LastIo = p.Io; memos[p.Pid] = m; int who = Who(p); m.Yours = who == 1;
+                if (!Infra(p.Exe) && (m.Yours || (who < 0 && Paths.Interpreter(p.Exe)))) {
                     try { m.Image = Procs.ImagePath(p.Pid); } catch (Exception) { } if (!StockImage(m) || Paths.Interpreter(p.Exe)) {
                         try { m.Cmd = Procs.CommandLine(p.Pid) ?? ""; } catch (Exception) { m.Cmd = ""; }
                         try { m.Cwd = Procs.CurrentDirectory(p.Pid); } catch (Exception) { }
-                        p.Cmd = m.Cmd; m.Script = Paths.Find(p.Exe, m.Cmd, m.Cwd); } }
+                        p.Cmd = m.Cmd; m.Script = Paths.Find(p.Exe, m.Cmd, m.Cwd); if (who < 0 && ProfileScript(m.Script)) m.Yours = true; } }
                 if (m.Yours) m.Agent = AgentOf(p.Exe, m.Cmd, p.Pid, p.CreateTime); if (m.Yours && m.Agent != null && string.IsNullOrEmpty(m.Cwd)) {
                     try { if (string.IsNullOrEmpty(m.Cmd)) m.Cmd = Procs.CommandLine(p.Pid) ?? ""; } catch (Exception) { }
                     try { m.Cwd = Procs.CurrentDirectory(p.Pid); } catch (Exception) { }
@@ -83,13 +83,16 @@ using System.Security.Cryptography; using System.Text; using System.Text.Regular
                     else if (Container(parent.Exe) && m.LaunchKind == null) { m.LaunchKind = "terminal"; m.LaunchName = RoleLabel(parent.Exe); }
                     cur = parent; }
                 AssignProject(p, m); }
-            static string mineSid; static int mineSession = -2; static bool RunsAsYou(Proc p) {
-                if (p == null) return false; if (mineSession < -1) {
-                    try { mineSession = System.Diagnostics.Process.GetCurrentProcess().SessionId; } catch (Exception) { mineSession = -1; }
-                    try { mineSid = System.Security.Principal.WindowsIdentity.GetCurrent().User.Value; } catch (Exception) { mineSid = ""; } }
-                // Services sit in session 0 while the desktop is another session. A session-0 host still owns its own session.
-                if (p.Session != mineSession || string.IsNullOrEmpty(mineSid)) return false;
-                string sid = UserSid(p.Pid); return sid != null && string.Equals(sid, mineSid, StringComparison.OrdinalIgnoreCase); }
+            static string mineSid; static int Who(Proc p) {
+                if (p == null) return 0; if (mineSid == null) {
+                    try { mineSid = System.Security.Principal.WindowsIdentity.GetCurrent().User.Value ?? ""; } catch (Exception) { mineSid = ""; } }
+                if (mineSid.Length == 0) return -1; string sid = UserSid(p.Pid); if (sid == null) return -1;
+                return string.Equals(sid, mineSid, StringComparison.OrdinalIgnoreCase) ? 1 : 0; }
+            static bool ProfileScript(string script) {
+                if (string.IsNullOrEmpty(script)) return false; if (script.StartsWith("module:", StringComparison.Ordinal)) {
+                    int bar = script.IndexOf('|'); script = bar < 0 ? "" : script.Substring(bar + 1); }
+                string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+                return !string.IsNullOrEmpty(script) && !string.IsNullOrEmpty(home) && AtOrUnder(script, home) && !Forbidden(script); }
             static string UserSid(int pid) {
                 IntPtr h = Native.OpenProcess(Native.QueryLimited | Native.QueryInfo, false, pid);
                 if (h == IntPtr.Zero) h = Native.OpenProcess(Native.QueryLimited, false, pid); if (h == IntPtr.Zero) return null; try {
