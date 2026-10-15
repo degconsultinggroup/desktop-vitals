@@ -150,19 +150,20 @@ namespace DesktopVitals {
             string ollama = Environment.GetEnvironmentVariable("OLLAMA_MODELS");
             if (string.IsNullOrEmpty(ollama)) ollama = Path.Combine(home, ".ollama", "models");
             var roots = new List<string> { Path.Combine(home, "models"), Path.Combine(home, ".lmstudio", "models"), Path.Combine(home, ".cache", "lm-studio", "models"), hf, ollama };
-            try { foreach (DriveInfo d in DriveInfo.GetDrives()) if (d.DriveType == DriveType.Fixed) roots.Add(Path.Combine(d.RootDirectory.FullName, "models")); }
-            catch (Exception) { }
             AddModelRoots(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), roots);
             AddModelRoots(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), roots);
-            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase); int budget = 0;
-            foreach (string r in roots) Walk(r, list, seen, 0, ref budget); return list; }
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase); int budget = 0; int deadline = Environment.TickCount + 2000;
+            foreach (string r in roots) { if (Late(deadline) || budget > 4000) break; Walk(r, list, seen, 0, ref budget, deadline); } ModelScan.Items = list;
+            if (!Late(deadline)) try { foreach (DriveInfo d in DriveInfo.GetDrives()) if (!Late(deadline) && budget <= 4000 && d.DriveType == DriveType.Fixed) Walk(Path.Combine(d.RootDirectory.FullName, "models"), list, seen, 0, ref budget, deadline); }
+            catch (Exception) { } return list; }
+        static bool Late(int deadline) { return unchecked(Environment.TickCount - deadline) > 0; }
         static void AddModelRoots(string parent, List<string> roots) {
             if (string.IsNullOrEmpty(parent)) return; try {
                 int n = 0; foreach (string sub in Directory.GetDirectories(parent)) {
                     if (++n > 80) break; string m = Path.Combine(sub, "models"); if (Directory.Exists(m)) roots.Add(m); } }
             catch (Exception) { } }
-        static void Walk(string dir, List<InstalledModel> list, HashSet<string> seen, int depth, ref int budget) {
-            if (depth > 4 || budget > 4000 || string.IsNullOrEmpty(dir)) return; DirectoryInfo d;
+        static void Walk(string dir, List<InstalledModel> list, HashSet<string> seen, int depth, ref int budget, int deadline) {
+            if (depth > 4 || budget > 4000 || string.IsNullOrEmpty(dir) || Late(deadline)) return; DirectoryInfo d;
             try {
                 d = new DirectoryInfo(dir); if (!d.Exists || (d.Attributes & FileAttributes.ReparsePoint) != 0) return; }
             catch (Exception) { return; }
@@ -171,7 +172,7 @@ namespace DesktopVitals {
             if (!seen.Add(full)) return;
             try {
                 foreach (FileInfo f in d.EnumerateFiles()) {
-                    if (++budget > 4000) return; if ((f.Attributes & FileAttributes.ReparsePoint) != 0) continue;
+                    if (++budget > 4000 || Late(deadline)) return; if ((f.Attributes & FileAttributes.ReparsePoint) != 0) continue;
                     string ext = f.Extension.ToLowerInvariant();
                     bool known = ext == ".gguf" || ext == ".safetensors" || ext == ".ggml";
                     bool big = f.Length >= (20L << 20) && (ext == ".bin" || ext == ".pt" || ext == ".pth" || ext == ".onnx" || ext == ".ckpt" || ext.Length == 0);
@@ -179,10 +180,9 @@ namespace DesktopVitals {
                     string name = Shard.Replace(Path.GetFileNameWithoutExtension(f.Name), "");
                     if ((depth > 0 && !f.Directory.Name.Equals("models", StringComparison.OrdinalIgnoreCase)) || name.Length >= 32 || name.StartsWith("sha256-", StringComparison.OrdinalIgnoreCase)) name = FolderName(f.Directory);
                     Add(list, Pretty(name), f.FullName, f.Length); }
-                if (depth == 4) return;
-                foreach (DirectoryInfo sub in d.EnumerateDirectories()) {
-                    if ((sub.Attributes & FileAttributes.ReparsePoint) != 0 || sub.Name.StartsWith(".") || sub.Name.Equals("packs", StringComparison.OrdinalIgnoreCase) || sub.Name.Equals("mtp", StringComparison.OrdinalIgnoreCase)) continue;
-                    Walk(sub.FullName, list, seen, depth + 1, ref budget); } }
+                if (depth == 4) return; int subs = 0; foreach (DirectoryInfo sub in d.EnumerateDirectories()) {
+                    if (budget > 4000 || ++subs > 400 || Late(deadline)) return; if ((sub.Attributes & FileAttributes.ReparsePoint) != 0 || sub.Name.StartsWith(".") || sub.Name.Equals("packs", StringComparison.OrdinalIgnoreCase) || sub.Name.Equals("mtp", StringComparison.OrdinalIgnoreCase)) continue;
+                    Walk(sub.FullName, list, seen, depth + 1, ref budget, deadline); } }
             catch (Exception) { } }
         static string FolderName(DirectoryInfo dir) {
             string local = null; for (int i = 0; dir != null && i < 6; i++, dir = dir.Parent) {
@@ -206,7 +206,7 @@ namespace DesktopVitals {
         public static bool Failed; static bool busy; static volatile bool finished; static DateTime read = DateTime.MinValue;
         public static void Soon() { if (!busy) read = DateTime.MinValue.AddSeconds(1); }
         public static void Refresh(Action done) {
-            if (busy || (Ready && (DateTime.Now - read).TotalSeconds < 30)) return; busy = true;
+            if (busy) { if (!finished && (DateTime.Now - read).TotalSeconds > 3) finished = true; return; } if (Ready && (DateTime.Now - read).TotalSeconds < 30) return; busy = true; read = DateTime.Now;
             ThreadPool.QueueUserWorkItem(delegate {
                 var found = new List<TaskInfo>(); bool failed = false;
                 try {
@@ -217,8 +217,8 @@ namespace DesktopVitals {
                 if (done != null) done();
             }); }
         static void Walk(dynamic folder, List<TaskInfo> found) {
-            string path = (string)folder.Path; if (path.StartsWith("\\Microsoft", StringComparison.OrdinalIgnoreCase)) return;
-            foreach (dynamic t in folder.GetTasks(0)) {
+            if (found.Count > 300) return; string path = (string)folder.Path; if (path.StartsWith("\\Microsoft", StringComparison.OrdinalIgnoreCase)) return;
+            int n = 0; foreach (dynamic t in folder.GetTasks(0)) { if (++n > 200 || found.Count > 300) return;
                 try {
                     if (!(bool)t.Enabled) continue;
                     var info = new TaskInfo { Name = Regex.Replace((string)t.Name, "-S-1-5-[0-9-]+$", ""), Path = (string)t.Path, State = (int)t.State, Result = (int)t.LastTaskResult, LastRun = (DateTime)t.LastRunTime, NextRun = (DateTime)t.NextRunTime };
@@ -234,7 +234,7 @@ namespace DesktopVitals {
                     if (Paths.Noise(info.Name, info.Exe) || (info.Script == null && info.Name.IndexOf("update", StringComparison.OrdinalIgnoreCase) >= 0)) mine = false;
                     if (mine) { NoteRepeat(t, info); found.Add(info); } }
                 catch (Exception) { } }
-            foreach (dynamic sub in folder.GetFolders(0)) Walk(sub, found); }
+            int folders = 0; foreach (dynamic sub in folder.GetFolders(0)) { if (++folders > 40 || found.Count > 300) return; Walk(sub, found); } }
         static void NoteRepeat(dynamic task, TaskInfo info) {
             try { foreach (dynamic tr in task.Definition.Triggers) { string iso = ""; try { iso = (string)tr.Repetition.Interval; } catch (Exception) { }
                 int mins = IsoMin(iso); if (mins > 0 && (info.RepeatMin == 0 || mins < info.RepeatMin)) info.RepeatMin = mins; } } catch (Exception) { }
@@ -376,7 +376,7 @@ namespace DesktopVitals {
         public static List<InstalledModel> Items = new List<InstalledModel>(); public static volatile bool Ready;
         static bool busy; static DateTime read = DateTime.MinValue;
         public static void Refresh() {
-            if (busy || (Ready && (DateTime.Now - read).TotalSeconds < 30)) return; busy = true;
+            if (busy) { if (!Ready && (DateTime.Now - read).TotalSeconds > 3) Ready = true; return; } if (Ready && (DateTime.Now - read).TotalSeconds < 30) return; busy = true; read = DateTime.Now;
             ThreadPool.QueueUserWorkItem(delegate {
                 var found = new List<InstalledModel>();
                 try { found = ModelStore.Scan(); }

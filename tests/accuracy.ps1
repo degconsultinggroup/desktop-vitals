@@ -643,8 +643,11 @@ setInterval(function () {}, 1000);
 '@ | Set-Content -LiteralPath $gateJs -Encoding ASCII
     $gateNode = '"' + $linkedNode + '" --max-old-space-size=8192 "' + $gateJs + '" "' + $gatePortPath + '"'
     Set-Content -LiteralPath $gateCmd -Value ("@echo off`r`n" + $gateNode + "`r`n") -Encoding ASCII
-    $gateRun = 'cmd.exe /d /c "' + $gateNode + '"'
-    Set-Content -LiteralPath $gateVbs -Value ('CreateObject("Wscript.Shell").Run "' + $gateRun.Replace('"', '""') + '", 0, False') -Encoding ASCII
+    @'
+Dim dir
+dir = Replace(WScript.ScriptFullName, WScript.ScriptName, "")
+CreateObject("Wscript.Shell").Run "cmd.exe /c " & Chr(34) & dir & "gateway.cmd" & Chr(34), 0, True
+'@ | Set-Content -LiteralPath $gateVbs -Encoding ASCII
     $windirScript = Join-Path $WinRepo 'dv_acc_windir.ps1'
     Set-Content -LiteralPath $windirScript -Value "while (`$true) { Start-Sleep -Seconds 2 }`r`n" -Encoding ASCII
     if ($py) {
@@ -948,7 +951,7 @@ while ($true) { Start-Sleep -Seconds 2 }
         if ($py) {
             $shim = @($things | Where-Object { $_.Name -eq $TaskShim -and $_.Kind -eq 'bot' })
             if ($shim.Count -ne 1) { $boxOk = $false; [void]$script:Fn.Add("shim lines=$($shim.Count)") }
-            elseif ($shim[0].State -ne 'running' -or $shim[0].Project -ne 'shim-repo' -or $shim[0].Detail -notmatch [regex]::Escape($TaskShim) -or $shim[0].Detail -notmatch 'works every|wrote beat\.txt') {
+            elseif ($shim[0].State -ne 'running' -or $shim[0].Project -ne 'shim-repo' -or $shim[0].Detail -match [regex]::Escape($TaskShim) -or $shim[0].Detail -notmatch 'works every|wrote beat\.txt' -or $shim[0].Detail -notmatch 'next ') {
                 $boxOk = $false
                 [void]$script:Fn.Add("shim kind=$($shim[0].Kind) state=$($shim[0].State) project=$($shim[0].Project) detail=$($shim[0].Detail)")
             }

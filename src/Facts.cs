@@ -6,9 +6,8 @@ using System.Security.Cryptography; using System.Text; using System.Text.Regular
             static readonly Regex Shard = new Regex(@"[-_.]\d{1,6}-of-\d{1,6}$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
             static readonly Dictionary<int, Memo> memos = new Dictionary<int, Memo>();
             static readonly Dictionary<string, string> projects = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            static readonly Dictionary<string, long> tails = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
             static readonly List<ExitNote> exits = new List<ExitNote>(); static Dictionary<string, string> dos; class Memo {
-                public long Create, LastIo, LastCpu, CpuBucket, GitStamp, LastWriteBytes = -1;
+                public long Create, LastIo, LastCpu, CpuBucket, GitStamp, LastWriteBytes = -1, LogAt;
                 public string Cmd = "", Cwd, Image, Script, Leaf = "", LaunchKind, LaunchName, TaskName, TaskPath, ProjectFull, Marker, Agent, Weight, AgentModel, Kind = "script", RecentWrite, LogFile, GitHead = "";
                 public bool Yours, Orphan, Plain, TaskHit, Mapped; public int TaskGen = -1, CadenceSec;
                 public DateTime LastActive, WriteChecked, LastWrite, TaskNext; public IntPtr Handle; public Act Action; public GitSnap Git; }
@@ -16,7 +15,7 @@ using System.Security.Cryptography; using System.Text; using System.Text.Regular
             class GitSnap { public string Branch, Worktree, Main; public int Commits, Changed; }
             class ExitNote { public string Name, Project, Folder, Kind; public int Code; public DateTime When; public bool Failed; }
             public static void Clear() {
-                foreach (var kv in memos) if (kv.Value.Handle != IntPtr.Zero) Native.CloseHandle(kv.Value.Handle); memos.Clear(); tails.Clear(); }
+                foreach (var kv in memos) if (kv.Value.Handle != IntPtr.Zero) Native.CloseHandle(kv.Value.Handle); memos.Clear(); }
             public static List<Group> Make(List<Proc> procs) {
                 LastProcs = procs == null ? 0 : procs.Count; var byPid = new Dictionary<int, Proc>();
                 if (procs != null) foreach (Proc p in procs) byPid[p.Pid] = p; var listeners = Listeners(); var now = DateTime.UtcNow;
@@ -178,7 +177,7 @@ using System.Security.Cryptography; using System.Text; using System.Text.Regular
                 if (Container(p.Exe) && string.IsNullOrEmpty(m.Script) && !Listens(p.Pid, listeners)) return false;
                 if (m.Agent != null) return false; return !Owned(p, m, byPid, listeners); }
             static void Collect(Proc p, Dictionary<int, Proc> byPid, Dictionary<int, List<int>> listeners, List<Proc> members, HashSet<int> used) {
-                if (!used.Add(p.Pid)) return; members.Add(p); foreach (var kv in byPid) {
+                if (members.Count > 48 || !used.Add(p.Pid)) return; members.Add(p); foreach (var kv in byPid) {
                     Proc c = kv.Value; if (c.Parent != p.Pid || c.CreateTime <= p.CreateTime) continue;
                     Memo cm = memo(c); if (cm != null && (cm.Agent != null || IsRoot(c, cm, byPid, listeners))) continue; Collect(c, byPid, listeners, members, used); } }
             static string StartedBy(Proc p, Dictionary<int, Proc> byPid) {
@@ -255,7 +254,7 @@ using System.Security.Cryptography; using System.Text; using System.Text.Regular
                         else if (weak == null && !SkipRoot(walk)) {
                             foreach (string name in new[] { "package.json", "pyproject.toml", "Cargo.toml", "go.mod" })
                                 if (File.Exists(Path.Combine(walk, name))) { weak = walk; weakMarker = name; break; }
-                            if (weak == null && Directory.Exists(walk) && Directory.GetFiles(walk, "*.sln").Length > 0) { weak = walk; weakMarker = "*.sln"; } } }
+                            if (weak == null && Directory.Exists(walk)) { int k = 0; foreach (string f in Directory.EnumerateFiles(walk)) { if (++k > 40) break; if (f.EndsWith(".sln", StringComparison.OrdinalIgnoreCase)) { weak = walk; weakMarker = "*.sln"; break; } } } } }
                     catch (Exception) { } DirectoryInfo parent = null;
                     try { parent = Directory.GetParent(walk); } catch (Exception) { parent = null; }
                     if (parent == null) break; walk = parent.FullName; }
@@ -276,8 +275,8 @@ using System.Security.Cryptography; using System.Text; using System.Text.Regular
                         if (git != null) t.branch = git.Branch; groups[key] = t; things.Add(t); }
                     t.count++; t.cpu += p.Cpu; t.ram_mb += p.Private / 1048576.0; t.vram_mb += VramOf(p.Pid) / 1048576.0;
                     AddPorts(p.Pid, byPid, listeners, t.ports, new HashSet<int>(), m);
-                    string state = AgentState(m, p, act, child); if (Rank(state) > Rank(t.state)) t.state = state;
-                    string detail = state == "idle" ? IdleLine(act) : AgentDetail(m, act, git, child); if (string.IsNullOrEmpty(t.detail) || state == t.state) t.detail = detail;
+                    int before = Rank(t.state); string state = AgentState(m, p, act, child); if (Rank(state) > before) t.state = state;
+                    string detail = state == "idle" ? IdleLine(act) : AgentDetail(m, act, git, child); bool weak = string.IsNullOrEmpty(detail) || detail.StartsWith("branch "); bool had = !string.IsNullOrEmpty(t.detail) && !t.detail.StartsWith("branch "); if (string.IsNullOrEmpty(t.detail) || Rank(state) > before || (state == t.state && !(weak && had))) t.detail = detail;
                     if (string.IsNullOrEmpty(t.branch) && git != null) t.branch = git.Branch;
                     if (string.IsNullOrEmpty(t.why)) t.why = !string.IsNullOrEmpty(m.AgentModel) ? "model " + m.AgentModel : "agent";
                     if (t.since.Length == 0) t.since = Age(p.CreateTime); m.Kind = "agent"; m.Leaf = m.Agent; }
@@ -290,7 +289,7 @@ using System.Security.Cryptography; using System.Text; using System.Text.Regular
                 if (string.IsNullOrEmpty(m.Cwd) || Forbidden(m.Cwd)) m.Cwd = lcwd;
                 if (string.IsNullOrEmpty(m.ProjectFull)) AssignProjectPath(m, lcwd); }
             static void AddPorts(int pid, Dictionary<int, Proc> byPid, Dictionary<int, List<int>> listeners, List<int> ports, HashSet<int> seen, Memo root) {
-                if (ports == null || !seen.Add(pid)) return; List<int> lp;
+                if (ports == null || seen.Count > 48 || !seen.Add(pid)) return; List<int> lp;
                 if (listeners.TryGetValue(pid, out lp)) foreach (int port in lp) if (!ports.Contains(port)) ports.Add(port);
                 foreach (var kv in byPid) {
                     Proc c = kv.Value; if (c.Parent != pid) continue; Memo cm = memo(c);
@@ -338,7 +337,7 @@ using System.Security.Cryptography; using System.Text; using System.Text.Regular
                 t.id = IdOf(m, p, kind, t.name); t.project = ProjectLabel(m); t.folder = FolderOf(m); t.cpu = cpu; t.ram_mb = ram;
                 t.vram_mb = vram; t.ports = ports; t.since = Age(p.CreateTime); t.count = 1; t.why = Why(m, ports); string starter = StartedBy(p, byPid);
                 if (!string.IsNullOrEmpty(starter)) t.why = "started by " + starter + (string.IsNullOrEmpty(t.why) ? "" : "; " + t.why);
-                t.detail = DetailOf(m, kind, p.Exe);
+                t.detail = DetailOf(m, kind, p.Exe, t.name);
                 m.Kind = kind; m.Leaf = t.name; if (Hidden(t.id, t.name)) return null; Finish(t); return t; }
             static bool ShowApp(Proc p, Memo m, double cpu, double ram) {
                 bool heavy = cpu > 25 || ram >= 2048; string name = PrettyExe(p.Exe); bool pin = Prefs.PinIds.Contains("app:" + p.Pid.ToString(CultureInfo.InvariantCulture));
@@ -353,19 +352,19 @@ using System.Security.Cryptography; using System.Text; using System.Text.Regular
                     string sub = System.Security.Cryptography.X509Certificates.X509Certificate.CreateFromSignedFile(path).Subject ?? "";
                     return sub.IndexOf("O=Microsoft", StringComparison.OrdinalIgnoreCase) >= 0 || sub.IndexOf("CN=Microsoft", StringComparison.OrdinalIgnoreCase) >= 0; }
                 catch (Exception) { return false; } }
-            static string DetailOf(Memo m, string kind, string exe) {
+            static string DetailOf(Memo m, string kind, string exe, string name) {
                 if (kind == "model") return "loaded by " + (string.IsNullOrEmpty(exe) ? "process" : exe); var bits = new List<string>();
                 if (m.CadenceSec > 0) bits.Add("works every " + m.CadenceSec.ToString(CultureInfo.InvariantCulture) + "s");
                 else if (!string.IsNullOrEmpty(m.RecentWrite)) bits.Add("wrote " + m.RecentWrite);
                 if (m.TaskHit && !string.IsNullOrEmpty(m.TaskName)) {
-                    string next = m.TaskNext.Year >= 2000 && m.TaskNext > DateTime.Now ? " \u00B7 next " + m.TaskNext.ToString("HH:mm", CultureInfo.InvariantCulture) : "";
-                    bits.Add("task: " + m.TaskName + next); }
+                    string next = m.TaskNext.Year >= 2000 && m.TaskNext > DateTime.Now ? "next " + m.TaskNext.ToString("HH:mm", CultureInfo.InvariantCulture) : "";
+                    if (kind == "bot" && string.Equals(name, ShortTask(m.TaskName), StringComparison.OrdinalIgnoreCase)) { if (next.Length > 0) bits.Add(next); } else bits.Add("task: " + m.TaskName + (next.Length == 0 ? "" : " \u00B7 " + next)); }
                 return bits.Count == 0 ? null : string.Join(" \u00B7 ", bits.ToArray()); }
 
             static void Tasks(List<Thing> things) {
                 foreach (TaskInfo task in TaskList.Items) {
                     if (task == null || TaskLive(task, things)) continue; var t = new Thing();
-                    t.id = "task:" + (string.IsNullOrEmpty(task.Path) ? task.Name : task.Path); t.name = task.Name ?? "";
+                    t.id = "task:" + (string.IsNullOrEmpty(task.Path) ? task.Name : task.Path); t.name = ShortTask(task.Name ?? "");
                     t.kind = "task"; t.folder = task.Script; string marker; string look = !string.IsNullOrEmpty(task.Script) ? task.Script : task.Exe; string root = FindProject(look, out marker);
                     if (string.IsNullOrEmpty(task.Script) && marker != ".git") root = null; t.project = root != null ? Path.GetFileName(root.TrimEnd('\\')) : null;
                     if (task.Running) t.state = "running"; else if (task.Failed) t.state = "failed"; else t.state = "idle";
@@ -570,7 +569,7 @@ using System.Security.Cryptography; using System.Text; using System.Text.Regular
             static string ClaudeByCwd(string home, string cwd, long create) {
                 if (string.IsNullOrEmpty(cwd)) return null; string dir = Path.Combine(home, ".claude", "projects", Encode(cwd));
                 if (!Directory.Exists(dir)) return null; string best = null; DateTime bestTime = DateTime.MinValue; string[] files;
-                try { files = Directory.GetFiles(dir, "*.jsonl"); } catch (Exception) { return null; } foreach (string f in files) {
+                try { files = Directory.GetFiles(dir, "*.jsonl"); } catch (Exception) { return null; } int n = 0; foreach (string f in files) { if (++n > 40) break;
                     string got = JsonString(ReadText(f, 1500), "\"cwd\":\"", 0);
                     if (!string.IsNullOrEmpty(got) && !string.Equals(got, cwd, StringComparison.OrdinalIgnoreCase)) continue; DateTime w;
                     try { w = File.GetLastWriteTimeUtc(f); } catch (Exception) { continue; }
@@ -585,15 +584,14 @@ using System.Security.Cryptography; using System.Text; using System.Text.Regular
                 if (!string.IsNullOrEmpty(lcwd) && !Forbidden(lcwd) && !SkipRoot(lcwd) && string.IsNullOrEmpty(m.ProjectFull)) { m.Cwd = lcwd; AssignProjectPath(m, lcwd); }
                 Apply(m, m.LogFile, false); }
             static string CodexFile(string home, string cwd, long create) {
-                string root = Path.Combine(home, ".codex", "sessions"); if (!Directory.Exists(root)) return null; string[] files;
-                try { files = Directory.GetFiles(root, "rollout-*.jsonl", SearchOption.AllDirectories); } catch (Exception) { return null; }
+                string root = Path.Combine(home, ".codex", "sessions"); if (!Directory.Exists(root)) return null;
                 string best = null; long bestSkew = long.MaxValue; DateTime start = DateTime.FromFileTimeUtc(create); int n = 0;
-                foreach (string path in files) {
+                try { foreach (string path in Directory.EnumerateFiles(root, "rollout-*.jsonl", SearchOption.AllDirectories)) {
                     if (++n > 200) break; string fcwd = JsonString(ReadText(path, 800), "\"cwd\":\"", 0);
                     if (!string.IsNullOrEmpty(cwd) && !SamePlace(fcwd, cwd)) continue; DateTime born = CodexBorn(path);
                     long skew = born == DateTime.MinValue ? 6 * 3600 : (long)Math.Abs((born - start).TotalSeconds);
-                    if (skew > 12 * 3600) continue; if (skew < bestSkew) { bestSkew = skew; best = path; } }
-                return best; }
+                    if (skew > 12 * 3600) continue; if (skew < bestSkew) { bestSkew = skew; best = path; } } }
+                catch (Exception) { } return best; }
             static bool SamePlace(string a, string b) {
                 if (string.IsNullOrEmpty(a) || string.IsNullOrEmpty(b)) return false;
                 if (string.Equals(a, b, StringComparison.OrdinalIgnoreCase)) return true;
@@ -619,18 +617,18 @@ using System.Security.Cryptography; using System.Text; using System.Text.Regular
                     if (skew < bestSkew) { bestSkew = skew; best = Path.Combine(chat, "store.db"); } }
                 return best; }
             static void Apply(Memo m, string path, bool claude) {
-                string text = Tail(path); if (string.IsNullOrEmpty(text)) return; foreach (string line in text.Split('\n')) {
+                string text = Tail(path, m); if (string.IsNullOrEmpty(text)) return; foreach (string line in text.Split('\n')) {
                     Act hit = claude ? ParseClaude(line) : ParseCodex(line); if (hit == null) continue;
                     if (hit.Model != null && m.AgentModel == null) m.AgentModel = hit.Model; if (hit.Kind != null) m.Action = hit; } }
-            static string Tail(string path) {
-                if (string.IsNullOrEmpty(path) || !File.Exists(path)) return null; long offset; if (!tails.TryGetValue(path, out offset)) offset = 0;
+            static string Tail(string path, Memo m) {
+                if (m == null || string.IsNullOrEmpty(path) || !File.Exists(path)) return null; long offset = m.LogAt;
                 try {
                     using (var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete)) {
                         long end = fs.Length; long start = offset; if (end < start) start = 0;
                         if (end - start > TailCap) start = end - TailCap; if (start < 0) start = 0;
-                        if (end <= start) { tails[path] = end; return null; }
+                        if (end <= start) { m.LogAt = end; return null; }
                         fs.Seek(start, SeekOrigin.Begin); int n = (int)(end - start); byte[] buf = new byte[n];
-                        int got = fs.Read(buf, 0, n); tails[path] = end; string text = Encoding.UTF8.GetString(buf, 0, got); if (start > offset) {
+                        int got = fs.Read(buf, 0, n); m.LogAt = end; string text = Encoding.UTF8.GetString(buf, 0, got); if (start > offset) {
                             int nl = text.IndexOf('\n'); if (nl >= 0) text = text.Substring(nl + 1); }
                         return text; } }
                 catch (Exception) { return null; } }
@@ -873,7 +871,7 @@ using System.Security.Cryptography; using System.Text; using System.Text.Regular
             static bool UnderWindows(string path) { return AtOrUnder(path, Environment.GetFolderPath(Environment.SpecialFolder.Windows)); }
             static string LeafChild(int pid, Dictionary<int, Proc> byPid, Dictionary<int, List<int>> listeners, Memo root) {
                 string leaf = null; var stack = new List<int>(); stack.Add(pid); var seen = new HashSet<int>();
-                while (stack.Count > 0) {
+                while (stack.Count > 0 && seen.Count < 48) {
                     int id = stack[stack.Count - 1]; stack.RemoveAt(stack.Count - 1); foreach (var kv in byPid) {
                         Proc c = kv.Value; if (c.Parent != id || c.Pid == pid || c.CreateTime <= 0 || !seen.Add(c.Pid)) continue;
                         string exe = (c.Exe ?? "").ToLowerInvariant();
