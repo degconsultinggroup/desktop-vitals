@@ -178,6 +178,92 @@ jobs:
             tests/results/safety-runtime.log
           if-no-files-found: warn
 
+  # Per-user install of the published release, then of the exe built in this run.
+  install:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Build and checksum
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          .\build.ps1
+          $exe = Join-Path $PWD 'bin\DesktopVitals.exe'
+          if (-not (Test-Path -LiteralPath $exe)) { throw "missing $exe" }
+          $hash = (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          Set-Content -LiteralPath (Join-Path $PWD 'bin\SHA256SUMS.txt') -Value ("{0}  DesktopVitals.exe" -f $hash) -Encoding ascii
+
+      - name: Install latest release, then uninstall
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          .\install.ps1 -NoLaunch
+          if ($LASTEXITCODE -ne 0) { throw "install.ps1 failed with exit $LASTEXITCODE" }
+          $exe = Join-Path $env:LOCALAPPDATA 'Programs\DesktopVitals\DesktopVitals.exe'
+          $lnk = Join-Path ([Environment]::GetFolderPath('Programs')) 'Desktop Vitals.lnk'
+          $dir = Split-Path -Parent $exe
+          if (-not (Test-Path -LiteralPath $exe)) { throw 'installed exe missing' }
+          if (-not (Test-Path -LiteralPath $lnk)) { throw 'Start menu shortcut missing' }
+          $verFile = Join-Path $env:TEMP 'dv-rel-version.txt'
+          $p = Start-Process -FilePath $exe -ArgumentList '--version' -PassThru -WindowStyle Hidden -RedirectStandardOutput $verFile
+          $supportsCli = $p.WaitForExit(8000)
+          if (-not $supportsCli) {
+            Stop-Process -Id $p.Id -Force
+            Start-Sleep -Seconds 1
+            Write-Host 'Published release has no --version yet.'
+          }
+          else {
+            $p.WaitForExit() | Out-Null
+            if ($p.ExitCode -ne 0) { throw "version exit $($p.ExitCode)" }
+            $ver = [System.IO.File]::ReadAllText($verFile).Trim()
+            if ($ver -notmatch '^\d+\.\d+\.\d+$') { throw "version '$ver'" }
+            $json = Join-Path $env:TEMP 'dv-rel.json'
+            $stdout = Join-Path $env:TEMP 'dv-rel-json.txt'
+            $jp = Start-Process -FilePath $exe -ArgumentList @('--json', $json) -Wait -PassThru -WindowStyle Hidden -RedirectStandardOutput $stdout
+            if ($jp.ExitCode -ne 0) { throw "json exit $($jp.ExitCode)" }
+            $board = Get-Content -Raw -LiteralPath $json | ConvertFrom-Json
+            if ($null -eq $board.strip) { throw 'json missing strip' }
+          }
+          .\install.ps1 -Uninstall
+          if ($LASTEXITCODE -ne 0) { throw "install.ps1 -Uninstall failed with exit $LASTEXITCODE" }
+          if (Test-Path -LiteralPath $exe) { throw 'exe still installed' }
+          if (Test-Path -LiteralPath $lnk) { throw 'shortcut still installed' }
+          if (Test-Path -LiteralPath $dir) { throw 'install dir still present' }
+
+      - name: Install exe built in this run, then uninstall
+        shell: pwsh
+        env:
+          DV_DOWNLOAD_URL: ${{ github.workspace }}/bin
+        run: |
+          $ErrorActionPreference = 'Stop'
+          .\install.ps1 -NoLaunch
+          if ($LASTEXITCODE -ne 0) { throw "install.ps1 failed with exit $LASTEXITCODE" }
+          $exe = Join-Path $env:LOCALAPPDATA 'Programs\DesktopVitals\DesktopVitals.exe'
+          $lnk = Join-Path ([Environment]::GetFolderPath('Programs')) 'Desktop Vitals.lnk'
+          $dir = Split-Path -Parent $exe
+          if (-not (Test-Path -LiteralPath $exe)) { throw 'installed exe missing' }
+          if (-not (Test-Path -LiteralPath $lnk)) { throw 'Start menu shortcut missing' }
+          $verFile = Join-Path $env:TEMP 'dv-built-version.txt'
+          $p = Start-Process -FilePath $exe -ArgumentList '--version' -Wait -PassThru -WindowStyle Hidden -RedirectStandardOutput $verFile
+          if ($p.ExitCode -ne 0) { throw "version exit $($p.ExitCode)" }
+          $ver = [System.IO.File]::ReadAllText($verFile).Trim()
+          if ($ver -ne '0.2.0') { throw "version '$ver'" }
+          $json = Join-Path $env:TEMP 'dv-built.json'
+          $stdout = Join-Path $env:TEMP 'dv-built-json.txt'
+          $jp = Start-Process -FilePath $exe -ArgumentList @('--json', $json) -Wait -PassThru -WindowStyle Hidden -RedirectStandardOutput $stdout
+          if ($jp.ExitCode -ne 0) { throw "json exit $($jp.ExitCode)" }
+          $board = Get-Content -Raw -LiteralPath $json | ConvertFrom-Json
+          if ($null -eq $board.strip) { throw 'json missing strip' }
+          if ([double]$board.strip.ram_total_gb -le 0) { throw 'strip.ram_total_gb is zero' }
+          if ($null -eq $board.PSObject.Properties['groups']) { throw 'json missing groups' }
+          .\install.ps1 -Uninstall
+          if ($LASTEXITCODE -ne 0) { throw "install.ps1 -Uninstall failed with exit $LASTEXITCODE" }
+          if (Test-Path -LiteralPath $exe) { throw 'exe still installed' }
+          if (Test-Path -LiteralPath $lnk) { throw 'shortcut still installed' }
+          if (Test-Path -LiteralPath $dir) { throw 'install dir still present' }
+
   # Prebuilt exe + checksums for GitHub Release on tag v*.
   release:
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')

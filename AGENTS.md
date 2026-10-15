@@ -59,4 +59,4 @@ Or, from a clone of this repo:
 powershell -ExecutionPolicy Bypass -File .\install.ps1 -Uninstall
 ```
 
-This removes `%LOCALAPPDATA%\Programs\DesktopVitals` and the Start menu and desktop shortcuts.
+This removes `%LOCALAPPDATA%\Programs\DesktopVitals` and the Start menu shortcut.

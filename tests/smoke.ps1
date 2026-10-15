@@ -168,6 +168,62 @@ function Invoke-Snapshot {
     }
 }
 
+function Format-CliArg {
+    param([string]$Arg)
+    if (-not [string]::IsNullOrEmpty($Arg) -and $Arg -notmatch '[\s"]') { return $Arg }
+    return '"' + ($Arg -replace '"', '\"') + '"'
+}
+
+# Start-Process -RedirectStandardOutput leaves ExitCode null unless -Wait is used, and -Wait has no timeout.
+function Invoke-Cli {
+    param(
+        [string]$Dir,
+        [string[]]$ArgumentList,
+        [int]$TimeoutSeconds = 40
+    )
+    $exe = Join-Path $Root 'bin\DesktopVitals.exe'
+    if (-not (Test-Path -LiteralPath $exe)) { throw "missing $exe" }
+    New-Item -ItemType Directory -Force -Path $Dir | Out-Null
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = $exe
+    $quoted = @()
+    foreach ($a in $ArgumentList) { $quoted += (Format-CliArg $a) }
+    $psi.Arguments = $quoted -join ' '
+    $psi.UseShellExecute = $false
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $psi.CreateNoWindow = $true
+    $proc = New-Object System.Diagnostics.Process
+    $proc.StartInfo = $psi
+    [void]$proc.Start()
+    $outTask = $proc.StandardOutput.ReadToEndAsync()
+    $errTask = $proc.StandardError.ReadToEndAsync()
+    if (-not $proc.WaitForExit($TimeoutSeconds * 1000)) {
+        try { $proc.Kill() } catch { }
+        throw ("exceeded {0}s: {1}" -f $TimeoutSeconds, ($ArgumentList -join ' '))
+    }
+    $proc.WaitForExit() | Out-Null
+    return @{ Exit = $proc.ExitCode; Out = $outTask.Result; Err = $errTask.Result }
+}
+
+function Assert-JsonBoard {
+    param($Obj)
+    if ([string]::IsNullOrWhiteSpace([string]$Obj.name)) { throw 'json missing name' }
+    if ($null -eq $Obj.strip) { throw 'json missing strip' }
+    foreach ($name in @('cpu', 'ram_used_gb', 'ram_total_gb', 'disk_free_gb', 'disk_total_gb')) {
+        if ($null -eq $Obj.strip.PSObject.Properties[$name]) { throw "strip.$name missing" }
+    }
+    if ([double]$Obj.strip.ram_total_gb -le 0) { throw 'strip.ram_total_gb is zero' }
+    if (@($Obj.strip.threads).Count -lt 1) { throw 'strip.threads empty' }
+    if ($null -eq $Obj.headline) { throw 'json missing headline' }
+    if ($null -eq $Obj.PSObject.Properties['groups']) { throw 'json missing groups' }
+    foreach ($group in @($Obj.groups)) {
+        foreach ($prop in @('title', 'kind', 'things')) {
+            if ($null -eq $group.PSObject.Properties[$prop]) { throw "group missing $prop" }
+        }
+    }
+}
+
 function Get-PythonCommand {
     foreach ($name in @('python', 'py')) {
         $cmd = Get-Command $name -ErrorAction SilentlyContinue
@@ -369,6 +425,80 @@ try {
             $elevDetail = $_.Exception.Message
         }
         Write-Check 'asInvoker-non-admin' $elevOk $elevDetail
+    }
+
+    # 1b2. --version prints 0.2.0; --json (stdout and file) parses and holds the machine strip
+    $cliOk = $false
+    $cliDetail = ''
+    if (-not $buildOk) {
+        Write-Check 'json-version' $false 'skipped: build failed'
+    }
+    else {
+        try {
+            $verRun = Invoke-Cli -Dir (Join-Path $Work 'cli-version') -ArgumentList @('--version') -TimeoutSeconds 20
+            if ($verRun.Exit -ne 0) { throw "version exit $($verRun.Exit) $($verRun.Err)" }
+            if ($verRun.Out.Trim() -ne '0.2.0') { throw "version [$($verRun.Out.Trim())]" }
+            $jsonRun = Invoke-Cli -Dir (Join-Path $Work 'cli-json-stdout') -ArgumentList @('--json') -TimeoutSeconds 40
+            if ($jsonRun.Exit -ne 0) { throw "json stdout exit $($jsonRun.Exit) $($jsonRun.Err)" }
+            $stdoutObj = $jsonRun.Out | ConvertFrom-Json
+            Assert-JsonBoard $stdoutObj
+            $jsonFile = Join-Path $Work 'cli-json-file\vitals.json'
+            $fileRun = Invoke-Cli -Dir (Join-Path $Work 'cli-json-file') -ArgumentList @('--json', $jsonFile) -TimeoutSeconds 40
+            if ($fileRun.Exit -ne 0) { throw "json file exit $($fileRun.Exit) $($fileRun.Err)" }
+            if (-not (Test-Path -LiteralPath $jsonFile)) { throw 'missing --json file' }
+            $fileText = [System.IO.File]::ReadAllText($jsonFile)
+            $fileObj = $fileText | ConvertFrom-Json
+            Assert-JsonBoard $fileObj
+            $user = [Environment]::UserName
+            if ($fileText -match ('Users\\' + [regex]::Escape($user))) { throw 'json leaked user profile path' }
+            $cliOk = $true
+            $cliDetail = ("strip + {0} groups" -f @($fileObj.groups).Count)
+        }
+        catch {
+            $cliDetail = $_.Exception.Message
+            if ($cliDetail.Length -gt 240) { $cliDetail = $cliDetail.Substring(0, 240) }
+        }
+        Write-Check 'json-version' $cliOk $cliDetail
+    }
+
+    # 1b3. --name sets the PC name, --json shows it, --name "" resets it.
+    # The real prefs.txt is backed up by Save-Config and restored in finally.
+    $nameOk = $false
+    $nameDetail = ''
+    if (-not $buildOk) {
+        Write-Check 'pc-name' $false 'skipped: build failed'
+    }
+    else {
+        try {
+            $setRun = Invoke-Cli -Dir (Join-Path $Work 'cli-name-set') -ArgumentList @('--name', 'Studio PC') -TimeoutSeconds 20
+            if ($setRun.Exit -ne 0) { throw "name set exit $($setRun.Exit) $($setRun.Err)" }
+            if (-not (Test-Path -LiteralPath $PrefsFile)) { throw 'prefs.txt missing after --name' }
+            $prefsText = [System.IO.File]::ReadAllText($PrefsFile)
+            if ($prefsText -notmatch '(?m)^name=Studio PC\s*$') { throw 'prefs.txt missing name=' }
+            $jsonRun = Invoke-Cli -Dir (Join-Path $Work 'cli-name-json') -ArgumentList @('--json') -TimeoutSeconds 40
+            if ($jsonRun.Exit -ne 0) { throw "name json exit $($jsonRun.Exit) $($jsonRun.Err)" }
+            $nameObj = $jsonRun.Out | ConvertFrom-Json
+            if ([string]$nameObj.name -ne 'Studio PC') { throw "json name [$($nameObj.name)]" }
+            $resetRun = Invoke-Cli -Dir (Join-Path $Work 'cli-name-reset') -ArgumentList @('--name', '') -TimeoutSeconds 20
+            if ($resetRun.Exit -ne 0) { throw "name reset exit $($resetRun.Exit) $($resetRun.Err)" }
+            $after = ''
+            if (Test-Path -LiteralPath $PrefsFile) { $after = [System.IO.File]::ReadAllText($PrefsFile) }
+            if ($after -match '(?m)^name=') { throw 'prefs.txt still has name=' }
+            $jsonReset = Invoke-Cli -Dir (Join-Path $Work 'cli-name-json-reset') -ArgumentList @('--json') -TimeoutSeconds 40
+            if ($jsonReset.Exit -ne 0) { throw "reset json exit $($jsonReset.Exit)" }
+            $resetObj = $jsonReset.Out | ConvertFrom-Json
+            if ([string]::IsNullOrWhiteSpace([string]$resetObj.name) -or [string]$resetObj.name -eq 'Studio PC') { throw "reset json name [$($resetObj.name)]" }
+            $nameOk = $true
+            $nameDetail = 'set, json, reset'
+        }
+        catch {
+            $nameDetail = $_.Exception.Message
+            if ($nameDetail.Length -gt 240) { $nameDetail = $nameDetail.Substring(0, 240) }
+        }
+        finally {
+            Restore-Config
+        }
+        Write-Check 'pc-name' $nameOk $nameDetail
     }
 
     # 1c. Short runtime outbound + write-root gate (also see tests\safety-runtime.ps1)
@@ -783,6 +913,8 @@ Checked = something | check: http://example.com
         )
         Start-Sleep -Seconds 2
         $privSnap = Invoke-Snapshot -Dir (Join-Path $Work 'snap-privacy') -PrivacyTest
+        $privJson = Invoke-Cli -Dir (Join-Path $Work 'json-privacy') -ArgumentList @('--json') -TimeoutSeconds 40
+        if ($privJson.Exit -ne 0) { throw "privacy json exit $($privJson.Exit)" }
         if ($privSnap.Text -notmatch 'dv_smoke_priv\.ps1' -and $privSnap.Text -notmatch 'dvsmokePrivMarker') { throw 'privacy script missing' }
         if (-not $privSnap.Privacy) { throw 'missing privacy.txt' }
         if ($privSnap.Privacy -notmatch '(?m)^show=') { throw 'privacy.txt missing show=' }
@@ -793,7 +925,8 @@ Checked = something | check: http://example.com
             $privSnap.Text,
             $privSnap.Privacy,
             [System.IO.File]::ReadAllText($privSnap.Txt),
-            [System.Text.Encoding]::ASCII.GetString([System.IO.File]::ReadAllBytes($privSnap.Png))
+            [System.Text.Encoding]::ASCII.GetString([System.IO.File]::ReadAllBytes($privSnap.Png)),
+            $privJson.Out
         )
         $logPath = Join-Path $ConfigDir 'errors.log'
         if (Test-Path -LiteralPath $logPath) {
