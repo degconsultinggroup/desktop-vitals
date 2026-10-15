@@ -28,6 +28,16 @@ To build it yourself, run `build.ps1`.
 
 Ctrl+Alt+P opens it. If you want your own bots or apps on there, copy `watch.example.txt` to `%APPDATA%\DesktopVitals\watch.txt` and edit it.
 
+## Tested on
+
+- My PC: Windows 11, i7-14700F, RTX 4070 SUPER, with Claude Code, Codex, Cursor, bots and local models running
+- GitHub Actions Windows (x64)
+- GitHub Actions Windows 11 ARM
+
+Not tested yet on Windows 10 or a PC without an NVIDIA card.
+
 ## License
 
-MIT. Made by [Frontier Deployments](https://frontierdeployments.com).
+MIT.
+
+Made with love by me ([Frontier Deployments](https://frontierdeployments.com)) prompting Opus 5.5, who managed a bunch of Cursor Grok 4.7 and Composer agents.
