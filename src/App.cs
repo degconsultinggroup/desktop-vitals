@@ -243,8 +243,8 @@ namespace DesktopVitals {
         static Board ReadLiveBoard() {
             Engine.Prime(); var start = DateTime.UtcNow; Board board = null;
             while (true) {
-                board = Engine.Tick(); double sec = (DateTime.UtcNow - start).TotalSeconds;
-                if ((Engine.TasksReady && sec >= 0.7) || sec >= 1.8) break; Thread.Sleep(120); }
+                bool ready = Engine.TasksReady; board = Engine.Tick(); double sec = (DateTime.UtcNow - start).TotalSeconds; if (!ready && Engine.TasksReady) board = Engine.Tick();
+                if (((ready || Engine.TasksReady) && sec >= 0.7) || sec >= 1.8) break; Thread.Sleep(120); }
             return board; }
         static string ArgValue(string[] args, string flag) {
             int at = Find(args, flag); if (at < 0 || at + 1 >= args.Length || args[at + 1].StartsWith("--")) return null;

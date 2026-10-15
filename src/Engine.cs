@@ -125,7 +125,7 @@ namespace DesktopVitals {
             if (s.IndexOf("dellsupport") >= 0 || s.IndexOf("lenovo") >= 0 || s.IndexOf("hpsupport") >= 0) return true;
             if (s.IndexOf("zoom") >= 0 && s.IndexOf("update") >= 0) return true;
             if ((s.IndexOf("asus") >= 0 && s.IndexOf("system") >= 0) || s.IndexOf("hostedcompute") >= 0 || s.IndexOf("hosted-compute") >= 0) return true;
-            if (s.IndexOf("runner.worker") >= 0 || s.IndexOf("runner.listener") >= 0 || s.IndexOf("runner.pluginhost") >= 0) return true; return false; }
+            if (s.IndexOf("runner.worker") >= 0 || s.IndexOf("runner.listener") >= 0 || s.IndexOf("runner.pluginhost") >= 0 || s.IndexOf("desktopvitals") >= 0) return true; return false; }
         public static string Find(string exe, string cmd, string cwd) {
             if (!Interpreter(exe) || string.IsNullOrEmpty(cmd)) return null; var args = Split(cmd);
             for (int i = 1; i < args.Count; i++) {
@@ -202,7 +202,7 @@ namespace DesktopVitals {
         public bool NeverRan { get { return Result == 0x41303 || LastRun.Year < 2000; } }
         public bool Failed { get { return !Running && !NeverRan && Result != 0 && Result != 0x41306 && Result != 0x41301; } } }
     static class TaskList {
-        public static List<TaskInfo> Items = new List<TaskInfo>(); public static int Generation;
+        public static volatile List<TaskInfo> Items = new List<TaskInfo>(); public static volatile int Generation;
         public static bool Ready { get { return finished; } }
         public static bool Failed; static bool busy; static volatile bool finished; static DateTime read = DateTime.MinValue;
         public static void Soon() { if (!busy) read = DateTime.MinValue.AddSeconds(1); }

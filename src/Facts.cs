@@ -21,7 +21,7 @@ using System.Security.Cryptography; using System.Text; using System.Text.Regular
                 if (procs != null) foreach (Proc p in procs) byPid[p.Pid] = p; var listeners = Listeners(); var now = DateTime.UtcNow;
                 if (procs != null)
                     foreach (Proc p in procs) {
-                        Memo m = Touch(p, byPid); int gen = TaskList.Generation; if (m.TaskGen != gen) { m.TaskGen = gen; MatchTask(p, m, byPid); }
+                        Memo m = Touch(p, byPid); int gen = TaskList.Generation; if (TaskList.Ready && m.TaskGen != gen) { m.TaskGen = gen; MatchTask(p, m, byPid); }
                         NoteActivity(m, p, now); }
                 if (procs != null) CatchUp(procs); NoteExits(byPid, now); try { TaskList.Refresh(null); } catch (Exception) { }
                 try { ModelScan.Refresh(); } catch (Exception) { } var used = new HashSet<int>(); var things = new List<Thing>(); if (procs != null) {
