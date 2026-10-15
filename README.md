@@ -6,7 +6,7 @@ A glass window for what this PC is doing. It only reads.
 
 ## What it shows
 
-Processor, memory, graphics, video memory, and disk. Then agents, your things by project, models, other, and what ended in the last hour.
+Processor with every thread, memory, graphics, video memory, and disk. Then agents, your things by project, models, other, and what ended in the last hour.
 
 ## How it decides
 
@@ -14,7 +14,7 @@ It is yours when it runs as you, in your session. A scheduled task you created c
 
 The project is the nearest folder with git or a package file.
 
-A listening port is a server. A weight file is a model. Five quiet minutes is quiet. A failed exit or task shows failed.
+A listening port is a server. A weight file is a model. Nothing for five minutes is quiet. A failed exit or task shows failed.
 
 An agent shows its repo, the command it is running, and the last file it touched.
 
@@ -25,7 +25,7 @@ Paste this link into your agent:
 https://github.com/degconsultinggroup/desktop-vitals
 
 ```powershell
-irm https://raw.githubusercontent.com/degconsultinggroup/desktop-vitals/v2/simplest/install.ps1 | iex
+irm https://raw.githubusercontent.com/degconsultinggroup/desktop-vitals/main/install.ps1 | iex
 ```
 
 Or download [DesktopVitals.exe](https://github.com/degconsultinggroup/desktop-vitals/releases/latest).

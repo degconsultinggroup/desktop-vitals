@@ -34,11 +34,11 @@ if (-not $MyInvocation.MyCommand.Path) {
     $root = Join-Path $env:LOCALAPPDATA 'Programs\DesktopVitals'
     $src = Join-Path $root 'src'
     $zip = Join-Path $env:TEMP 'desktop-vitals.zip'
-    Invoke-WebRequest -UseBasicParsing -Uri 'https://github.com/degconsultinggroup/desktop-vitals/archive/refs/heads/v2/simplest.zip' -OutFile $zip
+    Invoke-WebRequest -UseBasicParsing -Uri 'https://github.com/degconsultinggroup/desktop-vitals/archive/refs/heads/main.zip' -OutFile $zip
     if (Test-Path -LiteralPath $src) { Remove-Item -LiteralPath $src -Recurse -Force }
     New-Item -ItemType Directory -Force -Path $root | Out-Null
     Expand-Archive -LiteralPath $zip -DestinationPath $root -Force
-    $unpacked = Join-Path $root 'desktop-vitals-v2-simplest'
+    $unpacked = Join-Path $root 'desktop-vitals-main'
     if (-not (Test-Path -LiteralPath $unpacked)) { throw 'download did not include the source' }
     Rename-Item -LiteralPath $unpacked -NewName 'src'
     & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $src 'build.ps1')

@@ -8,7 +8,7 @@ It only reads.
 Paste this link into your agent, or run:
 
 ```powershell
-irm https://raw.githubusercontent.com/degconsultinggroup/desktop-vitals/v2/simplest/install.ps1 | iex
+irm https://raw.githubusercontent.com/degconsultinggroup/desktop-vitals/main/install.ps1 | iex
 ```
 
 To install without piping the script into `iex`:
@@ -50,7 +50,7 @@ Tell them Desktop Vitals is installed and open. Summarize `strip`, `headline`, a
 ## Uninstall
 
 ```powershell
-$env:DV_UNINSTALL='1'; irm https://raw.githubusercontent.com/degconsultinggroup/desktop-vitals/v2/simplest/install.ps1 | iex
+$env:DV_UNINSTALL='1'; irm https://raw.githubusercontent.com/degconsultinggroup/desktop-vitals/main/install.ps1 | iex
 ```
 
 Or, from a clone of this repo:
