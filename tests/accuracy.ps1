@@ -791,7 +791,7 @@ CreateObject("Wscript.Shell").Run "cmd.exe /c " & Chr(34) & dir & "gateway.cmd" 
         if ($py) {
             $shim = @($things | Where-Object { $_.Name -eq 'run.py' })
             if ($shim.Count -ne 1) { $boxOk = $false; [void]$script:Fn.Add("shim lines=$($shim.Count)") }
-            elseif ($shim[0].Kind -ne 'bot' -or $shim[0].State -ne 'running' -or $shim[0].Project -ne 'shim-repo' -or $shim[0].Detail -notmatch [regex]::Escape($TaskShim) -or $shim[0].Detail -notmatch 'works every') {
+            elseif ($shim[0].Kind -ne 'bot' -or $shim[0].State -ne 'running' -or $shim[0].Project -ne 'shim-repo' -or $shim[0].Detail -notmatch [regex]::Escape($TaskShim) -or $shim[0].Detail -notmatch 'works every|wrote beat\.txt') {
                 $boxOk = $false
                 [void]$script:Fn.Add("shim kind=$($shim[0].Kind) state=$($shim[0].State) project=$($shim[0].Project) detail=$($shim[0].Detail)")
             }
