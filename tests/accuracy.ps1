@@ -1,4 +1,4 @@
-# Accuracy fixtures for Desktop Vitals: Scripts, Scheduled, Starts, AI models.
+# Accuracy fixtures for Desktop Vitals: scripts, scheduled tasks, startup noise, models.
 # Workload lives under %USERPROFILE% (not Temp: Scripts skips Temp). Cleans up in finally.
 # Run: pwsh -File tests\accuracy.ps1
 $ErrorActionPreference = 'Stop'
@@ -20,17 +20,36 @@ $ModelCreated = $false
 $TaskRun = "DVAccRun$Stamp"
 $TaskFail = "DVAccFail$Stamp"
 $TaskNoise = "DVAccNoiseUpdate$Stamp"
+$TaskShim = "DVAccShim$Stamp"
+$TaskGate = "DVAccGate$Stamp"
+$TaskDesk = "DEG Desk$Stamp"
+$DeskShown = "Desk$Stamp"
+$TaskNhl = "DEG NHL$Stamp"
+$TaskRgb = "DVAccRGB$Stamp"
+$BundleDir = Join-Path $env:LOCALAPPDATA ("dv-acc-bundle-" + $Stamp)
+$HomeRun = Join-Path $env:USERPROFILE ("Documents\dv-acc-runners-" + $Stamp)
+$HomePtt = Join-Path $env:USERPROFILE ("Documents\dv-acc-ptt-" + $Stamp)
+$RgbDir = Join-Path $env:USERPROFILE ("Downloads\DVAccRGB" + $Stamp)
+$SplitA = Join-Path $ModelsDir ("dv-acc-split-" + $Stamp + "-00001-of-00002.gguf")
+$SplitB = Join-Path $ModelsDir ("dv-acc-split-" + $Stamp + "-00002-of-00002.gguf")
+$SetupExe = Join-Path $env:TEMP ("DVAccSetup" + $Stamp + ".exe")
 $StartLnk = Join-Path ([Environment]::GetFolderPath('Startup')) ("DVAccStart$Stamp.lnk")
 $DisabledName = "DVAccDisabled$Stamp"
 $DisabledExe = Join-Path $Work 'dv_acc_disabled.exe'
 $HttpPort = 0
+$ToolDir = $null
+$AgentHome = $null
+$ListenPortFile = $null
 $ConfigDir = Join-Path $env:APPDATA 'DesktopVitals'
 $ConfigFile = Join-Path $ConfigDir 'watch.txt'
 $ReviewFile = Join-Path $ConfigDir 'review.txt'
+$PrefsFile = Join-Path $ConfigDir 'prefs.txt'
 $ConfigBackup = Join-Path $Work 'watch.txt.bak'
 $ReviewBackup = Join-Path $Work 'review.txt.bak'
+$PrefsBackup = Join-Path $Work 'prefs.txt.bak'
 $HadConfig = $false
 $HadReview = $false
+$HadPrefs = $false
 $NoisePatterns = @(
     '(?i)\bsvchost\b',
     '(?i)\bmsedge(\.exe)?\b',
@@ -45,7 +64,13 @@ $NoisePatterns = @(
 function Write-Check {
     param([string]$Name, [bool]$Ok, [string]$Detail = '')
     $tag = if ($Ok) { 'PASS' } else { 'FAIL' }
-    if (-not $Ok) { $script:FailCount++ }
+    if (-not $Ok) {
+        $script:FailCount++
+        $flat = $Detail
+        if (-not $flat) { $flat = ((@($script:Fn) + @($script:Fp)) -join '; ') }
+        if (-not $flat) { $flat = 'failed' }
+        Write-Host ("::error::{0}: {1}" -f $Name, ($flat -replace '[\r\n]+', ' '))
+    }
     if ($Detail) { Write-Host ("{0} {1} ({2})" -f $tag, $Name, $Detail) }
     else { Write-Host ("{0} {1}" -f $tag, $Name) }
 }
@@ -59,6 +84,10 @@ function Save-Config {
     if (Test-Path -LiteralPath $ReviewFile) {
         $script:HadReview = $true
         Copy-Item -LiteralPath $ReviewFile -Destination $ReviewBackup -Force
+    }
+    if (Test-Path -LiteralPath $PrefsFile) {
+        $script:HadPrefs = $true
+        Copy-Item -LiteralPath $PrefsFile -Destination $PrefsBackup -Force
     }
 }
 
@@ -75,6 +104,12 @@ function Restore-Config {
     }
     elseif (Test-Path -LiteralPath $ReviewFile) {
         Remove-Item -LiteralPath $ReviewFile -Force -ErrorAction SilentlyContinue
+    }
+    if ($script:HadPrefs -and (Test-Path -LiteralPath $PrefsBackup)) {
+        Copy-Item -LiteralPath $PrefsBackup -Destination $PrefsFile -Force
+    }
+    elseif (Test-Path -LiteralPath $PrefsFile) {
+        Remove-Item -LiteralPath $PrefsFile -Force -ErrorAction SilentlyContinue
     }
 }
 
@@ -154,8 +189,136 @@ function Assert-NoNoise {
     return $ok
 }
 
+function Encode-Cwd {
+    param([string]$Path)
+    $sb = New-Object System.Text.StringBuilder
+    foreach ($ch in $Path.ToCharArray()) {
+        if ($ch -match '[A-Za-z0-9]') { [void]$sb.Append($ch) } else { [void]$sb.Append('-') }
+    }
+    return $sb.ToString()
+}
+
+function New-GitRepo {
+    param([string]$Dir)
+    New-Item -ItemType Directory -Force -Path $Dir | Out-Null
+    Push-Location $Dir
+    try {
+        & git init -b feature-x 2>&1 | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            & git init 2>&1 | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw "git init failed in $Dir" }
+            & git checkout -b feature-x 2>&1 | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw "git checkout failed in $Dir" }
+        }
+        Set-Content -LiteralPath (Join-Path $Dir 'readme.txt') -Value 'fixture' -Encoding ASCII
+        & git -c user.email=desktop-vitals@example.com -c user.name='Desktop Vitals' add readme.txt
+        if ($LASTEXITCODE -ne 0) { throw "git add failed in $Dir" }
+        & git -c user.email=desktop-vitals@example.com -c user.name='Desktop Vitals' commit -m fixture
+        if ($LASTEXITCODE -ne 0) { throw "git commit failed in $Dir" }
+    }
+    finally { Pop-Location }
+}
+
+function Write-AgentHome {
+    param($AgentRoot, $Repo, $Processes)
+    $repoFull = [System.IO.Path]::GetFullPath($Repo)
+    $enc = Encode-Cwd $repoFull
+    $sid = [guid]::NewGuid().ToString()
+    $proj = Join-Path $AgentRoot (Join-Path '.claude\projects' $enc)
+    New-Item -ItemType Directory -Force -Path $proj, (Join-Path $AgentRoot '.claude\sessions') | Out-Null
+    $cwdJson = $repoFull.Replace('\', '\\')
+    $stamp = [DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ss.fffZ')
+    $line = '{"cwd":"' + $cwdJson + '","timestamp":"' + $stamp + '","message":{"content":[{"type":"tool_use","name":"Edit","input":{"file_path":"C:\\src\\install.ps1"}}]}}'
+    Set-Content -LiteralPath (Join-Path $proj ($sid + '.jsonl')) -Value $line -Encoding ASCII
+    $oldSid = [guid]::NewGuid().ToString()
+    $oldWhen = [DateTime]::UtcNow.AddDays(-2)
+    $oldLine = '{"cwd":"' + $cwdJson + '","timestamp":"' + $oldWhen.ToString('yyyy-MM-ddTHH:mm:ss.fffZ') + '","message":{"content":[{"type":"tool_use","name":"Edit","input":{"file_path":"C:\\src\\old-session.txt"}}]}}'
+    $oldPath = Join-Path $proj ($oldSid + '.jsonl')
+    Set-Content -LiteralPath $oldPath -Value $oldLine -Encoding ASCII
+    (Get-Item -LiteralPath $oldPath).LastWriteTimeUtc = $oldWhen
+    foreach ($proc in $Processes) {
+        $ft = $proc.StartTime.ToFileTime()
+        $json = '{"sessionId":"' + $oldSid + '","cwd":"' + $cwdJson + '","procStart":"' + $ft + '"}'
+        Set-Content -LiteralPath (Join-Path $AgentRoot ('.claude\sessions\' + $proc.Id + '.json')) -Value $json -Encoding ASCII
+    }
+}
+
+function Wait-CommandLine {
+    param([string]$Like, [int]$Seconds = 15)
+    $deadline = (Get-Date).AddSeconds($Seconds)
+    while ((Get-Date) -lt $deadline) {
+        $hits = @(Get-CimInstance Win32_Process -Filter "Name = 'powershell.exe'" | Where-Object { $_.CommandLine -and $_.CommandLine -like $Like })
+        if ($hits.Count -gt 0) { return [int]$hits[0].ProcessId }
+        Start-Sleep -Milliseconds 200
+    }
+    return 0
+}
+
+function Invoke-BoardJson {
+    param([string]$HomeDir)
+    $exe = Join-Path $Root 'bin\DesktopVitals.exe'
+    $path = Join-Path $Work 'board.json'
+    if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Force }
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = $exe
+    $psi.Arguments = '--json "' + $path + '"'
+    $psi.UseShellExecute = $false
+    $psi.CreateNoWindow = $true
+    $psi.EnvironmentVariables['DESKTOPVITALS_HOME'] = $HomeDir
+    $proc = [System.Diagnostics.Process]::Start($psi)
+    if (-not $proc.WaitForExit(120000)) {
+        try { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue } catch { }
+        throw 'json exceeded 120000 ms'
+    }
+    if ($proc.ExitCode -ne 0) { throw "json exit $($proc.ExitCode)" }
+    if (-not (Test-Path -LiteralPath $path)) { throw 'json wrote no file' }
+    $raw = [System.IO.File]::ReadAllText($path)
+    if ([string]::IsNullOrWhiteSpace($raw)) { throw 'json file empty' }
+    return $raw | ConvertFrom-Json
+}
+
+function Invoke-Bench {
+    $exe = Join-Path $Root 'bin\DesktopVitals.exe'
+    $path = Join-Path $Work 'bench.txt'
+    if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Force }
+    $p = Start-Process -FilePath $exe -ArgumentList @('--bench', '21', $path) -PassThru -WindowStyle Hidden
+    if (-not $p.WaitForExit(180000)) {
+        try { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue } catch { }
+        throw 'bench exceeded 180000 ms'
+    }
+    if ($p.ExitCode -ne 0) { throw "bench exit $($p.ExitCode)" }
+    if (-not (Test-Path -LiteralPath $path)) { throw 'bench wrote no file' }
+    $line = ([System.IO.File]::ReadAllText($path)).Trim()
+    if ($line -notmatch 'p50_ms=([0-9.]+)\s+n=(\d+)\s+procs=(\d+)') { throw "bad bench line: $line" }
+    return @{ P50 = $Matches[1]; N = $Matches[2]; Procs = $Matches[3]; Line = $line }
+}
+
+function Get-Things {
+    param($Board)
+    $list = New-Object System.Collections.Generic.List[object]
+    foreach ($g in @($Board.groups)) {
+        foreach ($t in @($g.things)) {
+            $list.Add([pscustomobject]@{
+                    Group     = [string]$g.title
+                    GroupKind = [string]$g.kind
+                    Name      = [string]$t.name
+                    Kind      = [string]$t.kind
+                    State     = [string]$t.state
+                    Project   = [string]$t.project
+                    Branch    = [string]$t.branch
+                    Detail    = [string]$t.detail
+                    Why       = [string]$t.why
+                    Count     = [int]$t.count
+                    Id        = [string]$t.id
+                    Ports     = @($t.ports)
+                })
+        }
+    }
+    return $list
+}
+
 function Invoke-Snapshot {
-    param([string]$Dir, [int]$TimeoutMs = 60000)
+    param([string]$Dir, [int]$TimeoutMs = 90000)
     New-Item -ItemType Directory -Force -Path $Dir | Out-Null
     $exe = Join-Path $Root 'bin\DesktopVitals.exe'
     if (-not (Test-Path -LiteralPath $exe)) { throw "missing $exe" }
@@ -200,12 +363,22 @@ function Remove-StartupApproved {
 }
 
 function Register-UserTask {
-    param([string]$Name, [string]$ScriptPath, [switch]$FailOnce)
-    $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument ("-NoProfile -ExecutionPolicy Bypass -File `"$ScriptPath`"")
+    param([string]$Name, [string]$ScriptPath, [switch]$FailOnce, [switch]$NoStart, [string]$Execute, [string]$Arguments, [int]$RepeatMin = 0)
+    if (-not $Execute) {
+        $Execute = 'powershell.exe'
+        $Arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$ScriptPath`""
+    }
+    $action = if ([string]::IsNullOrWhiteSpace($Arguments)) { New-ScheduledTaskAction -Execute $Execute } else { New-ScheduledTaskAction -Execute $Execute -Argument $Arguments }
     # Once = timed trigger (shows under Scheduled, not Starts with Windows).
-    $trigger = New-ScheduledTaskTrigger -Once -At ((Get-Date).AddHours(6))
+    if ($RepeatMin -gt 0) {
+        $trigger = New-ScheduledTaskTrigger -Once -At ((Get-Date).AddMinutes(-1)) -RepetitionInterval (New-TimeSpan -Minutes $RepeatMin) -RepetitionDuration (New-TimeSpan -Days 1)
+    }
+    else {
+        $trigger = New-ScheduledTaskTrigger -Once -At ((Get-Date).AddHours(6))
+    }
     $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Hours 1)
     Register-ScheduledTask -TaskName $Name -Action $action -Trigger $trigger -Settings $settings -Force | Out-Null
+    if ($NoStart) { return }
     Start-ScheduledTask -TaskName $Name
     if ($FailOnce) {
         $deadline = (Get-Date).AddSeconds(25)
@@ -226,7 +399,8 @@ function Remove-UserTask {
 function Clear-Fixtures {
     Stop-ProcessList $Children
     Stop-ProcessList $Flood
-    foreach ($n in @($TaskRun, $TaskFail, $TaskNoise)) { Remove-UserTask $n }
+    foreach ($n in @($TaskRun, $TaskFail, $TaskNoise, $TaskShim, $TaskGate, $TaskDesk, $TaskNhl, $TaskRgb)) { Remove-UserTask $n }
+    if ($SetupExe -and (Test-Path -LiteralPath $SetupExe)) { Remove-Item -LiteralPath $SetupExe -Force -ErrorAction SilentlyContinue }
     if (Test-Path -LiteralPath $StartLnk) { Remove-Item -LiteralPath $StartLnk -Force -ErrorAction SilentlyContinue }
     Remove-StartupApproved -List 'Run' -Name $DisabledName
     $runKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
@@ -235,6 +409,15 @@ function Clear-Fixtures {
     }
     if ($ModelCreated -and (Test-Path -LiteralPath $ModelFile)) {
         Remove-Item -LiteralPath $ModelFile -Force -ErrorAction SilentlyContinue
+    }
+    foreach ($extra in @($SplitA, $SplitB)) {
+        if ($extra -and (Test-Path -LiteralPath $extra)) { Remove-Item -LiteralPath $extra -Force -ErrorAction SilentlyContinue }
+    }
+    foreach ($dir in @($BundleDir, $HomeRun, $HomePtt, $RgbDir, $LlmDir)) {
+        if ($dir -and (Test-Path -LiteralPath $dir)) { Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue }
+    }
+    if ($ToolDir -and (Test-Path -LiteralPath $ToolDir)) {
+        Remove-Item -LiteralPath $ToolDir -Recurse -Force -ErrorAction SilentlyContinue
     }
     Get-Process DesktopVitals -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 }
@@ -276,6 +459,16 @@ try {
     $rng.NextBytes($bytes)
     [System.IO.File]::WriteAllBytes($ModelFile, $bytes)
     $ModelCreated = $true
+    $shardByte = New-Object byte[] 64
+    [System.IO.File]::WriteAllBytes($SplitA, $shardByte)
+    [System.IO.File]::WriteAllBytes($SplitB, $shardByte)
+    $LlmDir = Join-Path $ModelsDir ("dv-acc-llm-" + $Stamp)
+    New-Item -ItemType Directory -Force -Path (Join-Path $LlmDir 'packs'), (Join-Path $LlmDir 'mtp') | Out-Null
+    [System.IO.File]::WriteAllBytes((Join-Path $LlmDir 'weights.gguf'), $shardByte)
+    [System.IO.File]::WriteAllBytes((Join-Path $LlmDir 'mmproj-weights.gguf'), $shardByte)
+    [System.IO.File]::WriteAllBytes((Join-Path $LlmDir 'tokenizer.gguf'), $shardByte)
+    [System.IO.File]::WriteAllBytes((Join-Path $LlmDir 'packs\dv-acc-pack.gguf'), $shardByte)
+    [System.IO.File]::WriteAllBytes((Join-Path $LlmDir 'mtp\dv-acc-mtp.gguf'), $shardByte)
 
     # Disabled startup app: Run key + StartupApproved off (must not appear under Starts)
     [System.IO.File]::WriteAllBytes($DisabledExe, [byte[]](0x4D, 0x5A))
@@ -320,6 +513,273 @@ try {
         try { $null = Start-Child -FilePath $llama.Source -ArgumentList @('--host', '127.0.0.1', '--port', '18080') } catch { }
     }
 
+    # v2 board: two agent repos, an orphan bot, a listen port, and a mapped split model inside a tool folder.
+    $nodeCmd = Get-Command node -ErrorAction SilentlyContinue
+    $RepoA = Join-Path $Work 'repo-a'
+    $RepoB = Join-Path $Work 'repo-b'
+    $BotRepo = Join-Path $Work 'bots-repo'
+    $ToolDir = Join-Path $ModelsDir ("dv-tool-" + $Stamp)
+    $AgentHome = Join-Path $Work 'agent-home'
+    $ListenPortFile = Join-Path $Work 'listen.port'
+    New-GitRepo $RepoA
+    New-GitRepo $RepoB
+    New-GitRepo $BotRepo
+    $agentJs = Join-Path $Work 'dv_agent.js'
+    Set-Content -LiteralPath $agentJs -Value 'setInterval(function () {}, 1000);' -Encoding ASCII
+    $listenScript = Join-Path $Work 'dv_acc_listen.ps1'
+    @'
+$listener = New-Object System.Net.Sockets.TcpListener ([System.Net.IPAddress]::Loopback, 0)
+$listener.Start()
+Set-Content -LiteralPath $args[0] -Value $listener.LocalEndpoint.Port -Encoding ASCII
+while ($true) { Start-Sleep -Seconds 2 }
+'@ | Set-Content -LiteralPath $listenScript -Encoding ASCII
+    $botScript = Join-Path $BotRepo 'dv_acc_bot.ps1'
+    @'
+$beat = Join-Path $PSScriptRoot 'beat.txt'
+while ($true) {
+  Set-Content -LiteralPath $beat -Value ([DateTime]::UtcNow.ToString('o')) -Encoding ASCII
+  Start-Sleep -Milliseconds 400
+}
+'@ | Set-Content -LiteralPath $botScript -Encoding ASCII
+    New-Item -ItemType Directory -Force -Path (Join-Path $ToolDir 'models'), (Join-Path $ToolDir 'packs'), (Join-Path $ToolDir 'logs') | Out-Null
+    $shard = New-Object byte[] 4096
+    [System.IO.File]::WriteAllBytes((Join-Path $ToolDir 'models\fixture-weights-00001-of-00002.gguf'), $shard)
+    [System.IO.File]::WriteAllBytes((Join-Path $ToolDir 'models\fixture-weights-00002-of-00002.gguf'), $shard)
+    Set-Content -LiteralPath (Join-Path $ToolDir 'packs\readme.txt') -Value 'pack' -Encoding ASCII
+    Set-Content -LiteralPath (Join-Path $ToolDir 'logs\run.log') -Value 'log' -Encoding ASCII
+    $mapScript = Join-Path $ToolDir 'dv_acc_map.ps1'
+    @'
+$root = Split-Path -Parent $MyInvocation.MyCommand.Path
+$mappedA = [System.IO.MemoryMappedFiles.MemoryMappedFile]::CreateFromFile((Join-Path $root 'models\fixture-weights-00001-of-00002.gguf'))
+$mappedB = [System.IO.MemoryMappedFiles.MemoryMappedFile]::CreateFromFile((Join-Path $root 'models\fixture-weights-00002-of-00002.gguf'))
+$viewA = $mappedA.CreateViewAccessor()
+$viewB = $mappedB.CreateViewAccessor()
+$keep = $viewA.ReadByte(0) + $viewB.ReadByte(0)
+while ($true) { Start-Sleep -Seconds 2 }
+'@ | Set-Content -LiteralPath $mapScript -Encoding ASCII
+    $AgentA = @()
+    if ($nodeCmd) {
+        $AgentA += Start-Child -FilePath $nodeCmd.Source -ArgumentList @($agentJs, '--agent', 'claude') -WorkingDirectory $RepoA
+        $AgentA += Start-Child -FilePath $nodeCmd.Source -ArgumentList @($agentJs, '--agent', 'claude') -WorkingDirectory $RepoA
+        $null = Start-Child -FilePath $nodeCmd.Source -ArgumentList @($agentJs, '--model', 'grok-4.7-high', '--worktree', '.') -WorkingDirectory $RepoB
+        foreach ($ap in $AgentA) { $ap.Refresh() | Out-Null }
+        Write-AgentHome -AgentRoot $AgentHome -Repo $RepoA -Processes $AgentA
+        $IdleRepo = Join-Path $Work 'idle-repo'
+        New-GitRepo $IdleRepo
+        $idleProc = Start-Child -FilePath $nodeCmd.Source -ArgumentList @($agentJs, '--agent', 'claude') -WorkingDirectory $IdleRepo
+        $idleProc.Refresh() | Out-Null
+        $idleFull = [System.IO.Path]::GetFullPath($IdleRepo)
+        $idleEnc = Encode-Cwd $idleFull
+        $idleSid = [guid]::NewGuid().ToString()
+        $idleProj = Join-Path $AgentHome (Join-Path '.claude\projects' $idleEnc)
+        New-Item -ItemType Directory -Force -Path $idleProj, (Join-Path $AgentHome '.claude\sessions') | Out-Null
+        $idleCwd = $idleFull.Replace('\', '\\')
+        $idleWhen = [DateTime]::UtcNow.AddMinutes(-29)
+        $idleLine = '{"cwd":"' + $idleCwd + '","timestamp":"' + $idleWhen.ToString('yyyy-MM-ddTHH:mm:ss.fffZ') + '","message":{"content":[{"type":"text","text":"done"}],"stop_reason":"end_turn"}}'
+        $idlePath = Join-Path $idleProj ($idleSid + '.jsonl')
+        Set-Content -LiteralPath $idlePath -Value $idleLine -Encoding ASCII
+        (Get-Item -LiteralPath $idlePath).LastWriteTimeUtc = $idleWhen
+        $idleReg = '{"sessionId":"' + $idleSid + '","cwd":"' + $idleCwd + '","procStart":"' + $idleProc.StartTime.ToFileTime() + '"}'
+        Set-Content -LiteralPath (Join-Path $AgentHome ('.claude\sessions\' + $idleProc.Id + '.json')) -Value $idleReg -Encoding ASCII
+    }
+    $null = Start-Child -FilePath 'powershell.exe' -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $listenScript, $ListenPortFile)
+    $null = Start-Child -FilePath 'powershell.exe' -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $mapScript) -WorkingDirectory $ToolDir
+    $launchCmd = Join-Path $BotRepo 'launch.cmd'
+    Set-Content -LiteralPath $launchCmd -Value ("@echo off`r`nstart `"`" /b powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"{0}`"`r`n" -f $botScript) -Encoding ASCII
+    $launcher = Start-Process -FilePath 'cmd.exe' -ArgumentList @('/c', $launchCmd) -WorkingDirectory $BotRepo -WindowStyle Hidden -PassThru
+    if (-not $launcher.WaitForExit(20000)) {
+        try { Stop-Process -Id $launcher.Id -Force -ErrorAction SilentlyContinue } catch { }
+    }
+    $botPid = Wait-CommandLine -Like '*dv_acc_bot.ps1*' -Seconds 15
+    if ($botPid -gt 0) {
+        $botProc = Get-Process -Id $botPid -ErrorAction SilentlyContinue
+        if ($botProc) { $Children.Add($botProc) | Out-Null }
+    }
+
+    # Real-box cases: shim parent/child, gateway chain, idle shell, Windows cwd, temp installer.
+    $ShimRepo = Join-Path $Work 'shim-repo'
+    $GateRepo = Join-Path $Work 'gate-repo'
+    $WinRepo = Join-Path $Work 'win-cwd-repo'
+    New-GitRepo $ShimRepo
+    New-GitRepo $GateRepo
+    New-GitRepo $WinRepo
+    $runPy = Join-Path $ShimRepo 'run.py'
+    @'
+import os, sys, time, subprocess
+path = os.path.abspath(__file__)
+if os.environ.get("DV_SHIM") != "1":
+    env = os.environ.copy()
+    env["DV_SHIM"] = "1"
+    subprocess.Popen([sys.executable, path], env=env, cwd=os.path.dirname(path))
+beat = os.path.join(os.path.dirname(path), "beat.txt")
+while True:
+    open(beat, "w").write("x")
+    time.sleep(0.25)
+'@ | Set-Content -LiteralPath $runPy -Encoding ASCII
+    $portable = Join-Path $BundleDir 'deps\portable-node'
+    $gateDist = Join-Path $portable 'node_modules\openclaw\dist'
+    New-Item -ItemType Directory -Force -Path $portable, $gateDist | Out-Null
+    $linkedNode = Join-Path $portable 'node.exe'
+    if ($nodeCmd) {
+        & cmd.exe /c "mklink /H `"$linkedNode`" `"$($nodeCmd.Source)`"" | Out-Null
+        if (-not (Test-Path -LiteralPath $linkedNode)) { Copy-Item -LiteralPath $nodeCmd.Source -Destination $linkedNode -Force }
+    }
+    $gateJs = Join-Path $gateDist 'index.js'
+    $gateCmd = Join-Path $GateRepo 'gateway.cmd'
+    $gateVbs = Join-Path $GateRepo 'gateway.vbs'
+    $gatePortPath = Join-Path $GateRepo 'port.txt'
+    @'
+var net = require("net");
+var fs = require("fs");
+var cp = require("child_process");
+var portFile = process.argv[2];
+var srv = net.createServer(function () {});
+srv.listen(0, "127.0.0.1", function () {
+  fs.writeFileSync(portFile, String(srv.address().port));
+});
+cp.spawn(process.execPath, ["-e", "/*dv-acc-gate-child*/require('net').createServer(function(){}).listen(0,'127.0.0.1');setInterval(function(){},1000);"]);
+cp.spawn("cmd.exe", ["/d", "/s", "/c", process.execPath + " -e \"/*dv-acc-gate-deep*/setInterval(function(){},1000);\""]);
+setInterval(function () {}, 1000);
+'@ | Set-Content -LiteralPath $gateJs -Encoding ASCII
+    $gateNode = '"' + $linkedNode + '" --max-old-space-size=8192 "' + $gateJs + '" "' + $gatePortPath + '"'
+    Set-Content -LiteralPath $gateCmd -Value ("@echo off`r`n" + $gateNode + "`r`n") -Encoding ASCII
+    @'
+Dim dir
+dir = Replace(WScript.ScriptFullName, WScript.ScriptName, "")
+CreateObject("Wscript.Shell").Run "cmd.exe /c " & Chr(34) & dir & "gateway.cmd" & Chr(34), 0, True
+'@ | Set-Content -LiteralPath $gateVbs -Encoding ASCII
+    $windirScript = Join-Path $WinRepo 'dv_acc_windir.ps1'
+    Set-Content -LiteralPath $windirScript -Value "while (`$true) { Start-Sleep -Seconds 2 }`r`n" -Encoding ASCII
+    if ($py) {
+        $shimLaunch = Join-Path $ShimRepo 'launch.cmd'
+        Set-Content -LiteralPath $shimLaunch -Value ("@echo off`r`nstart `"`" /b `"{0}`" `"{1}`"`r`n" -f $py, $runPy) -Encoding ASCII
+        $shimHost = Start-Process -FilePath 'cmd.exe' -ArgumentList @('/c', $shimLaunch) -WorkingDirectory $ShimRepo -WindowStyle Hidden -PassThru
+        if (-not $shimHost.WaitForExit(20000)) { try { Stop-Process -Id $shimHost.Id -Force -ErrorAction SilentlyContinue } catch { } }
+        Register-UserTask -Name $TaskShim -Execute $py -Arguments ('"' + $runPy + '"') -NoStart
+        $shimDeadline = (Get-Date).AddSeconds(15)
+        while ((Get-Date) -lt $shimDeadline) {
+            $pys = @(Get-CimInstance Win32_Process | Where-Object { $_.Name -match '^(python|py)\.exe$' -and $_.CommandLine -and $_.CommandLine -like '*run.py*' -and $_.CommandLine -like "*$Stamp*" })
+            if ($pys.Count -ge 1) {
+                foreach ($hit in $pys) {
+                    $proc = Get-Process -Id $hit.ProcessId -ErrorAction SilentlyContinue
+                    if ($proc) { $Children.Add($proc) | Out-Null }
+                }
+                break
+            }
+            Start-Sleep -Milliseconds 200
+        }
+    }
+    if ($nodeCmd) {
+        $null = Start-Child -FilePath 'wscript.exe' -ArgumentList @($gateVbs) -WorkingDirectory $env:WINDIR
+        Register-UserTask -Name $TaskGate -Execute 'wscript.exe' -Arguments ('"' + $gateVbs + '"') -NoStart
+        $gateDeadline = (Get-Date).AddSeconds(15)
+        while ((Get-Date) -lt $gateDeadline) {
+            $nodes = @(Get-CimInstance Win32_Process -Filter "Name = 'node.exe'" | Where-Object { $_.CommandLine -and $_.CommandLine -like '*node_modules\openclaw\dist\index.js*' })
+            if ($nodes.Count -ge 1) {
+                foreach ($hit in $nodes) {
+                    $proc = Get-Process -Id $hit.ProcessId -ErrorAction SilentlyContinue
+                    if ($proc) { $Children.Add($proc) | Out-Null }
+                }
+                $gateKids = @(Get-CimInstance Win32_Process -Filter "Name = 'node.exe'" | Where-Object { $_.CommandLine -and ($_.CommandLine -like '*dv-acc-gate-child*' -or $_.CommandLine -like '*dv-acc-gate-deep*') })
+                foreach ($hit in $gateKids) {
+                    $proc = Get-Process -Id $hit.ProcessId -ErrorAction SilentlyContinue
+                    if ($proc) { $Children.Add($proc) | Out-Null }
+                }
+                break
+            }
+            Start-Sleep -Milliseconds 200
+        }
+    }
+    $idleMarker = "DVAccIdle$Stamp"
+    $null = Start-Child -FilePath 'cmd.exe' -ArgumentList @('/d', '/c', "ping -n 80 127.0.0.1 >nul & rem $idleMarker") -WorkingDirectory $env:WINDIR
+    $null = Start-Child -FilePath 'powershell.exe' -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $windirScript) -WorkingDirectory $env:WINDIR
+    Copy-Item -LiteralPath (Join-Path $env:WINDIR 'System32\cmd.exe') -Destination $SetupExe -Force
+    $null = Start-Child -FilePath $SetupExe -ArgumentList @('/d', '/c', 'ping -n 80 127.0.0.1 >nul') -WorkingDirectory $env:TEMP
+    $ghost = "DVAccGhost$Stamp"
+    if (-not (Test-Path -LiteralPath $PrefsFile)) { New-Item -ItemType Directory -Force -Path $ConfigDir | Out-Null; Set-Content -LiteralPath $PrefsFile -Value '' -Encoding ASCII }
+    Add-Content -LiteralPath $PrefsFile -Value ("pinmatch=1|" + $ghost + "|" + $env:WINDIR + "\System32\" + $ghost + ".exe") -Encoding ASCII
+
+    # A parent script starts a different script and a listener. Both stay their own lines.
+    $treeChild = Join-Path $Work 'dv_acc_tree_child.ps1'
+    $treeListen = Join-Path $Work 'dv_acc_tree_listen.ps1'
+    $treeParent = Join-Path $Work 'dv_acc_tree_parent.ps1'
+    $script:TreePortFile = Join-Path $Work 'tree-listen.port'
+    Set-Content -LiteralPath $treeChild -Value "while (`$true) { Start-Sleep -Seconds 2 }`r`n" -Encoding ASCII
+    @'
+$listener = New-Object System.Net.Sockets.TcpListener ([System.Net.IPAddress]::Loopback, 0)
+$listener.Start()
+Set-Content -LiteralPath $args[0] -Value $listener.LocalEndpoint.Port -Encoding ASCII
+while ($true) { Start-Sleep -Seconds 2 }
+'@ | Set-Content -LiteralPath $treeListen -Encoding ASCII
+    @'
+param($Child, $Listen, $PortFile)
+Start-Process -FilePath powershell.exe -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File', $Child) -WindowStyle Hidden
+Start-Process -FilePath powershell.exe -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File', $Listen, $PortFile) -WindowStyle Hidden
+while ($true) { Start-Sleep -Seconds 2 }
+'@ | Set-Content -LiteralPath $treeParent -Encoding ASCII
+    $null = Start-Child -FilePath 'powershell.exe' -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $treeParent, $treeChild, $treeListen, $script:TreePortFile)
+    $treeDeadline = (Get-Date).AddSeconds(15)
+    while ((Get-Date) -lt $treeDeadline) {
+        $treeHits = @(Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -and ($_.CommandLine -like '*dv_acc_tree_child.ps1*' -or $_.CommandLine -like '*dv_acc_tree_listen.ps1*') })
+        if ($treeHits.Count -ge 2) {
+            foreach ($hit in $treeHits) {
+                $proc = Get-Process -Id $hit.ProcessId -ErrorAction SilentlyContinue
+                if ($proc) { $Children.Add($proc) | Out-Null }
+            }
+            break
+        }
+        Start-Sleep -Milliseconds 200
+    }
+
+    # A short-repeat task launches run.py from an inner folder. The bot takes the task name; the repo, not the folder, is the project.
+    $SupRepo = Join-Path $Work 'sup-repo'
+    $EdgeRepo = Join-Path $Work 'edge-machine'
+    New-GitRepo $SupRepo
+    New-GitRepo $EdgeRepo
+    $deskDir = Join-Path $SupRepo 'desk'
+    New-Item -ItemType Directory -Force -Path $deskDir | Out-Null
+    Set-Content -LiteralPath (Join-Path $deskDir 'package.json') -Value '{"name":"desk"}' -Encoding ASCII
+    $deskPy = Join-Path $deskDir 'run.py'
+    Set-Content -LiteralPath $deskPy -Value "import time`r`nwhile True:`r`n    time.sleep(2)`r`n" -Encoding ASCII
+    $deskLaunch = Join-Path $SupRepo 'launch-desk.ps1'
+    Set-Content -LiteralPath $deskLaunch -Value ("`$env:DV_DESK = '{0}'`r`n" -f $deskPy) -Encoding ASCII
+    if ($py) {
+        Register-UserTask -Name $TaskDesk -ScriptPath $deskLaunch -RepeatMin 2 -NoStart
+        $nhlScript = Join-Path $Work 'dv_acc_nhl.ps1'
+        Set-Content -LiteralPath $nhlScript -Value "while (`$true) { Start-Sleep -Seconds 2 }`r`n" -Encoding ASCII
+        Register-UserTask -Name $TaskNhl -ScriptPath $nhlScript -NoStart
+        $deskCmd = Join-Path $SupRepo 'go.cmd'
+        Set-Content -LiteralPath $deskCmd -Value ("@echo off`r`nstart `"`" /b `"{0}`" `"{1}`"`r`n" -f $py, $deskPy) -Encoding ASCII
+        $deskHost = Start-Process -FilePath 'cmd.exe' -ArgumentList @('/c', $deskCmd) -WorkingDirectory $EdgeRepo -WindowStyle Hidden -PassThru
+        if (-not $deskHost.WaitForExit(20000)) { try { Stop-Process -Id $deskHost.Id -Force -ErrorAction SilentlyContinue } catch { } }
+        $deskDeadline = (Get-Date).AddSeconds(15)
+        while ((Get-Date) -lt $deskDeadline) {
+            $deskHits = @(Get-CimInstance Win32_Process | Where-Object { $_.Name -match '^(python|py)\.exe$' -and $_.CommandLine -and $_.CommandLine -like '*sup-repo*desk*run.py*' })
+            if ($deskHits.Count -ge 1) {
+                foreach ($hit in $deskHits) {
+                    $proc = Get-Process -Id $hit.ProcessId -ErrorAction SilentlyContinue
+                    if ($proc) { $Children.Add($proc) | Out-Null }
+                }
+                break
+            }
+            Start-Sleep -Milliseconds 200
+        }
+    }
+
+    New-Item -ItemType Directory -Force -Path $HomeRun | Out-Null
+    $hold = Join-Path $HomeRun 'hold.ps1'
+    Set-Content -LiteralPath $hold -Value "while (`$true) { Start-Sleep -Seconds 2 }`r`n" -Encoding ASCII
+    $null = Start-Child -FilePath 'powershell.exe' -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $hold) -WorkingDirectory $HomeRun
+    if ($py) {
+        New-Item -ItemType Directory -Force -Path $HomePtt | Out-Null
+        $ptt = Join-Path $HomePtt 'ptt.py'
+        Set-Content -LiteralPath $ptt -Value "import time`r`nwhile True:`r`n    time.sleep(2)`r`n" -Encoding ASCII
+        $null = Start-Child -FilePath $py -ArgumentList @($ptt) -WorkingDirectory $HomePtt
+    }
+    New-Item -ItemType Directory -Force -Path $RgbDir | Out-Null
+    Copy-Item -LiteralPath (Join-Path $env:WINDIR 'System32\cmd.exe') -Destination (Join-Path $RgbDir 'OpenRGB.exe') -Force
+    Register-UserTask -Name $TaskRgb -Execute (Join-Path $RgbDir 'OpenRGB.exe') -NoStart
+
     Start-Sleep -Seconds 3
 
     # Main accuracy snapshot
@@ -330,78 +790,278 @@ try {
     [void]$report.Add('----- vitals.txt -----')
     [void]$report.Add(($text -replace '(?m)^(Desktop Vitals)\s+\S+', '$1 <redacted>'))
 
-    $ai = Get-Section $text 'AI'
-    $scripts = Get-Section $text 'Scripts'
-    $starts = Get-Section $text 'Starts with Windows'
-    $sched = Get-Section $text 'Scheduled'
-
-    # Scripts expectations
+    # Script names anywhere on the board, with no Windows noise in the text.
     $scriptsOk = $true
-    if ($null -eq $scripts) { $scriptsOk = $false; [void]$script:Fn.Add('Scripts section missing') }
-    else {
-        if ($py) {
-            if (-not (Assert-InSection 'Scripts' $scripts 'dv_acc_py.py' 'Scripts')) { $scriptsOk = $false }
-            if (-not (Assert-InSection 'Scripts' $scripts 'http.server' 'Scripts')) { $scriptsOk = $false }
-        }
-        else { [void]$report.Add('SKIP python fixtures (no python)') }
-        if ($node) {
-            if (-not (Assert-InSection 'Scripts' $scripts 'dv_acc_node.js' 'Scripts')) { $scriptsOk = $false }
-        }
-        else { [void]$report.Add('SKIP node fixture (no node)') }
-        if (-not (Assert-InSection 'Scripts' $scripts 'dv_acc_ps.ps1' 'Scripts')) { $scriptsOk = $false }
-        if (-not (Assert-InSection 'Scripts' $scripts 'dv_acc_bat.bat' 'Scripts')) { $scriptsOk = $false }
+    if ($py) {
+        if ($text -notmatch 'dv_acc_py\.py') { $scriptsOk = $false; [void]$script:Fn.Add('missing dv_acc_py.py') }
+        if ($text -notmatch 'http\.server') { $scriptsOk = $false; [void]$script:Fn.Add('missing http.server') }
     }
-    if (-not (Assert-NoNoise 'Scripts' $scripts)) { $scriptsOk = $false }
+    else { [void]$report.Add('SKIP python fixtures (no python)') }
+    if ($node) {
+        if ($text -notmatch 'dv_acc_node\.js') { $scriptsOk = $false; [void]$script:Fn.Add('missing dv_acc_node.js') }
+    }
+    else { [void]$report.Add('SKIP node fixture (no node)') }
+    if ($text -notmatch 'dv_acc_ps\.ps1') { $scriptsOk = $false; [void]$script:Fn.Add('missing dv_acc_ps.ps1') }
+    if ($text -notmatch 'dv_acc_bat\.bat') { $scriptsOk = $false; [void]$script:Fn.Add('missing dv_acc_bat.bat') }
+    $scriptLines = @($text -split "`r?`n" | Where-Object { $_ -match 'dv_acc_(py\.py|node\.js|ps1|bat\.bat)|http\.server' })
+    if (-not (Assert-NoNoise 'scripts' ($scriptLines -join "`n"))) { $scriptsOk = $false }
     Write-Check 'scripts-cards' $scriptsOk
 
-    # Scheduled: running + failed
+    # Scheduled task names, with running or failed on that line.
     $schedOk = $true
-    if ($null -eq $sched) { $schedOk = $false; [void]$script:Fn.Add('Scheduled section missing') }
-    else {
-        if (-not (Assert-InSection 'Scheduled' $sched $TaskRun 'Scheduled')) { $schedOk = $false }
-        if (-not (Assert-InSection 'Scheduled' $sched $TaskFail 'Scheduled')) { $schedOk = $false }
-        if ($sched -notmatch '(?i)running') { $schedOk = $false; [void]$script:Fn.Add('Scheduled FN: no running result') }
-        if ($sched -notmatch '(?i)failed') { $schedOk = $false; [void]$script:Fn.Add('Scheduled FN: no failed result') }
-    }
-    if (-not (Assert-NoNoise 'Scheduled' $sched)) { $schedOk = $false }
-    Write-Check 'scheduled-cards' $schedOk
-
-    # Starts: shortcut present; disabled absent
-    $startsOk = $true
-    $startName = "DVAccStart$Stamp"
-    if ($null -eq $starts) {
-        # Empty Starts is allowed only if shortcut missing; treat as FN for our shortcut.
-        $startsOk = $false
-        [void]$script:Fn.Add('Starts with Windows section missing')
-    }
-    else {
-        if (-not (Assert-InSection 'Starts' $starts $startName 'Starts')) { $startsOk = $false }
-        if ($starts -match [regex]::Escape($DisabledName)) {
-            $startsOk = $false
-            [void]$script:Fp.Add("Starts FP: disabled $DisabledName shown")
+    $lines = @($text -split "`r?`n")
+    $runLine = @($lines | Where-Object { $_ -match [regex]::Escape($TaskRun) } | Select-Object -First 1)
+    $failLine = @($lines | Where-Object { $_ -match [regex]::Escape($TaskFail) } | Select-Object -First 1)
+    $runBlob = $runLine
+    $failBlob = $failLine
+    for ($i = 0; $i -lt $lines.Length; $i++) {
+        if ($lines[$i] -match [regex]::Escape($TaskRun)) {
+            $runBlob = $lines[$i]
+            if ($i -gt 0) { $runBlob = $lines[$i - 1] + ' ' + $runBlob }
+            if ($i + 1 -lt $lines.Length) { $runBlob = $runBlob + ' ' + $lines[$i + 1] }
+            break
         }
     }
-    if (-not (Assert-NoNoise 'Starts' $starts)) { $startsOk = $false }
+    for ($i = 0; $i -lt $lines.Length; $i++) {
+        if ($lines[$i] -match [regex]::Escape($TaskFail)) {
+            $failBlob = $lines[$i]
+            if ($i -gt 0) { $failBlob = $lines[$i - 1] + ' ' + $failBlob }
+            break
+        }
+    }
+    if (-not $runLine) { $schedOk = $false; [void]$script:Fn.Add("missing $TaskRun") }
+    elseif ($runBlob -notmatch '(?i)running') { $schedOk = $false; [void]$script:Fn.Add("$TaskRun line is not running") }
+    if (-not $failLine) { $schedOk = $false; [void]$script:Fn.Add("missing $TaskFail") }
+    elseif ($failBlob -notmatch '(?i)failed') { $schedOk = $false; [void]$script:Fn.Add("$TaskFail line is not failed") }
+    $taskText = (@($runBlob) + @($failBlob)) -join "`n"
+    if (-not (Assert-NoNoise 'tasks' $taskText)) { $schedOk = $false }
+    Write-Check 'scheduled-cards' $schedOk
+
+    # Disabled startup name stays off the board. The shortcut is still created and cleaned up.
+    $startsOk = $true
+    if ($text -match [regex]::Escape($DisabledName)) {
+        $startsOk = $false
+        [void]$script:Fp.Add("disabled $DisabledName shown")
+    }
     Write-Check 'starts-cards' $startsOk
 
-    # AI: fake model name stem
+    # Fake model stem, or the collapsed on-disk line.
     $modelStem = "dv-acc-fake-$Stamp"
     $aiOk = $true
-    if ($null -eq $ai -or $ai -eq '') {
+    if ($text -notmatch [regex]::Escape($modelStem) -and $text -notmatch 'on disk') {
         $aiOk = $false
-        [void]$script:Fn.Add("AI FN: missing model $modelStem")
+        [void]$script:Fn.Add("missing model $modelStem")
     }
-    elseif ($ai -notmatch [regex]::Escape($modelStem)) {
-        $aiOk = $false
-        [void]$script:Fn.Add("AI FN: missing model $modelStem")
+    if ($ollama -and $text -notmatch '(?i)ollama') {
+        [void]$report.Add('NOTE ollama started but not labeled (may need serve settle)')
     }
-    if ($ollama -and $ai -notmatch '(?i)ollama') {
-        [void]$report.Add('NOTE ollama started but not labeled in AI (may need serve settle)')
-    }
-    if ($llama -and $ai -notmatch '(?i)llama') {
-        [void]$report.Add('NOTE llama-server started but not labeled in AI')
+    if ($llama -and $text -notmatch '(?i)llama') {
+        [void]$report.Add('NOTE llama-server started but not labeled')
     }
     Write-Check 'ai-model' $aiOk
+
+    # Live board: agents, orphan bot, listen port, failed task, mapped model. No Windows noise, no duplicate ids.
+    $v2Ok = $true
+    $v2Detail = ''
+    $tp = 0
+    $fpN = 0
+    try {
+        if (-not $nodeCmd) { throw 'node is required for agent fixtures' }
+        $portDeadline = (Get-Date).AddSeconds(10)
+        while (-not (Test-Path -LiteralPath $ListenPortFile) -and (Get-Date) -lt $portDeadline) { Start-Sleep -Milliseconds 200 }
+        if (-not (Test-Path -LiteralPath $ListenPortFile)) { throw 'listen port file missing' }
+        $listenPort = [int](Get-Content -LiteralPath $ListenPortFile -Raw).Trim()
+        $board = Invoke-BoardJson -HomeDir $AgentHome
+        $things = @(Get-Things $board)
+        $seenIds = @{}
+        $toolName = 'dv-tool-' + $Stamp
+        foreach ($t in $things) {
+            if ($seenIds.ContainsKey($t.Id)) { $v2Ok = $false; $fpN++; [void]$script:Fp.Add("duplicate id $($t.Id)") }
+            else { $seenIds[$t.Id] = $true }
+            $blob = "$($t.Name) $($t.Why) $($t.Detail) $($t.Project)"
+            if (-not (Assert-NoNoise 'v2' $blob)) { $v2Ok = $false; $fpN++ }
+            if ($t.Name -eq $toolName -or $t.Group -eq $toolName) {
+                $v2Ok = $false
+                $fpN++
+                [void]$script:Fp.Add('tool folder named as a model')
+            }
+        }
+        $claude = @($things | Where-Object { $_.Name -eq 'Claude Code' -and $_.Project -eq 'repo-a' })
+        $cursor = @($things | Where-Object { $_.Name -eq 'Cursor agent' -and $_.Project -eq 'repo-b' })
+        $bot = @($things | Where-Object { $_.Name -eq 'dv_acc_bot.ps1' -and $_.Kind -eq 'bot' })
+        $server = @($things | Where-Object { $_.Kind -eq 'server' -and ($_.Ports -contains $listenPort) })
+        $failed = @($things | Where-Object { $_.Name -eq $TaskFail -and $_.State -eq 'failed' })
+        $model = @($things | Where-Object { $_.Name -eq 'fixture-weights' -and $_.Kind -eq 'model' -and $_.State -eq 'running' })
+        $checks = @(
+            @{ N = 'claude'; Ok = ($claude.Count -eq 1 -and [int]$claude[0].Count -ge 2 -and $claude[0].State -eq 'working' -and $claude[0].Branch -eq 'feature-x' -and $claude[0].Detail -match 'editing' -and $claude[0].Detail -match 'install\.ps1') },
+            @{ N = 'cursor'; Ok = ($cursor.Count -eq 1 -and $cursor[0].Branch -eq 'feature-x' -and $cursor[0].Why -match 'grok-4\.7-high') },
+            @{ N = 'bot'; Ok = ($bot.Count -eq 1 -and $bot[0].Project -eq 'bots-repo') },
+            @{ N = 'server'; Ok = ($server.Count -ge 1) },
+            @{ N = 'task'; Ok = ($failed.Count -ge 1) },
+            @{ N = 'model'; Ok = ($model.Count -ge 1) }
+        )
+        foreach ($c in $checks) {
+            if ($c.Ok) { $tp++ }
+            else { $v2Ok = $false; [void]$script:Fn.Add("v2 missing $($c.N)") }
+        }
+        $miss = @($checks | Where-Object { -not $_.Ok } | ForEach-Object { $_.N })
+        $nodeLine = @($things | Where-Object { $_.Name -eq 'dv_acc_node.js' })
+        if ($nodeLine.Count -lt 1) { $v2Ok = $false; [void]$script:Fn.Add('v2 node script renamed or missing') }
+        $den = $tp + $fpN
+        $prec = if ($den -eq 0) { 0 } else { [math]::Round($tp / $den, 3) }
+        $rec = [math]::Round($tp / 6.0, 3)
+        $v2Detail = "precision=$prec ($tp/$den) recall=$rec ($tp/6) missing=$($miss -join ',')"
+        if ($tp -lt 6 -or $fpN -gt 0) { $v2Ok = $false }
+        $idle = @($things | Where-Object { $_.Name -eq 'Claude Code' -and $_.Project -eq 'idle-repo' })
+        $idleShown = if ($idle.Count -ge 1) { "state=$($idle[0].State) detail=$($idle[0].Detail)" } else { 'missing' }
+        if ($idle.Count -ne 1 -or $idle[0].Kind -ne 'agent' -or $idle[0].State -ne 'idle' -or $idle[0].Detail -notmatch ('done ' + [char]0x00B7 + ' \d+m ago')) {
+            $v2Ok = $false
+            [void]$script:Fn.Add("idle prompt $idleShown")
+        }
+        if ($board.headline.text -match 'waiting on you') { $v2Ok = $false; [void]$script:Fn.Add('headline counts a prompt as waiting') }
+        [void]$report.Add($v2Detail)
+        if (-not $v2Ok) {
+            $names = ($things | ForEach-Object { "$($_.Kind):$($_.Name):$($_.Project):$($_.State):$($_.Detail)" }) -join ' | '
+            $v2Detail = "$v2Detail $((@($script:Fn)) -join '; ') things=$names"
+        }
+    }
+    catch {
+        $v2Ok = $false
+        if (-not $v2Detail) { $v2Detail = $_.Exception.Message }
+        else { $v2Detail = "$v2Detail; $($_.Exception.Message)" }
+    }
+    Write-Check 'v2-board' $v2Ok $v2Detail
+
+    # Real machine cases: one bot per script, one gateway server with its port, no idle shell,
+    # no Windows project, no temp installer, no phantom pin.
+    $boxOk = $true
+    $boxDetail = ''
+    try {
+        $gatePortFile = Join-Path $GateRepo 'port.txt'
+        $portDeadline = (Get-Date).AddSeconds(10)
+        while (-not (Test-Path -LiteralPath $gatePortFile) -and (Get-Date) -lt $portDeadline) { Start-Sleep -Milliseconds 200 }
+        if (-not (Test-Path -LiteralPath $gatePortFile)) { throw 'gateway port file missing' }
+        $gatePort = [int](Get-Content -LiteralPath $gatePortFile -Raw).Trim()
+        $board = Invoke-BoardJson -HomeDir $AgentHome
+        $things = @(Get-Things $board)
+        $blobOf = {
+            param($t)
+            return "$($t.Name) $($t.Detail) $($t.Why) $($t.Id) $($t.Project) $($t.Group)"
+        }
+        if ($py) {
+            $shim = @($things | Where-Object { $_.Name -eq $TaskShim -and $_.Kind -eq 'bot' })
+            if ($shim.Count -ne 1) { $boxOk = $false; [void]$script:Fn.Add("shim lines=$($shim.Count)") }
+            elseif ($shim[0].State -ne 'running' -or $shim[0].Project -ne 'shim-repo' -or $shim[0].Detail -match [regex]::Escape($TaskShim) -or $shim[0].Detail -notmatch 'works every|wrote beat\.txt' -or $shim[0].Detail -notmatch 'next ') {
+                $boxOk = $false
+                [void]$script:Fn.Add("shim kind=$($shim[0].Kind) state=$($shim[0].State) project=$($shim[0].Project) detail=$($shim[0].Detail)")
+            }
+            if (@($things | Where-Object { $_.Kind -eq 'task' -and $_.Name -eq $TaskShim }).Count -ne 0) { $boxOk = $false; [void]$script:Fn.Add('shim task is its own line') }
+        }
+        else { [void]$script:Fn.Add('python missing for shim'); $boxOk = $false }
+        $gate = @($things | Where-Object { $_.Name -eq 'gateway' -and $_.Kind -eq 'server' })
+        if ($gate.Count -ne 1 -or -not ($gate[0].Ports -contains $gatePort) -or $gate[0].Detail -notmatch [regex]::Escape($TaskGate) -or @($things | Where-Object { $_.Ports -contains $gatePort }).Count -ne 1) {
+            $boxOk = $false
+            $shown = if ($gate.Count -ge 1) { "ports=$($gate[0].Ports -join ',') detail=$($gate[0].Detail)" } else { 'none' }
+            [void]$script:Fn.Add("gateway count=$($gate.Count) $shown")
+        }
+        if (@($things | Where-Object { $_.Name -eq $TaskGate }).Count -ne 0) { $boxOk = $false; [void]$script:Fn.Add('gateway task is its own line') }
+        $idleHit = @($things | Where-Object { (& $blobOf $_) -match [regex]::Escape($idleMarker) })
+        if ($idleHit.Count -ne 0) { $boxOk = $false; [void]$script:Fp.Add('idle shell listed') }
+        $wind = @($things | Where-Object { $_.Name -eq 'dv_acc_windir.ps1' })
+        if ($wind.Count -ne 1 -or $wind[0].Project -ne 'win-cwd-repo') {
+            $boxOk = $false
+            $shown = if ($wind.Count -ge 1) { $wind[0].Project } else { 'missing' }
+            [void]$script:Fn.Add("windir project=$shown")
+        }
+        $badGroup = @($things | Where-Object { $_.Project -match '^(Windows|system32|SysWOW64|WINDOWS)$' -or $_.Group -match '^(Windows|system32|SysWOW64|WINDOWS)$' })
+        if ($badGroup.Count -ne 0) { $boxOk = $false; [void]$script:Fp.Add('windows cwd became a project') }
+        $setupName = [System.IO.Path]::GetFileNameWithoutExtension($SetupExe)
+        if (@($things | Where-Object { $_.Name -eq $setupName -or $_.Name -like "$setupName*" }).Count -ne 0) { $boxOk = $false; [void]$script:Fp.Add('temp installer listed') }
+        if (@($things | Where-Object { $_.Name -eq $ghost }).Count -ne 0) { $boxOk = $false; [void]$script:Fp.Add('phantom pin listed') }
+        if (@($things | Where-Object { $_.Name -eq 'DefenderSessionHelper' -or $_.Name -eq 'HostedComputeAgent' -or ($_.Name -eq 'hosted-compute-agent' -and $_.Kind -eq 'bot') }).Count -ne 0) {
+            $boxOk = $false; [void]$script:Fp.Add('service exe listed as a bot')
+        }
+        if (@($things | Where-Object { $_.Kind -eq 'task' -and $_.State -eq 'ended' }).Count -ne 0) { $boxOk = $false; [void]$script:Fp.Add('successful task marked ended') }
+        if (@($things | Where-Object { $_.Detail -match 'works on its own' }).Count -ne 0) { $boxOk = $false; [void]$script:Fp.Add('works on its own') }
+        if (@($things | Where-Object { $_.Group -eq 'Other' }).Count -ne 0) { $boxOk = $false; [void]$script:Fp.Add('project titled Other') }
+        $splitNode = @($things | Where-Object { $_.Name -eq 'node' -and $_.Kind -eq 'server' -and ($_.Project -eq 'gate-repo' -or $_.Folder -like '*gate-repo*') })
+        if ($splitNode.Count -ne 0) { $boxOk = $false; [void]$script:Fp.Add('gateway node is its own server') }
+        if ($py) {
+            $desk = @($things | Where-Object { $_.Name -eq $DeskShown -and $_.Kind -eq 'bot' })
+            if ($desk.Count -ne 1 -or $desk[0].Project -ne 'sup-repo') {
+                $boxOk = $false
+                $shown = if ($desk.Count -ge 1) { "project=$($desk[0].Project) n=$($desk.Count)" } else { 'missing' }
+                [void]$script:Fn.Add("desk bot $shown")
+            }
+            if (@($things | Where-Object { $_.Kind -eq 'task' -and $_.Name -eq $TaskDesk }).Count -ne 0) { $boxOk = $false; [void]$script:Fn.Add('desk task is its own line') }
+            if (@($things | Where-Object { $_.Project -eq 'desk' -or $_.Project -eq 'edge-machine' }).Count -ne 0) { $boxOk = $false; [void]$script:Fp.Add('inner folder or interpreter repo used as project') }
+        }
+        $runners = @($things | Where-Object { $_.Name -eq 'hold.ps1' })
+        if ($runners.Count -ne 1 -or $runners[0].Project -ne ('dv-acc-runners-' + $Stamp)) {
+            $boxOk = $false
+            $shown = if ($runners.Count -ge 1) { "project=$($runners[0].Project) n=$($runners.Count)" } else { 'missing' }
+            [void]$script:Fn.Add("home script $shown")
+        }
+        if ($py) {
+            $pttLine = @($things | Where-Object { $_.Name -eq 'ptt.py' })
+            if ($pttLine.Count -ne 1 -or $pttLine[0].Project -ne ('dv-acc-ptt-' + $Stamp)) {
+                $boxOk = $false
+                $shown = if ($pttLine.Count -ge 1) { "project=$($pttLine[0].Project) n=$($pttLine.Count)" } else { 'missing' }
+                [void]$script:Fn.Add("home python $shown")
+            }
+        }
+        $rgb = @($things | Where-Object { $_.Name -eq $TaskRgb -and $_.Kind -eq 'task' })
+        if ($rgb.Count -ne 1 -or $rgb[0].Group -ne 'Tasks' -or $rgb[0].Project -eq 'Downloads') {
+            $boxOk = $false
+            $shown = if ($rgb.Count -ge 1) { "group=$($rgb[0].Group) project=$($rgb[0].Project)" } else { 'missing' }
+            [void]$script:Fn.Add("downloads task $shown")
+        }
+        if (@($things | Where-Object { $_.Project -in @('Documents', 'Downloads', 'Desktop', 'OneDrive') -or $_.Group -in @('Documents', 'Downloads', 'Desktop', 'OneDrive') }).Count -ne 0) {
+            $boxOk = $false; [void]$script:Fp.Add('home folder used as a project')
+        }
+        if ($text -match '00001-of-') { $boxOk = $false; [void]$script:Fp.Add('split shards counted separately') }
+        if ($text -notmatch [regex]::Escape('dv-acc-split-' + $Stamp)) { $boxOk = $false; [void]$script:Fn.Add('split model missing from the disk line') }
+        if ($text -notmatch [regex]::Escape('dv-acc-llm-' + $Stamp)) { $boxOk = $false; [void]$script:Fn.Add('model folder missing from the disk line') }
+        if ($text -match 'mmproj-weights' -or $text -match 'dv-acc-pack' -or $text -match 'dv-acc-mtp') { $boxOk = $false; [void]$script:Fp.Add('side file or tool pack counted as a model') }
+        $wrongWrite = @($things | Where-Object { $_.Name -ne 'dv_acc_listen.ps1' -and (($_.Detail + ' ' + $_.Why) -match 'wrote listen\.port') })
+        if ($wrongWrite.Count -ne 0) {
+            $boxOk = $false
+            [void]$script:Fp.Add('listen.port credited to ' + (($wrongWrite | ForEach-Object { $_.Name }) -join ','))
+        }
+        if (-not $boxOk) {
+            $boxDetail = ((@($script:Fn) + @($script:Fp)) -join '; ')
+            $names = ($things | ForEach-Object { "$($_.Kind):$($_.Name):$($_.Project):$($_.State):$($_.Detail)" }) -join ' | '
+            $boxDetail = "$boxDetail things=$names"
+        }
+    }
+    catch {
+        $boxOk = $false
+        $boxDetail = $_.Exception.Message
+    }
+    Write-Check 'real-box' $boxOk $boxDetail
+
+    # Parent script's child script and listening child each stay on the board.
+    $treeOk = $false
+    $treeDetail = ''
+    try {
+        if (-not (Test-Path -LiteralPath $script:TreePortFile)) { throw 'tree listen port file missing' }
+        $treePort = [int](Get-Content -LiteralPath $script:TreePortFile -Raw).Trim()
+        $treeBoard = Invoke-BoardJson -HomeDir $AgentHome
+        $treeThings = @(Get-Things $treeBoard)
+        $treeChildLine = @($treeThings | Where-Object { $_.Name -eq 'dv_acc_tree_child.ps1' })
+        $treeListenLine = @($treeThings | Where-Object { $_.Name -eq 'dv_acc_tree_listen.ps1' })
+        $treeParentLine = @($treeThings | Where-Object { $_.Name -eq 'dv_acc_tree_parent.ps1' })
+        if ($treeChildLine.Count -ne 1) { throw "child lines=$($treeChildLine.Count)" }
+        if ($treeListenLine.Count -ne 1 -or $treeListenLine[0].Kind -ne 'server' -or -not ($treeListenLine[0].Ports -contains $treePort)) {
+            $shown = if ($treeListenLine.Count -ge 1) { "kind=$($treeListenLine[0].Kind) ports=$($treeListenLine[0].Ports -join ',')" } else { 'missing' }
+            throw "listen $shown"
+        }
+        if ($treeParentLine.Count -lt 1) { throw 'parent script missing' }
+        $treeOk = $true
+        $treeDetail = "child + listen :$treePort"
+    }
+    catch { $treeDetail = $_.Exception.Message }
+    Write-Check 'tree-rollup' $treeOk $treeDetail
 
     # Exit mid-scan: kill during snapshot; host must stay clean and a later snapshot must work
     $midOk = $false
@@ -441,14 +1101,40 @@ try {
         $need = [Math]::Max(0, 1001 - $before)
         # Cap spawn on CI to avoid runner OOM; still push past 1000 when feasible.
         $spawn = [Math]::Min($need, 400)
-        for ($i = 0; $i -lt $spawn; $i++) {
-            # Do not name this $fp: PowerShell variables are case-insensitive and would clobber $script:Fp.
+        $spawned = 0
+        # The pass-time gate is at about 300 processes. The crash check still raises the count after that.
+        while ($spawned -lt $spawn) {
+            $have = @(Get-Process -ErrorAction SilentlyContinue).Count
+            if ($have -ge 300 -and $spawned -gt 0) { break }
+            $batch = [Math]::Min(20, $spawn - $spawned)
+            for ($i = 0; $i -lt $batch; $i++) {
+                # Do not name this $fp: PowerShell variables are case-insensitive and would clobber $script:Fp.
+                $floodProc = Start-Process -FilePath 'cmd.exe' -ArgumentList @('/c', 'ping -n 60 127.0.0.1 >nul') -PassThru -WindowStyle Hidden
+                $Flood.Add($floodProc) | Out-Null
+            }
+            $spawned += $batch
+        }
+        Start-Sleep -Seconds 1
+        $mid = @(Get-Process -ErrorAction SilentlyContinue).Count
+        $bench = $null
+        $benchErr = ''
+        try { $bench = Invoke-Bench }
+        catch { $benchErr = $_.Exception.Message }
+        if ($bench) {
+            $p50 = [double]$bench.P50
+            $passDetail = "p50_ms=$($bench.P50) n=$($bench.N) procs=$($bench.Procs); at=$mid"
+            Write-Check 'pass-time' ($p50 -le 50) $passDetail
+            [void]$report.Add($passDetail)
+        }
+        else { Write-Check 'pass-time' $false $benchErr }
+        while ($spawned -lt $spawn) {
             $floodProc = Start-Process -FilePath 'cmd.exe' -ArgumentList @('/c', 'ping -n 60 127.0.0.1 >nul') -PassThru -WindowStyle Hidden
             $Flood.Add($floodProc) | Out-Null
+            $spawned++
         }
         Start-Sleep -Seconds 1
         $after = @(Get-Process -ErrorAction SilentlyContinue).Count
-        $floodDetail = "procs $before -> $after (spawned $spawn)"
+        $floodDetail = "procs $before -> $after (spawned $spawned)"
         $null = Invoke-Snapshot -Dir (Join-Path $Work 'snap-flood') -TimeoutMs 90000
         if ($after -lt 1000 -and $spawn -eq $need) {
             # Could not reach 1000 on this host; still required no crash.
@@ -464,7 +1150,7 @@ try {
     Clear-Fixtures
     $leftOk = $true
     $leftDetail = ''
-    foreach ($n in @($TaskRun, $TaskFail, $TaskNoise)) {
+    foreach ($n in @($TaskRun, $TaskFail, $TaskNoise, $TaskShim, $TaskGate, $TaskDesk, $TaskNhl, $TaskRgb)) {
         $t = Get-ScheduledTask -TaskName $n -ErrorAction SilentlyContinue
         if ($t) { $leftOk = $false; $leftDetail = "leftover task $n" }
     }
@@ -472,6 +1158,8 @@ try {
     $runLeft = Get-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name $DisabledName -ErrorAction SilentlyContinue
     if ($runLeft) { $leftOk = $false; $leftDetail = 'leftover disabled Run key' }
     if ($ModelCreated -and (Test-Path -LiteralPath $ModelFile)) { $leftOk = $false; $leftDetail = 'leftover fake model' }
+    if ((Test-Path -LiteralPath $SplitA) -or (Test-Path -LiteralPath $SplitB) -or (Test-Path -LiteralPath $LlmDir)) { $leftOk = $false; $leftDetail = 'leftover split model' }
+    if ((Test-Path -LiteralPath $HomeRun) -or (Test-Path -LiteralPath $RgbDir) -or (Test-Path -LiteralPath $BundleDir)) { $leftOk = $false; $leftDetail = 'leftover home fixture' }
     Write-Check 'cleanup' $leftOk $leftDetail
 }
 catch {

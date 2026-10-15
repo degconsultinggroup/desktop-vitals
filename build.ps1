@@ -17,10 +17,11 @@ New-Item -ItemType Directory -Force -Path $bin | Out-Null
 Get-Process DesktopVitals -ErrorAction SilentlyContinue | Stop-Process -Force
 $refs = @(
     "$wpf\PresentationFramework.dll", "$wpf\PresentationCore.dll", "$wpf\WindowsBase.dll",
-    "$fw\System.Xaml.dll", "$fw\System.Drawing.dll", "$fw\System.dll", "$fw\System.Core.dll", "$fw\Microsoft.CSharp.dll"
+    "$fw\System.Xaml.dll", "$fw\System.Drawing.dll", "$fw\System.dll", "$fw\System.Xml.dll", "$fw\System.Core.dll", "$fw\Microsoft.CSharp.dll", "$fw\System.Runtime.Serialization.dll"
 ) | ForEach-Object { "/r:$_" }
-& $csc /nologo /target:winexe /optimize+ /warnaserror+ /platform:x64 `
+$cscOut = & $csc /nologo /target:winexe /optimize+ /warnaserror+ /platform:x64 `
     "/out:$bin\DesktopVitals.exe" "/win32icon:$d\assets\vitals.ico" "/win32manifest:$d\src\app.manifest" `
-    @refs "$d\src\DesktopVitals.cs"
-if ($LASTEXITCODE -ne 0) { throw 'Build failed.' }
+    @refs "$d\src\Native.cs" "$d\src\Engine.cs" "$d\src\Facts.cs" "$d\src\Window.cs" "$d\src\App.cs" 2>&1 | Out-String
+if ($LASTEXITCODE -ne 0) { throw ("Build failed.`r`n" + $cscOut) }
+if ($cscOut) { Write-Output $cscOut }
 Write-Host "Built $bin\DesktopVitals.exe"

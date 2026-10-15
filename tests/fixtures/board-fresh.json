@@ -1,0 +1,22 @@
+{
+  "name": "Laptop",
+  "strip": {
+    "cpu": 8,
+    "ram_used_gb": 5,
+    "ram_total_gb": 16,
+    "disk_free_gb": 148,
+    "disk_total_gb": 256,
+    "threads": [18, 7, 12, 4, 9, 3, 6, 4],
+    "core_groups": [
+      {"kind": "core", "threads": [0, 1]},
+      {"kind": "core", "threads": [2, 3]},
+      {"kind": "core", "threads": [4, 5]},
+      {"kind": "core", "threads": [6, 7]}
+    ]
+  },
+  "headline": {
+    "text": "Nothing of yours is running.",
+    "needs_you": false
+  },
+  "groups": []
+}

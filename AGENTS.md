@@ -1,11 +1,11 @@
 # Desktop Vitals
 
-Desktop Vitals is a small Windows window that shows what this PC is doing: scripts, bots, scheduled tasks, local AI, and system load.
-It only reads. It does not start or stop other programs.
+Desktop Vitals is a small Windows window that shows what this PC is doing: agents, the things you started, models, and system load.
+It only reads.
 
 ## Install
 
-In PowerShell, run:
+Paste this link into your agent, or run:
 
 ```powershell
 irm https://raw.githubusercontent.com/degconsultinggroup/desktop-vitals/main/install.ps1 | iex
@@ -23,25 +23,29 @@ To install without piping the script into `iex`:
 
 ```powershell
 & "$env:LOCALAPPDATA\Programs\DesktopVitals\DesktopVitals.exe" --version
-& "$env:LOCALAPPDATA\Programs\DesktopVitals\DesktopVitals.exe" --json
-```
-
-`--version` prints `0.1.1`. `--json` prints UTF-8 JSON and exits. If `--json` prints nothing, run it with a file path and read that file:
-
-```powershell
 & "$env:LOCALAPPDATA\Programs\DesktopVitals\DesktopVitals.exe" --json "$env:TEMP\desktop-vitals.json"
 ```
 
-The JSON has `strip` (processor, memory, graphics, video memory, disk) and `lines` (section, name, kind, state, cpu, ram_mb, vram_mb, folder).
+`--version` prints `0.2.0`. `--json` prints the board as UTF-8 JSON and exits.
+
+The board has `name`, `strip`, `headline`, and `groups`. `strip` is processor, memory, graphics, video memory, disk, and `threads`. `headline` has `text` and `needs_you`. Each group has `title`, `kind` (`agents`, `project`, `models`, `other`, or `ended`), and `things`.
+
+A thing has `id`, `name`, `kind`, `state`, `project`, `branch`, `folder`, `ports`, `cpu`, `ram_mb`, `vram_mb`, `count`, `since`, `detail`, `why`, and `pinned`.
+
+If `--json` prints nothing, read the file path you passed.
 
 ## Launch
 
-The install command starts the app. To open it again, run the exe or press Ctrl+Alt+P.
-Click the name to rename it, or run `DesktopVitals.exe --name "Studio PC"`.
+The one-liner starts the app. To open it again, run the exe or press Ctrl+Alt+P.
+Click the PC name to rename it, or run `DesktopVitals.exe --name "Studio PC"`.
+
+## Preferences
+
+`--name`, `--rename <id> <name>`, `--hide <id>`, `--pin <id>`, and `--unpin <id>` write `%APPDATA%\DesktopVitals\prefs.txt`.
 
 ## Tell the human
 
-Tell them Desktop Vitals is installed and open. Summarize `strip` and the `lines` from `--json`.
+Tell them Desktop Vitals is installed and open. Summarize `strip`, `headline`, and the `groups` from `--json`.
 
 ## Uninstall
 

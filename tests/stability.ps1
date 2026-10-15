@@ -15,10 +15,13 @@ $ResultsDir = Join-Path $Root 'tests\results'
 $ConfigDir = Join-Path $env:APPDATA 'DesktopVitals'
 $ConfigFile = Join-Path $ConfigDir 'watch.txt'
 $ReviewFile = Join-Path $ConfigDir 'review.txt'
+$PrefsFile = Join-Path $ConfigDir 'prefs.txt'
 $ConfigBackup = Join-Path $Work 'watch.txt.bak'
 $ReviewBackup = Join-Path $Work 'review.txt.bak'
+$PrefsBackup = Join-Path $Work 'prefs.txt.bak'
 $HadConfig = $false
 $HadReview = $false
+$HadPrefs = $false
 $Children = New-Object System.Collections.Generic.List[System.Diagnostics.Process]
 
 Add-Type @"
@@ -36,7 +39,11 @@ public static class DvStabNative {
 function Write-Check {
     param([string]$Name, [bool]$Ok, [string]$Detail = '')
     $tag = if ($Ok) { 'PASS' } else { 'FAIL' }
-    if (-not $Ok) { $script:FailCount++ }
+    if (-not $Ok) {
+        $script:FailCount++
+        $flat = if ($Detail) { $Detail -replace '[\r\n]+', ' ' } else { 'failed' }
+        Write-Host ("::error::{0}: {1}" -f $Name, $flat)
+    }
     if ($Detail) { Write-Host ("{0} {1} ({2})" -f $tag, $Name, $Detail) }
     else { Write-Host ("{0} {1}" -f $tag, $Name) }
 }
@@ -50,6 +57,10 @@ function Save-Config {
     if (Test-Path -LiteralPath $ReviewFile) {
         $script:HadReview = $true
         Copy-Item -LiteralPath $ReviewFile -Destination $ReviewBackup -Force
+    }
+    if (Test-Path -LiteralPath $PrefsFile) {
+        $script:HadPrefs = $true
+        Copy-Item -LiteralPath $PrefsFile -Destination $PrefsBackup -Force
     }
 }
 
@@ -66,6 +77,12 @@ function Restore-Config {
     }
     elseif (Test-Path -LiteralPath $ReviewFile) {
         Remove-Item -LiteralPath $ReviewFile -Force -ErrorAction SilentlyContinue
+    }
+    if ($script:HadPrefs -and (Test-Path -LiteralPath $PrefsBackup)) {
+        Copy-Item -LiteralPath $PrefsBackup -Destination $PrefsFile -Force
+    }
+    elseif (Test-Path -LiteralPath $PrefsFile) {
+        Remove-Item -LiteralPath $PrefsFile -Force -ErrorAction SilentlyContinue
     }
 }
 
@@ -121,9 +138,9 @@ function Invoke-Snapshot {
     New-Item -ItemType Directory -Force -Path $Dir | Out-Null
     $exe = Join-Path $Root 'bin\DesktopVitals.exe'
     $p = Start-Process -FilePath $exe -ArgumentList @('--snapshot', $Dir) -PassThru -WindowStyle Hidden
-    if (-not $p.WaitForExit(40000)) {
+    if (-not $p.WaitForExit(70000)) {
         try { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue } catch { }
-        throw 'snapshot exceeded 40 seconds'
+        throw 'snapshot exceeded 70 seconds'
     }
     if ($p.ExitCode -ne 0) { throw "snapshot exit $($p.ExitCode)" }
     $txt = Join-Path $Dir 'vitals.txt'
@@ -169,7 +186,7 @@ try {
 
     $exe = Join-Path $Root 'bin\DesktopVitals.exe'
 
-    # --- Edge: binary / corrupt watch.txt ---
+    # --- Edge: binary / corrupt prefs.txt ---
     $binOk = $false
     $binDetail = ''
     try {
@@ -178,24 +195,24 @@ try {
         (New-Object Random 1).NextBytes($bytes)
         # Sprinkle NULs and high bytes so this is not valid UTF-8 text.
         $bytes[0] = 0; $bytes[1] = 0; $bytes[2] = 0xff; $bytes[3] = 0xfe
-        [System.IO.File]::WriteAllBytes($ConfigFile, $bytes)
-        $null = Invoke-Snapshot -Dir (Join-Path $Work 'snap-binary-watch')
+        [System.IO.File]::WriteAllBytes($PrefsFile, $bytes)
+        $null = Invoke-Snapshot -Dir (Join-Path $Work 'snap-binary-prefs')
         $binOk = $true
     }
     catch { $binDetail = $_.Exception.Message }
     finally { Restore-Config }
-    Write-Check 'binary-watch-txt' $binOk $binDetail
-    $report.checks['binary-watch-txt'] = @{ ok = $binOk; detail = $binDetail }
+    Write-Check 'binary-prefs' $binOk $binDetail
+    $report.checks['binary-prefs'] = @{ ok = $binOk; detail = $binDetail }
 
-    # --- Edge: locked watch.txt ---
+    # --- Edge: locked prefs.txt ---
     $lockOk = $false
     $lockDetail = ''
     $lockStream = $null
     try {
         New-Item -ItemType Directory -Force -Path $ConfigDir | Out-Null
-        [System.IO.File]::WriteAllText($ConfigFile, "# locked`nPinned = notepad.exe`n")
-        $lockStream = [System.IO.File]::Open($ConfigFile, [System.IO.FileMode]::Open, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::None)
-        $null = Invoke-Snapshot -Dir (Join-Path $Work 'snap-locked-watch')
+        [System.IO.File]::WriteAllText($PrefsFile, "# locked`nPinned = notepad.exe`n")
+        $lockStream = [System.IO.File]::Open($PrefsFile, [System.IO.FileMode]::Open, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::None)
+        $null = Invoke-Snapshot -Dir (Join-Path $Work 'snap-locked-prefs')
         $lockOk = $true
     }
     catch { $lockDetail = $_.Exception.Message }
@@ -203,8 +220,8 @@ try {
         if ($lockStream) { $lockStream.Dispose() }
         Restore-Config
     }
-    Write-Check 'locked-watch-txt' $lockOk $lockDetail
-    $report.checks['locked-watch-txt'] = @{ ok = $lockOk; detail = $lockDetail }
+    Write-Check 'locked-prefs' $lockOk $lockDetail
+    $report.checks['locked-prefs'] = @{ ok = $lockOk; detail = $lockDetail }
 
     # --- Edge: second instance returns; one process remains ---
     $secondOk = $false
@@ -238,11 +255,6 @@ try {
     $samples = New-Object System.Collections.Generic.List[object]
     try {
         Stop-Own
-        # Reviewed so first-run review does not block the live dashboard.
-        New-Item -ItemType Directory -Force -Path $ConfigDir | Out-Null
-        [System.IO.File]::WriteAllText((Join-Path $ConfigDir 'review.txt'), "@reviewed = 1`n")
-        if (Test-Path -LiteralPath $ConfigFile) { Remove-Item -LiteralPath $ConfigFile -Force -ErrorAction SilentlyContinue }
-
         $live = Start-Process -FilePath $exe -PassThru -WindowStyle Normal
         $Children.Add($live) | Out-Null
         $null = Wait-MainWindow -ProcId $live.Id -TimeoutSeconds 40
@@ -343,7 +355,7 @@ try {
             cpuDeltaMs = $cpuIdleDelta
             handlesBefore = [int]$before.Handles
             handlesAfter = [int]$after.Handles
-            note = 'Live-off shares UpdateRunning() timer.Stop path with minimize (src DesktopVitals.cs).'
+            note = 'Live-off shares UpdateRunning() timer.Stop path with minimize (src/Window.cs).'
         }
         if (-not $idleOk) { throw $idleDetail }
     }

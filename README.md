@@ -22,21 +22,37 @@ Screenshot from one of the Cursor runners that tested the app:
 irm https://raw.githubusercontent.com/degconsultinggroup/desktop-vitals/main/install.ps1 | iex
 ```
 
+Or paste this link into your agent: https://github.com/degconsultinggroup/desktop-vitals
+
 Works on Windows 10 or 11. You can also grab `DesktopVitals.exe` from [Releases](https://github.com/degconsultinggroup/desktop-vitals/releases). It isn't signed yet, so Windows may warn you - click **More info**, then **Run anyway**.
 
 To build it yourself, run `build.ps1`.
 
 ## What it shows
 
-- CPU, memory, GPU, disk
-- Scripts you're running
-- Apps that start with Windows
-- Scheduled tasks
-- AI agents, apps, and models
-- Your own bots and pinned apps
-- Top apps by CPU and memory
+Processor with every thread, memory, graphics, video memory, and disk. Then agents, your things by project, models, other, and what ended in the last hour.
 
-Ctrl+Alt+P opens it. If you want your own bots or apps on there, copy `watch.example.txt` to `%APPDATA%\DesktopVitals\watch.txt` and edit it.
+## How it decides
+
+It is yours when it runs as you, in your session. A scheduled task you created counts.
+
+The project is the nearest folder with git or a package file.
+
+A listening port is a server. A weight file is a model. Nothing for five minutes is quiet. A failed exit or task shows failed.
+
+An agent shows its repo, the command it is running, and the last file it touched.
+
+## Use
+
+The Live switch turns readings on and off. Ctrl+Alt+P opens the window.
+
+Click a name to open its folder. Click a port to open it. Right-click a line to rename, hide, or pin it. Click the PC name to rename this computer.
+
+## Command line
+
+`--json` prints the board. `--snapshot` writes `vitals.txt` and `vitals.png`. `--fixture board.json` draws that board.
+
+`--name`, `--rename`, `--hide`, `--pin`, and `--unpin` save the PC name, renames, hides, and pins in `%APPDATA%\DesktopVitals\prefs.txt`.
 
 ## Tested on
 

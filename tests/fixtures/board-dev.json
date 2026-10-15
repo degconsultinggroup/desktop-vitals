@@ -1,0 +1,324 @@
+{
+  "name": "Studio PC",
+  "strip": {
+    "cpu": 18,
+    "ram_used_gb": 14,
+    "ram_total_gb": 32,
+    "gpu": 27,
+    "gpu_temp": 43,
+    "gpu_name": "RTX 4070 SUPER",
+    "watts": 38,
+    "vram_used_gb": 9.8,
+    "vram_total_gb": 12,
+    "disk_free_gb": 258,
+    "disk_total_gb": 512,
+    "threads": [78, 22, 64, 16, 51, 11, 43, 14, 27, 9, 18, 6, 12, 5, 8, 6, 18, 12, 9, 7, 5, 4, 6, 11, 3, 8, 15, 19],
+    "core_groups": [
+      {"kind": "performance", "threads": [0, 1]},
+      {"kind": "performance", "threads": [2, 3]},
+      {"kind": "performance", "threads": [4, 5]},
+      {"kind": "performance", "threads": [6, 7]},
+      {"kind": "performance", "threads": [8, 9]},
+      {"kind": "performance", "threads": [10, 11]},
+      {"kind": "performance", "threads": [12, 13]},
+      {"kind": "performance", "threads": [14, 15]},
+      {"kind": "efficiency", "threads": [16]},
+      {"kind": "efficiency", "threads": [17]},
+      {"kind": "efficiency", "threads": [18]},
+      {"kind": "efficiency", "threads": [19]},
+      {"kind": "efficiency", "threads": [20]},
+      {"kind": "efficiency", "threads": [21]},
+      {"kind": "efficiency", "threads": [22]},
+      {"kind": "efficiency", "threads": [23]},
+      {"kind": "efficiency", "threads": [24]},
+      {"kind": "efficiency", "threads": [25]},
+      {"kind": "efficiency", "threads": [26]},
+      {"kind": "efficiency", "threads": [27]}
+    ]
+  },
+  "headline": {
+    "text": "1 agent waiting on you · 1 task failed",
+    "needs_you": true
+  },
+  "groups": [
+    {
+      "title": "AGENTS",
+      "kind": "agents",
+      "things": [
+        {
+          "id": "agent:claude-code:repo-b",
+          "name": "Claude Code",
+          "kind": "agent",
+          "state": "waiting",
+          "project": "repo-b",
+          "since": "6m",
+          "detail": "asked to run: git push",
+          "why": "agent is waiting on you",
+          "count": 1
+        },
+        {
+          "id": "agent:claude-code:repo-a",
+          "name": "Claude Code",
+          "kind": "agent",
+          "state": "working",
+          "project": "repo-a",
+          "since": "2h 10m",
+          "detail": "editing install.ps1 · 3 commits · 4 files changed",
+          "why": "agent is working in repo-a",
+          "count": 1
+        },
+        {
+          "id": "agent:cursor:repo-a",
+          "name": "Cursor agent",
+          "kind": "agent",
+          "state": "working",
+          "project": "repo-a",
+          "since": "14m",
+          "detail": "branch feature-x · running powershell",
+          "why": "model grok-4.7-high",
+          "count": 1
+        },
+        {
+          "id": "agent:codex",
+          "name": "Codex",
+          "kind": "agent",
+          "state": "idle",
+          "project": "no project",
+          "count": 2,
+          "since": "1h",
+          "why": "two idle sessions"
+        }
+      ]
+    },
+    {
+      "title": "bots-repo",
+      "kind": "project",
+      "things": [
+        {
+          "id": "bot:scanner",
+          "name": "scanner",
+          "kind": "bot",
+          "state": "running",
+          "project": "supervisor.py",
+          "since": "2h 47m",
+          "detail": "works every 30s",
+          "why": "long-lived bot",
+          "count": 1
+        },
+        {
+          "id": "bot:recorder",
+          "name": "recorder",
+          "kind": "bot",
+          "state": "running",
+          "project": "supervisor.py",
+          "since": "2h 47m",
+          "detail": "works every 30s",
+          "why": "long-lived bot",
+          "count": 1
+        },
+        {
+          "id": "bot:queue",
+          "name": "queue",
+          "kind": "bot",
+          "state": "quiet",
+          "project": "supervisor.py",
+          "since": "7m",
+          "why": "no activity for a while",
+          "count": 1
+        },
+        {
+          "id": "task:daily-report",
+          "name": "Daily report",
+          "kind": "task",
+          "state": "failed",
+          "project": "task",
+          "detail": "failed 06:00 · next in 20h",
+          "why": "last result was not success",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "title": "gateway",
+      "kind": "project",
+      "things": [
+        {
+          "id": "server:gateway",
+          "name": "gateway",
+          "kind": "server",
+          "state": "running",
+          "project": "node",
+          "ports": [
+            18789
+          ],
+          "ram_mb": 339,
+          "why": "listening on 18789",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "title": "voice",
+      "kind": "project",
+      "things": [
+        {
+          "id": "script:talk.py",
+          "name": "talk.py",
+          "kind": "script",
+          "state": "running",
+          "project": "Python · whisper-small",
+          "vram_mb": 751,
+          "why": "model runtime",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "title": "MODELS",
+      "kind": "models",
+      "things": [
+        {
+          "id": "model:qwen3-coder",
+          "name": "Qwen3-Coder IQ1_M",
+          "kind": "model",
+          "state": "running",
+          "project": "54 GB",
+          "vram_mb": 9800,
+          "detail": "loaded by server.exe · 9.8 GB VRAM",
+          "why": "weight file mapped by server.exe",
+          "count": 1
+        },
+        {
+          "id": "models:rest",
+          "name": "11 more on disk",
+          "kind": "model",
+          "state": "idle",
+          "detail": "150 GB",
+          "why": "unloaded models on disk",
+          "count": 1
+        },
+        {
+          "id": "models:rest:llama",
+          "name": "Llama-3.1-8B",
+          "kind": "model",
+          "state": "idle",
+          "why": "on disk",
+          "count": 1
+        },
+        {
+          "id": "models:rest:mistral",
+          "name": "Mistral-7B",
+          "kind": "model",
+          "state": "idle",
+          "why": "on disk",
+          "count": 1
+        },
+        {
+          "id": "models:rest:phi",
+          "name": "Phi-4",
+          "kind": "model",
+          "state": "idle",
+          "why": "on disk",
+          "count": 1
+        },
+        {
+          "id": "models:rest:qwen",
+          "name": "Qwen2.5-14B",
+          "kind": "model",
+          "state": "idle",
+          "why": "on disk",
+          "count": 1
+        },
+        {
+          "id": "models:rest:deepseek",
+          "name": "DeepSeek-Coder-6.7B",
+          "kind": "model",
+          "state": "idle",
+          "why": "on disk",
+          "count": 1
+        },
+        {
+          "id": "models:rest:gemma",
+          "name": "Gemma-2-9B",
+          "kind": "model",
+          "state": "idle",
+          "why": "on disk",
+          "count": 1
+        },
+        {
+          "id": "models:rest:command",
+          "name": "Command-R",
+          "kind": "model",
+          "state": "idle",
+          "why": "on disk",
+          "count": 1
+        },
+        {
+          "id": "models:rest:mixtral",
+          "name": "Mixtral-8x7B",
+          "kind": "model",
+          "state": "idle",
+          "why": "on disk",
+          "count": 1
+        },
+        {
+          "id": "models:rest:starcoder",
+          "name": "StarCoder2-15B",
+          "kind": "model",
+          "state": "idle",
+          "why": "on disk",
+          "count": 1
+        },
+        {
+          "id": "models:rest:yi",
+          "name": "Yi-1.5-9B",
+          "kind": "model",
+          "state": "idle",
+          "why": "on disk",
+          "count": 1
+        },
+        {
+          "id": "models:rest:nemotron",
+          "name": "Nemotron-Mini",
+          "kind": "model",
+          "state": "idle",
+          "why": "on disk",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "title": "OTHER",
+      "kind": "other",
+      "things": [
+        {
+          "id": "app:chrome",
+          "name": "Chrome",
+          "kind": "app",
+          "state": "running",
+          "count": 17,
+          "cpu": 9,
+          "ram_mb": 2100,
+          "detail": "9% · 2.1 GB",
+          "why": "heavy app"
+        }
+      ]
+    },
+    {
+      "title": "ENDED IN THE LAST HOUR",
+      "kind": "ended",
+      "things": [
+        {
+          "id": "ended:pytest:repo-a",
+          "name": "pytest",
+          "kind": "script",
+          "state": "ended",
+          "project": "repo-a",
+          "detail": "exit 0 · 12m ago",
+          "why": "exit 0",
+          "count": 1
+        }
+      ]
+    }
+  ]
+}

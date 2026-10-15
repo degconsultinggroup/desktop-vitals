@@ -28,6 +28,28 @@ jobs:
           .\tests\accuracy.ps1
           if ($LASTEXITCODE -ne 0) { throw "accuracy.ps1 failed with exit $LASTEXITCODE" }
 
+      - name: Snapshot fixture boards
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $exe = Join-Path $PWD 'bin\DesktopVitals.exe'
+          if (-not (Test-Path -LiteralPath $exe)) { throw "missing $exe" }
+          $dev = Join-Path $PWD 'tests\results\board-dev'
+          $fresh = Join-Path $PWD 'tests\results\board-fresh'
+          New-Item -ItemType Directory -Force -Path $dev, $fresh | Out-Null
+          function Invoke-FixtureSnapshot([string]$Fixture, [string]$Dir, [string]$Name) {
+            $p = Start-Process -FilePath $exe -ArgumentList @('--fixture', $Fixture, '--snapshot', $Dir) -PassThru -WindowStyle Hidden -Wait
+            $code = 0
+            if ($null -ne $p -and $null -ne $p.ExitCode) { $code = [int]$p.ExitCode }
+            if ($code -ne 0) { throw "$Name snapshot exit $code" }
+            if (-not (Test-Path -LiteralPath (Join-Path $Dir 'vitals.png'))) { throw "$Name missing vitals.png" }
+            if (-not (Test-Path -LiteralPath (Join-Path $Dir 'vitals.txt'))) { throw "$Name missing vitals.txt" }
+          }
+          Invoke-FixtureSnapshot (Join-Path $PWD 'tests\fixtures\board-dev.json') $dev 'board-dev'
+          Invoke-FixtureSnapshot (Join-Path $PWD 'tests\fixtures\board-fresh.json') $fresh 'board-fresh'
+          $global:LASTEXITCODE = 0
+          exit 0
+
       - name: Upload vitals.png and safety log
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -35,9 +57,24 @@ jobs:
           name: vitals-png
           path: |
             tests/results/vitals.png
-            tests/results/review.png
             tests/results/accuracy/
             tests/results/safety-runtime.log
+          if-no-files-found: warn
+
+      - name: Upload board-dev
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: board-dev
+          path: tests/results/board-dev/vitals.png
+          if-no-files-found: warn
+
+      - name: Upload board-fresh
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: board-fresh
+          path: tests/results/board-fresh/vitals.png
           if-no-files-found: warn
 
   # Live soak + idle/edge stability on windows-latest (shorter than 2h; see SOAK_SECONDS).
@@ -137,8 +174,6 @@ jobs:
           path: |
             tests/results/vitals.png
             tests/results/vitals.txt
-            tests/results/review.png
-            tests/results/review.txt
             tests/results/accuracy/
             tests/results/safety-runtime.log
           if-no-files-found: warn
@@ -189,9 +224,7 @@ jobs:
             $jp = Start-Process -FilePath $exe -ArgumentList @('--json', $json) -Wait -PassThru -WindowStyle Hidden -RedirectStandardOutput $stdout
             if ($jp.ExitCode -ne 0) { throw "json exit $($jp.ExitCode)" }
             $board = Get-Content -Raw -LiteralPath $json | ConvertFrom-Json
-            foreach ($name in @('processor', 'memory', 'graphics', 'video_memory', 'disk')) {
-              if ([string]::IsNullOrWhiteSpace([string]$board.strip.$name)) { throw "strip.$name empty" }
-            }
+            if ($null -eq $board.strip) { throw 'json missing strip' }
           }
           .\install.ps1 -Uninstall
           if ($LASTEXITCODE -ne 0) { throw "install.ps1 -Uninstall failed with exit $LASTEXITCODE" }
@@ -216,16 +249,15 @@ jobs:
           $p = Start-Process -FilePath $exe -ArgumentList '--version' -Wait -PassThru -WindowStyle Hidden -RedirectStandardOutput $verFile
           if ($p.ExitCode -ne 0) { throw "version exit $($p.ExitCode)" }
           $ver = [System.IO.File]::ReadAllText($verFile).Trim()
-          if ($ver -ne '0.1.1') { throw "version '$ver'" }
+          if ($ver -ne '0.2.0') { throw "version '$ver'" }
           $json = Join-Path $env:TEMP 'dv-built.json'
           $stdout = Join-Path $env:TEMP 'dv-built-json.txt'
           $jp = Start-Process -FilePath $exe -ArgumentList @('--json', $json) -Wait -PassThru -WindowStyle Hidden -RedirectStandardOutput $stdout
           if ($jp.ExitCode -ne 0) { throw "json exit $($jp.ExitCode)" }
           $board = Get-Content -Raw -LiteralPath $json | ConvertFrom-Json
-          foreach ($name in @('processor', 'memory', 'graphics', 'video_memory', 'disk')) {
-            if ([string]::IsNullOrWhiteSpace([string]$board.strip.$name)) { throw "strip.$name empty" }
-          }
-          if ($null -eq $board.lines) { throw 'json missing lines' }
+          if ($null -eq $board.strip) { throw 'json missing strip' }
+          if ([double]$board.strip.ram_total_gb -le 0) { throw 'strip.ram_total_gb is zero' }
+          if ($null -eq $board.PSObject.Properties['groups']) { throw 'json missing groups' }
           .\install.ps1 -Uninstall
           if ($LASTEXITCODE -ne 0) { throw "install.ps1 -Uninstall failed with exit $LASTEXITCODE" }
           if (Test-Path -LiteralPath $exe) { throw 'exe still installed' }
