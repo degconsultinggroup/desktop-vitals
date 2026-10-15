@@ -1,6 +1,6 @@
 # Desktop Vitals
 
-Task Manager isn't enough in the age of AI. I run Claude Code, Codex, Cursor, a few bots and local models on one PC, and I wanted one window to see all of it.
+Task Manager wasn't enough for me. I run Claude Code, Codex, Cursor, a few bots and local models on one PC, and I wanted one window to see all of it.
 
 Desktop Vitals just reads what's running and shows you. It never starts or stops anything and doesn't need admin.
 
