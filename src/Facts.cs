@@ -28,7 +28,7 @@ using System.Security.Cryptography; using System.Text; using System.Text.Regular
                 if (procs != null) CatchUp(procs); NoteExits(byPid, now); try { TaskList.Refresh(null); } catch (Exception) { }
                 try { ModelScan.Refresh(); } catch (Exception) { } var used = new HashSet<int>(); var things = new List<Thing>(); if (procs != null) {
                     Agents(procs, byPid, listeners, things, used); foreach (Proc p in procs) {
-                        if (used.Contains(p.Pid)) continue; Memo m = memo(p); if (!IsRoot(p, m, byPid)) continue;
+                        if (used.Contains(p.Pid)) continue; Memo m = memo(p); if (!IsRoot(p, m, byPid, listeners)) continue;
                         Thing t = WorkThing(p, m, byPid, listeners, used); if (t == null) continue; things.Add(t); } }
                 Tasks(things); Models(things); Ended(things); Pins(things); return Order(things); }
             static Memo Touch(Proc p, Dictionary<int, Proc> byPid) {
@@ -147,23 +147,40 @@ using System.Security.Cryptography; using System.Text; using System.Text.Regular
                 return xa != null && xa.Length >= 3 && string.Equals(xa, ya, StringComparison.OrdinalIgnoreCase) && string.Equals(da, db, StringComparison.OrdinalIgnoreCase); }
             static bool DifferentProject(Memo a, Memo b) {
                 return a != null && b != null && !string.IsNullOrEmpty(a.ProjectFull) && !string.IsNullOrEmpty(b.ProjectFull) && !string.Equals(a.ProjectFull, b.ProjectFull, StringComparison.OrdinalIgnoreCase); }
-            static bool Owned(Proc p, Memo m, Dictionary<int, Proc> byPid) {
+            static bool Listens(int pid, Dictionary<int, List<int>> listeners) {
+                List<int> lp; return listeners != null && listeners.TryGetValue(pid, out lp) && lp != null && lp.Count > 0; }
+            // Its own thing: a different script, its own port, a mapped model, or an agent. Same script and same-stem wrappers are helpers.
+            static bool OwnOf(Proc child, Memo cm, Memo am, Dictionary<int, List<int>> listeners) {
+                if (child == null || cm == null) return false;
+                if (cm.Agent != null && (am == null || !string.Equals(cm.Agent, am.Agent, StringComparison.Ordinal))) return true;
+                if (!string.IsNullOrEmpty(cm.Weight)) return true;
+                if (SameScript(cm, am) || SameStem(cm, am)) return false;
+                if (!string.IsNullOrEmpty(cm.Script)) return true; return Listens(child.Pid, listeners); }
+            static bool Owned(Proc p, Memo m, Dictionary<int, Proc> byPid, Dictionary<int, List<int>> listeners) {
                 Proc cur = p; var guard = new HashSet<int>(); for (int n = 0; n < 40 && guard.Add(cur.Pid); n++) {
                     Proc parent; if (!byPid.TryGetValue(cur.Parent, out parent)) return false;
                     if (parent.CreateTime == 0 || cur.CreateTime == 0 || parent.CreateTime >= cur.CreateTime) return false;
-                    Memo pm = memo(parent); if (pm == null || !pm.Yours) return false; if (SameScript(m, pm) || SameStem(m, pm)) return true;
-                    // A different script stays its own line. A runner with no script is not its owner.
-                    if (!string.IsNullOrEmpty(m.Script)) { cur = parent; continue; }
-                    if (Container(parent.Exe)) { cur = parent; continue; } if (m.Agent != null || DifferentProject(m, pm)) return false;
-                    if (!string.IsNullOrEmpty(pm.Script)) return false; return true; }
+                    Memo pm = memo(parent); if (pm == null || !pm.Yours) return false;
+                    if (SameScript(m, pm) || SameStem(m, pm)) return true;
+                    if (OwnOf(p, m, pm, listeners)) return false;
+                    if (Container(parent.Exe) || string.IsNullOrEmpty(pm.Script)) { cur = parent; continue; }
+                    if (m.Agent != null || DifferentProject(m, pm)) return false;
+                    if (!string.IsNullOrEmpty(m.Script) || Listens(p.Pid, listeners)) return false; return true; }
                 return false; }
-            static bool IsRoot(Proc p, Memo m, Dictionary<int, Proc> byPid) {
+            static bool IsRoot(Proc p, Memo m, Dictionary<int, Proc> byPid, Dictionary<int, List<int>> listeners) {
                 if (p == null || m == null || !m.Yours || Infra(p.Exe)) return false;
-                if (Container(p.Exe) && string.IsNullOrEmpty(m.Script)) return false; if (m.Agent != null) return false; return !Owned(p, m, byPid); }
-            static void Collect(Proc p, Dictionary<int, Proc> byPid, List<Proc> members, HashSet<int> used) {
+                if (Container(p.Exe) && string.IsNullOrEmpty(m.Script) && !Listens(p.Pid, listeners)) return false;
+                if (m.Agent != null) return false; return !Owned(p, m, byPid, listeners); }
+            static void Collect(Proc p, Dictionary<int, Proc> byPid, Dictionary<int, List<int>> listeners, List<Proc> members, HashSet<int> used) {
                 if (!used.Add(p.Pid)) return; members.Add(p); foreach (var kv in byPid) {
                     Proc c = kv.Value; if (c.Parent != p.Pid || c.CreateTime <= p.CreateTime) continue;
-                    Memo cm = memo(c); if (cm != null && (cm.Agent != null || IsRoot(c, cm, byPid))) continue; Collect(c, byPid, members, used); } }
+                    Memo cm = memo(c); if (cm != null && (cm.Agent != null || IsRoot(c, cm, byPid, listeners))) continue; Collect(c, byPid, listeners, members, used); } }
+            static string StartedBy(Proc p, Dictionary<int, Proc> byPid) {
+                Proc cur = p; var guard = new HashSet<int>(); for (int n = 0; n < 40 && guard.Add(cur.Pid); n++) {
+                    Proc parent; if (!byPid.TryGetValue(cur.Parent, out parent)) return null;
+                    if (parent.CreateTime == 0 || cur.CreateTime == 0 || parent.CreateTime >= cur.CreateTime) return null;
+                    Memo pm = memo(parent); if (pm != null && !string.IsNullOrEmpty(pm.Agent)) return pm.Agent; cur = parent; }
+                return null; }
             static bool Container(string exe) { return Shell(exe) || Infra(exe); }
 
             static bool MatchTask(Proc p, Memo m) {
@@ -211,7 +228,7 @@ using System.Security.Cryptography; using System.Text; using System.Text.Regular
             static void Agents(List<Proc> procs, Dictionary<int, Proc> byPid, Dictionary<int, List<int>> listeners, List<Thing> things, HashSet<int> used) {
                 var groups = new Dictionary<string, Thing>(StringComparer.OrdinalIgnoreCase); foreach (Proc p in procs) {
                     Memo m = memo(p); if (m == null || m.Agent == null || !m.Yours || ChildOfAgent(p, procs)) continue;
-                    used.Add(p.Pid); Act act = LogOf(m, p); AdoptCwd(m); GitSnap git = GitOf(m); string child = LeafChild(p.Pid, byPid);
+                    used.Add(p.Pid); Act act = LogOf(m, p); AdoptCwd(m); GitSnap git = GitOf(m); string child = LeafChild(p.Pid, byPid, listeners, m);
                     string repo = git != null && !string.IsNullOrEmpty(git.Main) ? git.Main : m.ProjectFull;
                     string repoName = NameOf(repo); if (string.IsNullOrEmpty(repoName)) repoName = "no project";
                     string key = m.Agent + "\n" + (repo ?? ""); Thing t; if (!groups.TryGetValue(key, out t)) {
@@ -219,7 +236,7 @@ using System.Security.Cryptography; using System.Text; using System.Text.Regular
                         t.kind = "agent"; t.project = repoName; t.folder = repo ?? m.Cwd; t.since = Age(p.CreateTime);
                         if (git != null) t.branch = git.Branch; groups[key] = t; things.Add(t); }
                     t.count++; t.cpu += p.Cpu; t.ram_mb += p.Private / 1048576.0; t.vram_mb += VramOf(p.Pid) / 1048576.0;
-                    AddPorts(p.Pid, byPid, listeners, t.ports, new HashSet<int>());
+                    AddPorts(p.Pid, byPid, listeners, t.ports, new HashSet<int>(), m);
                     string state = AgentState(m, p, act, child); if (Rank(state) > Rank(t.state)) t.state = state;
                     string detail = AgentDetail(m, act, git, child); if (string.IsNullOrEmpty(t.detail) || state == "waiting") t.detail = detail;
                     if (string.IsNullOrEmpty(t.branch) && git != null) t.branch = git.Branch;
@@ -233,18 +250,20 @@ using System.Security.Cryptography; using System.Text; using System.Text.Regular
                 string lcwd = JsonString(ReadText(m.LogFile, 800), "\"cwd\":\"", 0); if (string.IsNullOrEmpty(lcwd) || Forbidden(lcwd)) return;
                 if (string.IsNullOrEmpty(m.Cwd) || Forbidden(m.Cwd)) m.Cwd = lcwd;
                 if (string.IsNullOrEmpty(m.ProjectFull)) AssignProjectPath(m, lcwd); }
-            static void AddPorts(int pid, Dictionary<int, Proc> byPid, Dictionary<int, List<int>> listeners, List<int> ports, HashSet<int> seen) {
+            static void AddPorts(int pid, Dictionary<int, Proc> byPid, Dictionary<int, List<int>> listeners, List<int> ports, HashSet<int> seen, Memo root) {
                 if (ports == null || !seen.Add(pid)) return; List<int> lp;
                 if (listeners.TryGetValue(pid, out lp)) foreach (int port in lp) if (!ports.Contains(port)) ports.Add(port);
                 foreach (var kv in byPid) {
                     Proc c = kv.Value; if (c.Parent != pid) continue; Memo cm = memo(c);
-                    if (cm != null && cm.Agent != null) continue; AddPorts(c.Pid, byPid, listeners, ports, seen); } }
+                    if (cm != null && (cm.Agent != null || OwnOf(c, cm, root, listeners))) continue;
+                    AddPorts(c.Pid, byPid, listeners, ports, seen, root); } }
             static bool ChildOfAgent(Proc p, List<Proc> procs) {
+                Memo mine = memo(p); if (mine == null || string.IsNullOrEmpty(mine.Agent)) return false;
                 int id = p.Parent; var guard = new HashSet<int>();
                 while (id != 0 && guard.Add(id)) {
                     Proc up = null; foreach (Proc q in procs) if (q.Pid == id) { up = q; break; }
                     if (up == null || up.CreateTime >= p.CreateTime) return false; Memo m = memo(up);
-                    if (m != null && m.Agent != null) return true; id = up.Parent; }
+                    if (m != null && string.Equals(m.Agent, mine.Agent, StringComparison.Ordinal)) return true; id = up.Parent; }
                 return false; }
             static string AgentState(Memo m, Proc p, Act act, string child) {
                 if (act != null && act.Open && string.IsNullOrEmpty(child)) return "waiting"; if (!string.IsNullOrEmpty(child)) return "working";
@@ -263,7 +282,7 @@ using System.Security.Cryptography; using System.Text; using System.Text.Regular
                 else if (bits.Count == 0 && git != null && !string.IsNullOrEmpty(git.Worktree)) bits.Add(git.Worktree);
                 return bits.Count == 0 ? null : string.Join(" \u00B7 ", bits.ToArray()); }
             static Thing WorkThing(Proc p, Memo m, Dictionary<int, Proc> byPid, Dictionary<int, List<int>> listeners, HashSet<int> used) {
-                var members = new List<Proc>(); Collect(p, byPid, members, used); var ports = new List<int>(); long vram = 0; double cpu = 0, ram = 0;
+                var members = new List<Proc>(); Collect(p, byPid, listeners, members, used); var ports = new List<int>(); long vram = 0; double cpu = 0, ram = 0;
                 foreach (Proc c in members) {
                     cpu += c.Cpu; ram += c.Private / 1048576.0; vram += VramOf(c.Pid); List<int> lp;
                     if (listeners.TryGetValue(c.Pid, out lp)) foreach (int port in lp) if (!ports.Contains(port)) ports.Add(port); }
@@ -276,7 +295,9 @@ using System.Security.Cryptography; using System.Text; using System.Text.Regular
                 bool quiet = ports.Count == 0 && m.CadenceSec == 0 && string.IsNullOrEmpty(m.RecentWrite) && AgeMin(p) >= 5 && (DateTime.UtcNow - m.LastActive).TotalMinutes >= 5;
                 var t = new Thing(); t.kind = kind; t.state = quiet ? "quiet" : "running"; t.name = kind == "model" ? m.Weight : LeafName(p, m);
                 t.id = IdOf(m, p, kind, t.name); t.project = ProjectLabel(m); t.folder = FolderOf(m); t.cpu = cpu; t.ram_mb = ram;
-                t.vram_mb = vram; t.ports = ports; t.since = Age(p.CreateTime); t.count = 1; t.why = Why(m, ports); t.detail = DetailOf(m, kind, p.Exe);
+                t.vram_mb = vram; t.ports = ports; t.since = Age(p.CreateTime); t.count = 1; t.why = Why(m, ports); string starter = StartedBy(p, byPid);
+                if (!string.IsNullOrEmpty(starter)) t.why = "started by " + starter + (string.IsNullOrEmpty(t.why) ? "" : "; " + t.why);
+                t.detail = DetailOf(m, kind, p.Exe);
                 m.Kind = kind; m.Leaf = t.name; if (Hidden(t.id, t.name)) return null; Finish(t); return t; }
             static bool ShowApp(Proc p, Memo m, double cpu, double ram) {
                 bool heavy = cpu > 25 || ram >= 2048; string name = PrettyExe(p.Exe); bool pin = Prefs.PinIds.Contains("app:" + p.Pid.ToString(CultureInfo.InvariantCulture));
@@ -780,13 +801,14 @@ using System.Security.Cryptography; using System.Text; using System.Text.Regular
                 path = path.TrimEnd('\\'); root = root.TrimEnd('\\');
                 return string.Equals(path, root, StringComparison.OrdinalIgnoreCase) || path.StartsWith(root + "\\", StringComparison.OrdinalIgnoreCase); }
             static bool UnderWindows(string path) { return AtOrUnder(path, Environment.GetFolderPath(Environment.SpecialFolder.Windows)); }
-            static string LeafChild(int pid, Dictionary<int, Proc> byPid) {
+            static string LeafChild(int pid, Dictionary<int, Proc> byPid, Dictionary<int, List<int>> listeners, Memo root) {
                 string leaf = null; var stack = new List<int>(); stack.Add(pid); var seen = new HashSet<int>();
                 while (stack.Count > 0) {
                     int id = stack[stack.Count - 1]; stack.RemoveAt(stack.Count - 1); foreach (var kv in byPid) {
                         Proc c = kv.Value; if (c.Parent != id || c.Pid == pid || c.CreateTime <= 0 || !seen.Add(c.Pid)) continue;
                         string exe = (c.Exe ?? "").ToLowerInvariant();
                         if (exe == "conhost.exe" || exe == "cmd.exe" || exe == "nohup.exe") { stack.Add(c.Pid); continue; }
+                        Memo cm = memo(c); if (OwnOf(c, cm, root, listeners)) continue;
                         leaf = c.Exe; stack.Add(c.Pid); } }
                 return leaf; }
             static double AgeMin(Proc p) {

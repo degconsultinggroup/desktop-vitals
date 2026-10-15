@@ -627,6 +627,38 @@ CreateObject("Wscript.Shell").Run "cmd.exe /c " & Chr(34) & dir & "gateway.cmd" 
     if (-not (Test-Path -LiteralPath $PrefsFile)) { New-Item -ItemType Directory -Force -Path $ConfigDir | Out-Null; Set-Content -LiteralPath $PrefsFile -Value '' -Encoding ASCII }
     Add-Content -LiteralPath $PrefsFile -Value ("pinmatch=1|" + $ghost + "|" + $env:WINDIR + "\System32\" + $ghost + ".exe") -Encoding ASCII
 
+    # A parent script starts a different script and a listener. Both stay their own lines.
+    $treeChild = Join-Path $Work 'dv_acc_tree_child.ps1'
+    $treeListen = Join-Path $Work 'dv_acc_tree_listen.ps1'
+    $treeParent = Join-Path $Work 'dv_acc_tree_parent.ps1'
+    $script:TreePortFile = Join-Path $Work 'tree-listen.port'
+    Set-Content -LiteralPath $treeChild -Value "while (`$true) { Start-Sleep -Seconds 2 }`r`n" -Encoding ASCII
+    @'
+$listener = New-Object System.Net.Sockets.TcpListener ([System.Net.IPAddress]::Loopback, 0)
+$listener.Start()
+Set-Content -LiteralPath $args[0] -Value $listener.LocalEndpoint.Port -Encoding ASCII
+while ($true) { Start-Sleep -Seconds 2 }
+'@ | Set-Content -LiteralPath $treeListen -Encoding ASCII
+    @'
+param($Child, $Listen, $PortFile)
+Start-Process -FilePath powershell.exe -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File', $Child) -WindowStyle Hidden
+Start-Process -FilePath powershell.exe -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File', $Listen, $PortFile) -WindowStyle Hidden
+while ($true) { Start-Sleep -Seconds 2 }
+'@ | Set-Content -LiteralPath $treeParent -Encoding ASCII
+    $null = Start-Child -FilePath 'powershell.exe' -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $treeParent, $treeChild, $treeListen, $script:TreePortFile)
+    $treeDeadline = (Get-Date).AddSeconds(15)
+    while ((Get-Date) -lt $treeDeadline) {
+        $treeHits = @(Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -and ($_.CommandLine -like '*dv_acc_tree_child.ps1*' -or $_.CommandLine -like '*dv_acc_tree_listen.ps1*') })
+        if ($treeHits.Count -ge 2) {
+            foreach ($hit in $treeHits) {
+                $proc = Get-Process -Id $hit.ProcessId -ErrorAction SilentlyContinue
+                if ($proc) { $Children.Add($proc) | Out-Null }
+            }
+            break
+        }
+        Start-Sleep -Milliseconds 200
+    }
+
     Start-Sleep -Seconds 3
 
     # Main accuracy snapshot
@@ -834,6 +866,29 @@ CreateObject("Wscript.Shell").Run "cmd.exe /c " & Chr(34) & dir & "gateway.cmd" 
         $boxDetail = $_.Exception.Message
     }
     Write-Check 'real-box' $boxOk $boxDetail
+
+    # Parent script's child script and listening child each stay on the board.
+    $treeOk = $false
+    $treeDetail = ''
+    try {
+        if (-not (Test-Path -LiteralPath $script:TreePortFile)) { throw 'tree listen port file missing' }
+        $treePort = [int](Get-Content -LiteralPath $script:TreePortFile -Raw).Trim()
+        $treeBoard = Invoke-BoardJson -HomeDir $AgentHome
+        $treeThings = @(Get-Things $treeBoard)
+        $treeChildLine = @($treeThings | Where-Object { $_.Name -eq 'dv_acc_tree_child.ps1' })
+        $treeListenLine = @($treeThings | Where-Object { $_.Name -eq 'dv_acc_tree_listen.ps1' })
+        $treeParentLine = @($treeThings | Where-Object { $_.Name -eq 'dv_acc_tree_parent.ps1' })
+        if ($treeChildLine.Count -ne 1) { throw "child lines=$($treeChildLine.Count)" }
+        if ($treeListenLine.Count -ne 1 -or $treeListenLine[0].Kind -ne 'server' -or -not ($treeListenLine[0].Ports -contains $treePort)) {
+            $shown = if ($treeListenLine.Count -ge 1) { "kind=$($treeListenLine[0].Kind) ports=$($treeListenLine[0].Ports -join ',')" } else { 'missing' }
+            throw "listen $shown"
+        }
+        if ($treeParentLine.Count -lt 1) { throw 'parent script missing' }
+        $treeOk = $true
+        $treeDetail = "child + listen :$treePort"
+    }
+    catch { $treeDetail = $_.Exception.Message }
+    Write-Check 'tree-rollup' $treeOk $treeDetail
 
     # Exit mid-scan: kill during snapshot; host must stay clean and a later snapshot must work
     $midOk = $false
