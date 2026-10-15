@@ -16,14 +16,17 @@ Windows 10 or 11. Or grab `DesktopVitals.exe` from [Releases](https://github.com
 
 To build it yourself, run `build.ps1`.
 
-## Use
+## What it shows
 
-- **Ctrl+Alt+P** opens and hides it
-- Hover a line to open it in your editor or File Explorer
-- `DesktopVitals.exe --json` prints everything as JSON
-- `DesktopVitals.exe --snapshot C:\folder` saves a text report and a screenshot
+- CPU, memory, GPU, disk
+- Scripts you're running
+- Apps that start with Windows
+- Scheduled tasks
+- AI agents, apps, and models
+- Your own bots and pinned apps
+- Top apps by CPU and memory
 
-To pin your own apps or bots, copy `watch.example.txt` to `%APPDATA%\DesktopVitals\watch.txt` and edit it.
+Ctrl+Alt+P opens it. To add your own bots or apps, copy `watch.example.txt` to `%APPDATA%\DesktopVitals\watch.txt` and edit it.
 
 ## License
 
