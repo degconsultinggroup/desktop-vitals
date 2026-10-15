@@ -12,6 +12,7 @@ Danny @ Frontier Deployments / DEG Consulting Group
 
 Desktop Vitals just reads what's running and shows you. It never starts or stops anything and doesn't need admin.
 
+Screenshot from one of the Cursor runners that tested the app:
 
 <img src="docs/screenshot.png" alt="Desktop Vitals" width="400">
 
