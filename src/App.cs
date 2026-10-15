@@ -1,9 +1,7 @@
-// Entry, command line, and prefs.
 using System; using System.Collections.Generic; using System.Globalization; using System.IO;
 using System.Runtime.Serialization.Json; using System.Text; using System.Text.RegularExpressions; using System.Threading;
 using System.Windows;
 namespace DesktopVitals {
-    // Scrub secrets and user folder names for the board, vitals.txt, and errors.log.
     static class Redact {
         static readonly Regex Secret = new Regex(@"(?i)(?:--?(?:api[_-]?key|token|access[_-]?token|secret|password|passwd|pwd)\b\s*[=:]?\s*)\S+|(?:(?:api[_-]?key|token|password|passwd|secret)\s*=\s*)\S+|\b(?:sk-[A-Za-z0-9_\-]{8,}|ghp_[A-Za-z0-9]{20,}|gho_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|xox[baprs]-[A-Za-z0-9\-]{10,})\b|\bBearer\s+\S+|(?:https?|ftp)://[^/\s:@]+:[^/\s:@]+@[^\s]+", RegexOptions.Compiled);
         static readonly Regex UserDir = new Regex(@"(?i)([A-Za-z]:\\|\\\\)Users([/\\])[^/\\]+", RegexOptions.Compiled);
@@ -34,7 +32,6 @@ namespace DesktopVitals {
             catch (Exception) { } } }
     class PinRule {
         public string Id; public string Label; public string Match; public bool ByExe; }
-    // %APPDATA%\DesktopVitals\prefs.txt. One-time copy of hides and pins from watch.txt.
     static class Prefs {
         public static string Name = "";
         public static readonly Dictionary<string, string> Rename = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);

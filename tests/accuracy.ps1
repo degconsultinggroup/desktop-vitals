@@ -22,6 +22,7 @@ $TaskFail = "DVAccFail$Stamp"
 $TaskNoise = "DVAccNoiseUpdate$Stamp"
 $TaskShim = "DVAccShim$Stamp"
 $TaskGate = "DVAccGate$Stamp"
+$TaskDesk = "DVAcc Desk$Stamp"
 $SetupExe = Join-Path $env:TEMP ("DVAccSetup" + $Stamp + ".exe")
 $StartLnk = Join-Path ([Environment]::GetFolderPath('Startup')) ("DVAccStart$Stamp.lnk")
 $DisabledName = "DVAccDisabled$Stamp"
@@ -347,14 +348,19 @@ function Remove-StartupApproved {
 }
 
 function Register-UserTask {
-    param([string]$Name, [string]$ScriptPath, [switch]$FailOnce, [switch]$NoStart, [string]$Execute, [string]$Arguments)
+    param([string]$Name, [string]$ScriptPath, [switch]$FailOnce, [switch]$NoStart, [string]$Execute, [string]$Arguments, [int]$RepeatMin = 0)
     if (-not $Execute) {
         $Execute = 'powershell.exe'
         $Arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$ScriptPath`""
     }
     $action = New-ScheduledTaskAction -Execute $Execute -Argument $Arguments
     # Once = timed trigger (shows under Scheduled, not Starts with Windows).
-    $trigger = New-ScheduledTaskTrigger -Once -At ((Get-Date).AddHours(6))
+    if ($RepeatMin -gt 0) {
+        $trigger = New-ScheduledTaskTrigger -Once -At ((Get-Date).AddMinutes(-1)) -RepetitionInterval (New-TimeSpan -Minutes $RepeatMin) -RepetitionDuration (New-TimeSpan -Days 1)
+    }
+    else {
+        $trigger = New-ScheduledTaskTrigger -Once -At ((Get-Date).AddHours(6))
+    }
     $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Hours 1)
     Register-ScheduledTask -TaskName $Name -Action $action -Trigger $trigger -Settings $settings -Force | Out-Null
     if ($NoStart) { return }
@@ -378,7 +384,7 @@ function Remove-UserTask {
 function Clear-Fixtures {
     Stop-ProcessList $Children
     Stop-ProcessList $Flood
-    foreach ($n in @($TaskRun, $TaskFail, $TaskNoise, $TaskShim, $TaskGate)) { Remove-UserTask $n }
+    foreach ($n in @($TaskRun, $TaskFail, $TaskNoise, $TaskShim, $TaskGate, $TaskDesk)) { Remove-UserTask $n }
     if ($SetupExe -and (Test-Path -LiteralPath $SetupExe)) { Remove-Item -LiteralPath $SetupExe -Force -ErrorAction SilentlyContinue }
     if (Test-Path -LiteralPath $StartLnk) { Remove-Item -LiteralPath $StartLnk -Force -ErrorAction SilentlyContinue }
     Remove-StartupApproved -List 'Run' -Name $DisabledName
@@ -569,10 +575,12 @@ while True:
 var net = require("net");
 var fs = require("fs");
 var path = require("path");
+var cp = require("child_process");
 var srv = net.createServer(function () {});
 srv.listen(0, "127.0.0.1", function () {
   fs.writeFileSync(path.join(__dirname, "port.txt"), String(srv.address().port));
 });
+cp.spawn(process.execPath, ["-e", "/*dv-acc-gate-child*/require('net').createServer(function(){}).listen(0,'127.0.0.1');setInterval(function(){},1000);"]);
 setInterval(function () {}, 1000);
 '@ | Set-Content -LiteralPath $gateJs -Encoding ASCII
     Set-Content -LiteralPath $gateCmd -Value "@echo off`r`nnode `"%~dp0gateway.js`"`r`n" -Encoding ASCII
@@ -610,6 +618,11 @@ CreateObject("Wscript.Shell").Run "cmd.exe /c " & Chr(34) & dir & "gateway.cmd" 
             $nodes = @(Get-CimInstance Win32_Process -Filter "Name = 'node.exe'" | Where-Object { $_.CommandLine -and $_.CommandLine -like '*gateway.js*' })
             if ($nodes.Count -ge 1) {
                 foreach ($hit in $nodes) {
+                    $proc = Get-Process -Id $hit.ProcessId -ErrorAction SilentlyContinue
+                    if ($proc) { $Children.Add($proc) | Out-Null }
+                }
+                $gateKids = @(Get-CimInstance Win32_Process -Filter "Name = 'node.exe'" | Where-Object { $_.CommandLine -and $_.CommandLine -like '*dv-acc-gate-child*' })
+                foreach ($hit in $gateKids) {
                     $proc = Get-Process -Id $hit.ProcessId -ErrorAction SilentlyContinue
                     if ($proc) { $Children.Add($proc) | Out-Null }
                 }
@@ -657,6 +670,38 @@ while ($true) { Start-Sleep -Seconds 2 }
             break
         }
         Start-Sleep -Milliseconds 200
+    }
+
+    # A short-repeat task launches run.py from an inner folder. The bot takes the task name; the repo, not the folder, is the project.
+    $SupRepo = Join-Path $Work 'sup-repo'
+    $EdgeRepo = Join-Path $Work 'edge-machine'
+    New-GitRepo $SupRepo
+    New-GitRepo $EdgeRepo
+    $deskDir = Join-Path $SupRepo 'desk'
+    New-Item -ItemType Directory -Force -Path $deskDir | Out-Null
+    Set-Content -LiteralPath (Join-Path $deskDir 'package.json') -Value '{"name":"desk"}' -Encoding ASCII
+    $deskPy = Join-Path $deskDir 'run.py'
+    Set-Content -LiteralPath $deskPy -Value "import time`r`nwhile True:`r`n    time.sleep(2)`r`n" -Encoding ASCII
+    $deskLaunch = Join-Path $SupRepo 'launch-desk.ps1'
+    Set-Content -LiteralPath $deskLaunch -Value ("`$env:DV_DESK = '{0}'`r`n" -f $deskPy) -Encoding ASCII
+    if ($py) {
+        Register-UserTask -Name $TaskDesk -ScriptPath $deskLaunch -RepeatMin 2 -NoStart
+        $deskCmd = Join-Path $SupRepo 'go.cmd'
+        Set-Content -LiteralPath $deskCmd -Value ("@echo off`r`nstart `"`" /b `"{0}`" `"{1}`"`r`n" -f $py, $deskPy) -Encoding ASCII
+        $deskHost = Start-Process -FilePath 'cmd.exe' -ArgumentList @('/c', $deskCmd) -WorkingDirectory $EdgeRepo -WindowStyle Hidden -PassThru
+        if (-not $deskHost.WaitForExit(20000)) { try { Stop-Process -Id $deskHost.Id -Force -ErrorAction SilentlyContinue } catch { } }
+        $deskDeadline = (Get-Date).AddSeconds(15)
+        while ((Get-Date) -lt $deskDeadline) {
+            $deskHits = @(Get-CimInstance Win32_Process | Where-Object { $_.Name -match '^(python|py)\.exe$' -and $_.CommandLine -and $_.CommandLine -like '*sup-repo*desk*run.py*' })
+            if ($deskHits.Count -ge 1) {
+                foreach ($hit in $deskHits) {
+                    $proc = Get-Process -Id $hit.ProcessId -ErrorAction SilentlyContinue
+                    if ($proc) { $Children.Add($proc) | Out-Null }
+                }
+                break
+            }
+            Start-Sleep -Milliseconds 200
+        }
     }
 
     Start-Sleep -Seconds 3
@@ -855,6 +900,19 @@ while ($true) { Start-Sleep -Seconds 2 }
         }
         if (@($things | Where-Object { $_.Kind -eq 'task' -and $_.State -eq 'ended' }).Count -ne 0) { $boxOk = $false; [void]$script:Fp.Add('successful task marked ended') }
         if (@($things | Where-Object { $_.Detail -match 'works on its own' }).Count -ne 0) { $boxOk = $false; [void]$script:Fp.Add('works on its own') }
+        if (@($things | Where-Object { $_.Group -eq 'Other' }).Count -ne 0) { $boxOk = $false; [void]$script:Fp.Add('project titled Other') }
+        $splitNode = @($things | Where-Object { $_.Name -eq 'node' -and $_.Kind -eq 'server' -and ($_.Project -eq 'gate-repo' -or $_.Folder -like '*gate-repo*') })
+        if ($splitNode.Count -ne 0) { $boxOk = $false; [void]$script:Fp.Add('gateway node is its own server') }
+        if ($py) {
+            $desk = @($things | Where-Object { $_.Name -eq $TaskDesk -and $_.Kind -eq 'bot' })
+            if ($desk.Count -ne 1 -or $desk[0].Project -ne 'sup-repo') {
+                $boxOk = $false
+                $shown = if ($desk.Count -ge 1) { "project=$($desk[0].Project) n=$($desk.Count)" } else { 'missing' }
+                [void]$script:Fn.Add("desk bot $shown")
+            }
+            if (@($things | Where-Object { $_.Kind -eq 'task' -and $_.Name -eq $TaskDesk }).Count -ne 0) { $boxOk = $false; [void]$script:Fn.Add('desk task is its own line') }
+            if (@($things | Where-Object { $_.Project -eq 'desk' -or $_.Project -eq 'edge-machine' }).Count -ne 0) { $boxOk = $false; [void]$script:Fp.Add('inner folder or interpreter repo used as project') }
+        }
         $wrongWrite = @($things | Where-Object { $_.Name -ne 'dv_acc_listen.ps1' -and (($_.Detail + ' ' + $_.Why) -match 'wrote listen\.port') })
         if ($wrongWrite.Count -ne 0) {
             $boxOk = $false
@@ -982,7 +1040,7 @@ while ($true) { Start-Sleep -Seconds 2 }
     Clear-Fixtures
     $leftOk = $true
     $leftDetail = ''
-    foreach ($n in @($TaskRun, $TaskFail, $TaskNoise, $TaskShim, $TaskGate)) {
+    foreach ($n in @($TaskRun, $TaskFail, $TaskNoise, $TaskShim, $TaskGate, $TaskDesk)) {
         $t = Get-ScheduledTask -TaskName $n -ErrorAction SilentlyContinue
         if ($t) { $leftOk = $false; $leftDetail = "leftover task $n" }
     }

@@ -1,4 +1,3 @@
-// Facts to a Board: processes, scripts, models, tasks, and GPU counters.
 using System; using System.Collections.Generic; using System.Diagnostics; using System.Globalization; using System.IO;
 using System.Linq; using System.Runtime.InteropServices; using System.Runtime.Serialization; using System.Text;
 using System.Text.RegularExpressions; using System.Threading;
@@ -143,7 +142,6 @@ namespace DesktopVitals {
             return null; } }
     class InstalledModel {
         public string Name, Path; public long Bytes; }
-    // On-disk weights: ~/models plus Hugging Face, Ollama, and LM Studio. Junctions are not followed.
     static class ModelStore {
         static readonly Regex Shard = new Regex(@"-\d{5}-of-\d{5}(?=\.[A-Za-z0-9]+$)", RegexOptions.IgnoreCase | RegexOptions.Compiled);
         public static List<InstalledModel> Scan() {
@@ -153,9 +151,18 @@ namespace DesktopVitals {
             if (string.IsNullOrEmpty(hf)) hf = Path.Combine(string.IsNullOrEmpty(hfHome) ? Path.Combine(home, ".cache", "huggingface") : hfHome, "hub");
             string ollama = Environment.GetEnvironmentVariable("OLLAMA_MODELS");
             if (string.IsNullOrEmpty(ollama)) ollama = Path.Combine(home, ".ollama", "models");
-            string[] roots = { Path.Combine(home, "models"), Path.Combine(home, ".lmstudio", "models"), Path.Combine(home, ".cache", "lm-studio", "models"), hf, ollama };
+            var roots = new List<string> { Path.Combine(home, "models"), Path.Combine(home, ".lmstudio", "models"), Path.Combine(home, ".cache", "lm-studio", "models"), hf, ollama };
+            try { foreach (DriveInfo d in DriveInfo.GetDrives()) if (d.DriveType == DriveType.Fixed) roots.Add(Path.Combine(d.RootDirectory.FullName, "models")); }
+            catch (Exception) { }
+            AddModelRoots(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), roots);
+            AddModelRoots(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), roots);
             var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase); int budget = 0;
             foreach (string r in roots) Walk(r, list, seen, 0, ref budget); return list; }
+        static void AddModelRoots(string parent, List<string> roots) {
+            if (string.IsNullOrEmpty(parent)) return; try {
+                int n = 0; foreach (string sub in Directory.GetDirectories(parent)) {
+                    if (++n > 80) break; string m = Path.Combine(sub, "models"); if (Directory.Exists(m)) roots.Add(m); } }
+            catch (Exception) { } }
         static void Walk(string dir, List<InstalledModel> list, HashSet<string> seen, int depth, ref int budget) {
             if (depth > 4 || budget > 4000 || string.IsNullOrEmpty(dir)) return; DirectoryInfo d;
             try {
@@ -190,9 +197,8 @@ namespace DesktopVitals {
             foreach (InstalledModel m in list)
                 if (string.Equals(m.Name, name, StringComparison.OrdinalIgnoreCase)) { m.Bytes += bytes; return; }
             list.Add(new InstalledModel { Name = name, Path = path, Bytes = bytes }); } }
-    // A scheduled task you (or your tools) made: not Windows' own, not an app's updater.
     class TaskInfo {
-        public string Name, Path, Script, Exe; public int State; public int Result; public DateTime LastRun, NextRun;
+        public string Name, Path, Script, Exe; public int State, Result, RepeatMin; public DateTime LastRun, NextRun;
         public bool Running { get { return State == 4; } }
         public bool NeverRan { get { return Result == 0x41303 || LastRun.Year < 2000; } }
         public bool Failed { get { return !Running && !NeverRan && Result != 0 && Result != 0x41306 && Result != 0x41301; } } }
@@ -200,9 +206,7 @@ namespace DesktopVitals {
         public static List<TaskInfo> Items = new List<TaskInfo>(); public static int Generation;
         public static bool Ready { get { return finished; } }
         public static bool Failed; static bool busy; static volatile bool finished; static DateTime read = DateTime.MinValue;
-        // Read again on the next Refresh, without waiting out the 30 s.
         public static void Soon() { if (!busy) read = DateTime.MinValue.AddSeconds(1); }
-        // Reads Task Scheduler off the UI thread, at most every 30 s. One reader at a time; no watchdog.
         public static void Refresh(Action done) {
             if (busy || (Ready && (DateTime.Now - read).TotalSeconds < 30)) return; busy = true;
             ThreadPool.QueueUserWorkItem(delegate {
@@ -230,10 +234,18 @@ namespace DesktopVitals {
                         if (info.Script == null && Paths.ScriptFile(exe) && !Paths.SystemPath(exe)) info.Script = exe;
                         if (info.Script != null || (exe.Length > 0 && Path.IsPathRooted(exe) && !Paths.SystemPath(exe))) mine = true; }
                     if (info.Script == null && (info.Name.IndexOf("update", StringComparison.OrdinalIgnoreCase) >= 0 || Paths.Noise(info.Name, info.Exe))) mine = false;
-                    if (mine) found.Add(info); }
+                    if (mine) { NoteRepeat(t, info); found.Add(info); } }
                 catch (Exception) { } }
-            foreach (dynamic sub in folder.GetFolders(0)) Walk(sub, found); } }
-    // GPU load/memory from Windows counters when NVML is absent (AMD, Intel).
+            foreach (dynamic sub in folder.GetFolders(0)) Walk(sub, found); }
+        static void NoteRepeat(dynamic task, TaskInfo info) {
+            try { foreach (dynamic tr in task.Definition.Triggers) { string iso = ""; try { iso = (string)tr.Repetition.Interval; } catch (Exception) { }
+                int mins = IsoMin(iso); if (mins > 0 && (info.RepeatMin == 0 || mins < info.RepeatMin)) info.RepeatMin = mins; } } catch (Exception) { }
+            if (info.RepeatMin == 0 && info.LastRun.Year >= 2000 && info.NextRun > info.LastRun) {
+                double gap = (info.NextRun - info.LastRun).TotalMinutes; if (gap >= 0.5 && gap <= 30) info.RepeatMin = (int)Math.Round(gap); } }
+        static int IsoMin(string iso) {
+            if (string.IsNullOrEmpty(iso)) return 0; var rx = Regex.Match(iso, @"^PT(?:(\d+)H)?(?:(\d+)M)?", RegexOptions.IgnoreCase);
+            if (!rx.Success) return 0; int h = 0, m = 0; if (rx.Groups[1].Success) int.TryParse(rx.Groups[1].Value, out h);
+            if (rx.Groups[2].Success) int.TryParse(rx.Groups[2].Value, out m); int total = h * 60 + m; return total > 0 && total <= 30 ? total : 0; } }
     static class GpuCounters {
         public static string Name; public static double Util, UsedGb, TotalGb; public static bool Have, Failed, UtilReady;
         static Dictionary<string, long> prevRaw = new Dictionary<string, long>(); static long prevTs; static bool busy, tried;
@@ -265,7 +277,6 @@ namespace DesktopVitals {
                     foreach (InstanceData d in eng.Values) {
                         raw[d.InstanceName] = d.RawValue; ts = Math.Max(ts, d.Sample.TimeStamp100nSec); }
                     if (prevTs > 0 && ts > prevTs) {
-                        // Busy time per engine type, summed over processes; the busiest type is the card's load, as in Task Manager.
                         var byType = new Dictionary<string, double>();
                         foreach (var kv in raw) {
                             long before; if (!prevRaw.TryGetValue(kv.Key, out before) || kv.Value < before) continue;
@@ -280,7 +291,6 @@ namespace DesktopVitals {
                 catch (Exception) { Have = false; Failed = true; }
                 read = DateTime.Now; busy = false;
             }); }
-        // Name and size of the largest display adapter, from the driver's registry entry.
         static void ReadAdapter() {
             try {
                 using (var cls = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(@"SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}")) {
@@ -294,7 +304,6 @@ namespace DesktopVitals {
                                 Name = ((string)k.GetValue("DriverDesc") ?? "GPU").Replace("NVIDIA ", "").Replace("GeForce ", "").Replace("AMD ", "").Replace("Radeon(TM) ", "Radeon "); } }
                         catch (Exception) { } } } }
             catch (Exception) { } } }
-    // The board is the contract the window draws. Agents, quiet bots, ended work, and heavy other land here later.
     [DataContract]
     public class Board {
         [DataMember(Order = 1)] public string name = "";
@@ -347,7 +356,6 @@ namespace DesktopVitals {
         [DataMember(Order = 14, EmitDefaultValue = false)] public string detail;
         [DataMember(Order = 15)] public string why = "";
         [DataMember(Order = 16)] public bool pinned; }
-    // Dedicated video memory per process. Off the UI thread, at most every 5 s.
     static class Vram {
         public static Dictionary<int, long> ByPid = new Dictionary<int, long>(); static bool busy;
         static DateTime read = DateTime.MinValue;
@@ -366,7 +374,6 @@ namespace DesktopVitals {
                 catch (Exception) { }
                 ByPid = next; read = DateTime.Now; busy = false;
             }); } }
-    // ModelStore.Scan on a background thread, at most every 30 s.
     static class ModelScan {
         public static List<InstalledModel> Items = new List<InstalledModel>(); public static volatile bool Ready;
         static bool busy; static DateTime read = DateTime.MinValue;
@@ -403,7 +410,6 @@ namespace DesktopVitals {
             if (t.count > 1 && (t.name == null || t.name.IndexOf(" models on disk", StringComparison.Ordinal) < 0))
                 return (t.name ?? "") + " \u00D7" + t.count.ToString(CultureInfo.InvariantCulture);
             return t.name ?? ""; }
-        // Bar labels: one decimal under 10, otherwise a whole number. Matches the v0.1.0 bars.
         public static string BarPct(double v) {
             if (double.IsNaN(v) || double.IsInfinity(v) || v < 0.05) return "0%";
             if (v < 10) return v.ToString("0.0", CultureInfo.InvariantCulture) + "%";
@@ -509,10 +515,8 @@ namespace DesktopVitals {
         public static Board Current = Empty();
         public static bool TasksReady { get { return TaskList.Ready; } }
         public static bool ModelsReady { get { return ModelScan.Ready; } }
-        // Both background scans have finished a pass. Snapshot waits on this, not on a fixed delay.
         public static bool ScansComplete { get { return TaskList.Ready && ModelScan.Ready; } }
         public static double LastPassMs; public static int LastProcs;
-        // Drop the one-time import headline after the window or snapshot has actually shown it.
         public static void AcknowledgeImport(Board board) {
             if (!Prefs.ImportNote || board == null || board.headline == null || board.headline.text == null) return;
             if (board.headline.text.IndexOf("Imported hides and pins", StringComparison.Ordinal) < 0) return;
