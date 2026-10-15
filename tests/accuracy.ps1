@@ -818,6 +818,11 @@ CreateObject("Wscript.Shell").Run "cmd.exe /c " & Chr(34) & dir & "gateway.cmd" 
         $setupName = [System.IO.Path]::GetFileNameWithoutExtension($SetupExe)
         if (@($things | Where-Object { $_.Name -eq $setupName -or $_.Name -like "$setupName*" }).Count -ne 0) { $boxOk = $false; [void]$script:Fp.Add('temp installer listed') }
         if (@($things | Where-Object { $_.Name -eq $ghost }).Count -ne 0) { $boxOk = $false; [void]$script:Fp.Add('phantom pin listed') }
+        if (@($things | Where-Object { $_.Name -eq 'DefenderSessionHelper' -or ($_.Name -eq 'hosted-compute-agent' -and $_.Kind -eq 'bot') }).Count -ne 0) {
+            $boxOk = $false; [void]$script:Fp.Add('service exe listed as a bot')
+        }
+        if (@($things | Where-Object { $_.Kind -eq 'task' -and $_.State -eq 'ended' }).Count -ne 0) { $boxOk = $false; [void]$script:Fp.Add('successful task marked ended') }
+        if (@($things | Where-Object { $_.Detail -match 'works on its own' }).Count -ne 0) { $boxOk = $false; [void]$script:Fp.Add('works on its own') }
         if (-not $boxOk) {
             $boxDetail = ((@($script:Fn) + @($script:Fp)) -join '; ')
             $names = ($things | ForEach-Object { "$($_.Kind):$($_.Name):$($_.Project):$($_.State):$($_.Detail)" }) -join ' | '

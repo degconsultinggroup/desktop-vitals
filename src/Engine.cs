@@ -600,7 +600,8 @@ namespace DesktopVitals {
             haveWall = true; }
         static string FormatSpan(TimeSpan span) {
             int sec = (int)span.TotalSeconds; if (sec < 0) sec = 0;
-            if (sec < 60) return sec.ToString(CultureInfo.InvariantCulture) + "s"; int mins = (int)span.TotalMinutes;
+            if (sec < 60) return sec.ToString(CultureInfo.InvariantCulture) + "s";
+            int days = (int)span.TotalDays; if (days >= 1) return days.ToString(CultureInfo.InvariantCulture) + "d"; int mins = (int)span.TotalMinutes;
             if (mins < 60) return mins.ToString(CultureInfo.InvariantCulture) + "m"; int h = mins / 60; int m = mins % 60;
             if (m == 0) return h.ToString(CultureInfo.InvariantCulture) + "h";
             return h.ToString(CultureInfo.InvariantCulture) + "h " + m.ToString(CultureInfo.InvariantCulture) + "m"; }

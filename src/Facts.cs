@@ -270,18 +270,32 @@ using System.Security.Cryptography; using System.Text; using System.Text.Regular
                 vram /= 1048576; if (string.IsNullOrEmpty(m.Weight) && vram >= (ModelVram / 1048576)) m.Weight = m.AgentModel;
                 string kind = "script"; if (!string.IsNullOrEmpty(m.Weight)) kind = "model";
                 else if (ports.Count > 0) kind = "server";
-                else if (m.Orphan || m.CadenceSec > 0 || (AgeMin(p) > 10 && !string.IsNullOrEmpty(m.RecentWrite)) || (m.TaskHit && AgeMin(p) > 10)) kind = "bot";
+                else if (!string.IsNullOrEmpty(m.Script) && (m.Orphan || m.CadenceSec > 0 || (AgeMin(p) > 10 && !string.IsNullOrEmpty(m.RecentWrite)) || (m.TaskHit && AgeMin(p) > 10))) kind = "bot";
                 else if (string.IsNullOrEmpty(m.Script)) kind = "app";
+                if (kind == "app" && !ShowApp(p, m, cpu, ram)) return null;
                 bool quiet = ports.Count == 0 && m.CadenceSec == 0 && string.IsNullOrEmpty(m.RecentWrite) && AgeMin(p) >= 5 && (DateTime.UtcNow - m.LastActive).TotalMinutes >= 5;
                 var t = new Thing(); t.kind = kind; t.state = quiet ? "quiet" : "running"; t.name = kind == "model" ? m.Weight : LeafName(p, m);
                 t.id = IdOf(m, p, kind, t.name); t.project = ProjectLabel(m); t.folder = FolderOf(m); t.cpu = cpu; t.ram_mb = ram;
                 t.vram_mb = vram; t.ports = ports; t.since = Age(p.CreateTime); t.count = 1; t.why = Why(m, ports); t.detail = DetailOf(m, kind, p.Exe);
                 m.Kind = kind; m.Leaf = t.name; if (Hidden(t.id, t.name)) return null; Finish(t); return t; }
+            static bool ShowApp(Proc p, Memo m, double cpu, double ram) {
+                bool heavy = cpu > 25 || ram >= 2048; string name = PrettyExe(p.Exe); bool pin = Prefs.PinIds.Contains("app:" + p.Pid.ToString(CultureInfo.InvariantCulture));
+                if (!pin) foreach (PinRule rule in Prefs.PinRules)
+                    if (rule != null && string.Equals(rule.Label, name, StringComparison.OrdinalIgnoreCase)) { pin = true; break; }
+                if (!heavy && !pin) return false; string path = m == null ? null : m.Image;
+                if (string.IsNullOrEmpty(path) || Forbidden(path) || UnderWindows(path)) return false;
+                if (AtOrUnder(path, Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData))) return false;
+                return !SignedMicrosoft(path); }
+            static bool SignedMicrosoft(string path) {
+                try {
+                    string sub = System.Security.Cryptography.X509Certificates.X509Certificate.CreateFromSignedFile(path).Subject ?? "";
+                    return sub.IndexOf("O=Microsoft", StringComparison.OrdinalIgnoreCase) >= 0 || sub.IndexOf("CN=Microsoft", StringComparison.OrdinalIgnoreCase) >= 0; }
+                catch (Exception) { return false; } }
             static string DetailOf(Memo m, string kind, string exe) {
                 if (kind == "model") return "loaded by " + (string.IsNullOrEmpty(exe) ? "process" : exe); var bits = new List<string>();
                 if (m.CadenceSec > 0) bits.Add("works every " + m.CadenceSec.ToString(CultureInfo.InvariantCulture) + "s");
                 else if (!string.IsNullOrEmpty(m.RecentWrite)) bits.Add("wrote " + m.RecentWrite);
-                else if (m.Orphan && !m.TaskHit) bits.Add("works on its own"); if (m.TaskHit && !string.IsNullOrEmpty(m.TaskName)) {
+                if (m.TaskHit && !string.IsNullOrEmpty(m.TaskName)) {
                     string next = m.TaskNext.Year >= 2000 && m.TaskNext > DateTime.Now ? " \u00B7 next " + m.TaskNext.ToString("HH:mm", CultureInfo.InvariantCulture) : "";
                     bits.Add("task: " + m.TaskName + next); }
                 return bits.Count == 0 ? null : string.Join(" \u00B7 ", bits.ToArray()); }
@@ -292,12 +306,14 @@ using System.Security.Cryptography; using System.Text; using System.Text.Regular
                     t.id = "task:" + (string.IsNullOrEmpty(task.Path) ? task.Name : task.Path); t.name = task.Name ?? "";
                     t.kind = "task"; t.folder = task.Script; string marker; string root = FindProject(task.Script ?? task.Exe, out marker);
                     t.project = root != null ? Path.GetFileName(root.TrimEnd('\\')) : null;
-                    if (task.Running) t.state = "running"; else if (task.Failed) t.state = "failed";
-                    else if (task.NeverRan) t.state = "idle"; else if (task.Result == 0) t.state = "ended"; else t.state = "idle";
+                    if (task.Running) t.state = "running"; else if (task.Failed) t.state = "failed"; else t.state = "idle";
                     t.since = SinceWhen(task.LastRun); t.why = task.Failed ? "last result was not success" : "scheduled task";
                     if (task.Failed && task.LastRun.Year >= 2000) {
                         string next = task.NextRun > DateTime.Now ? " \u00B7 next in " + FormatSpan(task.NextRun - DateTime.Now) : "";
                         t.detail = "failed " + task.LastRun.ToString("HH:mm", CultureInfo.InvariantCulture) + next; }
+                    else if (!task.Running && !task.NeverRan && task.Result == 0 && task.LastRun.Year >= 2000) {
+                        string next = task.NextRun > DateTime.Now ? " \u00B7 next in " + FormatSpan(task.NextRun - DateTime.Now) : "";
+                        t.detail = "ok " + FormatSpan(DateTime.Now - task.LastRun) + " ago" + next; }
                     if (Hidden(t.id, t.name)) continue; Finish(t); things.Add(t); } }
             static bool TaskLive(TaskInfo task, List<Thing> things) {
                 foreach (Thing t in things) {
