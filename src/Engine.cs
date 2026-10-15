@@ -24,7 +24,6 @@ namespace DesktopVitals {
                     Marshal.FreeHGlobal(buf); bufLen = Math.Max(ret + (1 << 16), bufLen * 2); buf = Marshal.AllocHGlobal(bufLen);
                     continue; }
                 if (st != 0) return list; break; }
-            // SYSTEM_PROCESS_INFORMATION, x64 offsets.
             int off = 0;
             while (true) {
                 IntPtr p = buf + off; int pid = (int)Marshal.ReadIntPtr(p, 80).ToInt64();
@@ -50,7 +49,6 @@ namespace DesktopVitals {
                 if (st != 0) return ""; int l = Marshal.ReadInt16(b, 0) & 0xffff; IntPtr s = Marshal.ReadIntPtr(b, 8);
                 return s == IntPtr.Zero ? "" : Marshal.PtrToStringUni(s, l / 2); }
             finally { Marshal.FreeHGlobal(b); Native.CloseHandle(h); } }
-        // PEB current directory: display-only, PROCESS_VM_READ, skip on failure; never execute.
         public static string CurrentDirectory(int pid) {
             IntPtr h = Native.OpenProcess(Native.QueryLimited | 0x0010, false, pid);   // PROCESS_VM_READ
             if (h == IntPtr.Zero) return null; IntPtr pbi = Marshal.AllocHGlobal(48);
@@ -126,7 +124,7 @@ namespace DesktopVitals {
             if (s.IndexOf("\\microsoft\\edge") >= 0 || s.IndexOf("microsoft edge") >= 0 || s.IndexOf("googleupdate") >= 0) return true;
             if (s.IndexOf("dellsupport") >= 0 || s.IndexOf("lenovo") >= 0 || s.IndexOf("hpsupport") >= 0) return true;
             if (s.IndexOf("zoom") >= 0 && s.IndexOf("update") >= 0) return true;
-            if (s.IndexOf("asus") >= 0 && s.IndexOf("system") >= 0) return true; return false; }
+            if ((s.IndexOf("asus") >= 0 && s.IndexOf("system") >= 0) || s.IndexOf("hostedcompute") >= 0 || s.IndexOf("hosted-compute") >= 0) return true; return false; }
         public static string Find(string exe, string cmd, string cwd) {
             if (!Interpreter(exe) || string.IsNullOrEmpty(cmd)) return null; var args = Split(cmd);
             for (int i = 1; i < args.Count; i++) {
@@ -143,7 +141,7 @@ namespace DesktopVitals {
     class InstalledModel {
         public string Name, Path; public long Bytes; }
     static class ModelStore {
-        static readonly Regex Shard = new Regex(@"-\d{5}-of-\d{5}(?=\.[A-Za-z0-9]+$)", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+        static readonly Regex Shard = new Regex(@"[-_.]\d{1,6}-of-\d{1,6}$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
         public static List<InstalledModel> Scan() {
             var list = new List<InstalledModel>(); string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
             string hfHome = Environment.GetEnvironmentVariable("HF_HOME");
@@ -177,7 +175,7 @@ namespace DesktopVitals {
                     string ext = f.Extension.ToLowerInvariant();
                     bool known = ext == ".gguf" || ext == ".safetensors" || ext == ".ggml";
                     bool big = f.Length >= (20L << 20) && (ext == ".bin" || ext == ".pt" || ext == ".pth" || ext == ".onnx" || ext == ".ckpt" || ext.Length == 0);
-                    if (!known && !big) continue; string name = Path.GetFileNameWithoutExtension(Shard.Replace(f.Name, ""));
+                    if (!known && !big) continue; string name = Shard.Replace(Path.GetFileNameWithoutExtension(f.Name), "");
                     if (name.Length >= 32 || name.StartsWith("sha256-", StringComparison.OrdinalIgnoreCase)) name = FolderName(f.Directory);
                     Add(list, Pretty(name), f.FullName, f.Length); }
                 if (depth == 4) return;
@@ -233,7 +231,7 @@ namespace DesktopVitals {
                             if (Path.IsPathRooted(arg) && Paths.ScriptFile(arg) && !Paths.SystemPath(arg)) { info.Script = arg; break; }
                         if (info.Script == null && Paths.ScriptFile(exe) && !Paths.SystemPath(exe)) info.Script = exe;
                         if (info.Script != null || (exe.Length > 0 && Path.IsPathRooted(exe) && !Paths.SystemPath(exe))) mine = true; }
-                    if (info.Script == null && (info.Name.IndexOf("update", StringComparison.OrdinalIgnoreCase) >= 0 || Paths.Noise(info.Name, info.Exe))) mine = false;
+                    if (Paths.Noise(info.Name, info.Exe) || (info.Script == null && info.Name.IndexOf("update", StringComparison.OrdinalIgnoreCase) >= 0)) mine = false;
                     if (mine) { NoteRepeat(t, info); found.Add(info); } }
                 catch (Exception) { } }
             foreach (dynamic sub in folder.GetFolders(0)) Walk(sub, found); }

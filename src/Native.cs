@@ -1,4 +1,3 @@
-// P/Invoke: process snapshot, memory, DWM glass, NVML.
 using System; using System.Collections.Generic; using System.Linq; using System.Runtime.InteropServices; using System.Text;
 namespace DesktopVitals {
     static class Native {
@@ -21,14 +20,12 @@ namespace DesktopVitals {
         [DllImport("dwmapi.dll")] public static extern int DwmExtendFrameIntoClientArea(IntPtr h, ref MARGINS m);
         [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
         [DllImport("kernel32.dll")] static extern bool GetLogicalProcessorInformationEx(int rel, IntPtr buf, ref int len);
-        // Logical processors by physical core, fastest first: (efficiency class, thread numbers).
         static List<KeyValuePair<int, int[]>> FlatCores(int n) {
             var list = new List<KeyValuePair<int, int[]>>(n);
             for (int i = 0; i < n; i++) list.Add(new KeyValuePair<int, int[]>(0, new[] { i }));
             return list; }
         public static List<KeyValuePair<int, int[]>> CoreLayout() {
             int n = Math.Max(1, Environment.ProcessorCount);
-            // One 64-bit group mask only; beyond that, flat bars without hybrid labels.
             if (n > 64) return FlatCores(n); var cores = new List<KeyValuePair<int, int[]>>(); bool multiGroup = false;
             int len = 0; GetLogicalProcessorInformationEx(0, IntPtr.Zero, ref len); if (len <= 0) return FlatCores(n);
             IntPtr b = Marshal.AllocHGlobal(len);
@@ -45,7 +42,6 @@ namespace DesktopVitals {
             finally { Marshal.FreeHGlobal(b); }
             if (multiGroup || cores.Count == 0) return FlatCores(n);
             return cores.OrderByDescending(c => c.Key).ThenBy(c => c.Value[0]).ToList(); }
-        // Busy and total time per logical processor, in 100 ns units.
         public static bool ThreadTimes(long[] busy, long[] total) {
             int n = busy.Length, len = n * 48, ret; IntPtr b = Marshal.AllocHGlobal(len);
             try {
@@ -87,7 +83,6 @@ namespace DesktopVitals {
         public static extern int sqlite3_column_bytes(IntPtr stmt, int i);
         [DllImport("winsqlite3.dll", CallingConvention = CallingConvention.Cdecl)]
         public static extern int sqlite3_bind_text(IntPtr stmt, int i, byte[] val, int n, IntPtr dtor); }
-    // NVIDIA NVML via the driver. Missing or failing calls leave GPU rows blank.
     static class Nvml {
         [DllImport("nvml.dll")] static extern int nvmlInit_v2();
         [DllImport("nvml.dll")] static extern int nvmlDeviceGetHandleByIndex_v2(uint i, out IntPtr dev);
@@ -104,7 +99,6 @@ namespace DesktopVitals {
             try {
                 if (!tried) {
                     tried = true;
-                    // DESKTOPVITALS_NO_NVML=1 shows what AMD and Intel owners see, for testing.
                     if (Environment.GetEnvironmentVariable("DESKTOPVITALS_NO_NVML") == "1") return false;
                     if (nvmlInit_v2() == 0 && nvmlDeviceGetHandleByIndex_v2(0, out dev) == 0) {
                         var sb = new StringBuilder(96);

@@ -3,7 +3,7 @@ using System.Security.Cryptography; using System.Text; using System.Text.Regular
     static partial class Engine {
         static class LiveBoard {
             const long ModelVram = 1L << 30; const int TailCap = 16 * 1024;
-            static readonly Regex Shard = new Regex(@"-\d{5}-of-\d{5}(?=\.[A-Za-z0-9]+$)", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+            static readonly Regex Shard = new Regex(@"[-_.]\d{1,6}-of-\d{1,6}$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
             static readonly Dictionary<int, Memo> memos = new Dictionary<int, Memo>();
             static readonly Dictionary<string, string> projects = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             static readonly Dictionary<string, long> tails = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
@@ -141,13 +141,16 @@ using System.Security.Cryptography; using System.Text; using System.Text.Regular
                 catch (Exception) { } return false; }
             static bool SameScript(Memo a, Memo b) {
                 return a != null && b != null && !string.IsNullOrEmpty(a.Script) && string.Equals(a.Script, b.Script, StringComparison.OrdinalIgnoreCase); }
-            static bool SameStem(Memo a, Memo b) {
-                string fa = a == null ? null : ScriptFile(a.Script), fb = b == null ? null : ScriptFile(b.Script);
+            static bool SameStem(Memo a, Memo b) { return a != null && b != null && SameFileStem(ScriptFile(a.Script), ScriptFile(b.Script)); }
+            static bool SameFileStem(string fa, string fb) {
                 if (string.IsNullOrEmpty(fa) || string.IsNullOrEmpty(fb)) return false; string xa, ya, da, db; try {
                     xa = Path.GetFileNameWithoutExtension(fa); ya = Path.GetFileNameWithoutExtension(fb);
                     da = Path.GetDirectoryName(fa); db = Path.GetDirectoryName(fb); }
                 catch (Exception) { return false; }
                 return xa != null && xa.Length >= 3 && string.Equals(xa, ya, StringComparison.OrdinalIgnoreCase) && string.Equals(da, db, StringComparison.OrdinalIgnoreCase); }
+            static bool UserScript(string script) {
+                string file = ScriptFile(script); if (string.IsNullOrEmpty(file) || Paths.SystemPath(file) || Forbidden(file)) return false;
+                return file.IndexOf("\\AppData\\", StringComparison.OrdinalIgnoreCase) < 0; }
             static bool DifferentProject(Memo a, Memo b) {
                 return a != null && b != null && !string.IsNullOrEmpty(a.ProjectFull) && !string.IsNullOrEmpty(b.ProjectFull) && !string.Equals(a.ProjectFull, b.ProjectFull, StringComparison.OrdinalIgnoreCase); }
             static bool Listens(int pid, Dictionary<int, List<int>> listeners) {
@@ -157,17 +160,16 @@ using System.Security.Cryptography; using System.Text; using System.Text.Regular
                 if (cm.Agent != null && (am == null || !string.Equals(cm.Agent, am.Agent, StringComparison.Ordinal))) return true;
                 if (!string.IsNullOrEmpty(cm.Weight)) return true;
                 if (SameScript(cm, am) || SameStem(cm, am)) return false;
-                return !string.IsNullOrEmpty(cm.Script); }
+                return UserScript(cm.Script); }
             static bool Owned(Proc p, Memo m, Dictionary<int, Proc> byPid, Dictionary<int, List<int>> listeners) {
                 Proc cur = p; var guard = new HashSet<int>(); for (int n = 0; n < 40 && guard.Add(cur.Pid); n++) {
                     Proc parent; if (!byPid.TryGetValue(cur.Parent, out parent)) return false;
                     if (parent.CreateTime == 0 || cur.CreateTime == 0 || parent.CreateTime >= cur.CreateTime) return false;
                     Memo pm = memo(parent); if (pm == null || !pm.Yours) return false;
                     if (SameScript(m, pm) || SameStem(m, pm)) return true; if (string.IsNullOrEmpty(pm.Script)) { cur = parent; continue; }
-                    if (OwnOf(p, m, pm, listeners)) return false;
+                    if (OwnOf(p, m, pm, listeners)) return false; if (!UserScript(m.Script)) return true;
                     if (Container(parent.Exe)) { cur = parent; continue; }
-                    if (m.Agent != null || DifferentProject(m, pm)) return false;
-                    if (!string.IsNullOrEmpty(m.Script)) return false; return true; }
+                    if (m.Agent != null || DifferentProject(m, pm) || UserScript(m.Script)) return false; return true; }
                 return false; }
             static bool IsRoot(Proc p, Memo m, Dictionary<int, Proc> byPid, Dictionary<int, List<int>> listeners) {
                 if (p == null || m == null || !m.Yours || Infra(p.Exe)) return false;
@@ -196,7 +198,7 @@ using System.Security.Cryptography; using System.Text; using System.Text.Regular
                 if (CmdHas(m.Cmd, t.Script) || (Paths.ScriptFile(t.Exe ?? "") && CmdHas(m.Cmd, t.Exe))) return true;
                 if (!Paths.Interpreter(t.Exe ?? "") && SamePath(m.Image, t.Exe)) return true;
                 string script = ScriptFile(m.Script); if (string.IsNullOrEmpty(script)) return false;
-                if (AncestorScript(p, byPid, t.Script)) return true;
+                if (AncestorScript(p, byPid, t.Script) || SameFileStem(t.Script, script)) return true;
                 return t.RepeatMin > 0 && t.RepeatMin <= 30 && BodyRefs(t.Script, script); }
             static bool AncestorScript(Proc p, Dictionary<int, Proc> byPid, string script) {
                 if (string.IsNullOrEmpty(script) || byPid == null) return false; Proc cur = p; var guard = new HashSet<int>();
@@ -222,16 +224,18 @@ using System.Security.Cryptography; using System.Text; using System.Text.Regular
                 return string.IsNullOrEmpty(script) || !AtOrUnder(script, root); }
             static bool SkipRoot(string path) {
                 string n = NameOf(path); if (string.IsNullOrEmpty(n)) return true;
-                if (n.Equals("desk", StringComparison.OrdinalIgnoreCase) || n.Equals("AppData", StringComparison.OrdinalIgnoreCase) || n.Equals("Local", StringComparison.OrdinalIgnoreCase) || n.Equals("Roaming", StringComparison.OrdinalIgnoreCase)) return true;
+                if (n.Equals("desk", StringComparison.OrdinalIgnoreCase) || n.Equals("AppData", StringComparison.OrdinalIgnoreCase) || n.Equals("Local", StringComparison.OrdinalIgnoreCase) || n.Equals("Roaming", StringComparison.OrdinalIgnoreCase) || n.Equals("Documents", StringComparison.OrdinalIgnoreCase) || n.Equals("Downloads", StringComparison.OrdinalIgnoreCase) || n.Equals("Desktop", StringComparison.OrdinalIgnoreCase) || n.Equals("OneDrive", StringComparison.OrdinalIgnoreCase)) return true;
                 return n.StartsWith("openai.chatgpt-", StringComparison.OrdinalIgnoreCase); }
             static string TopFolder(string start) {
-                string full = start; try { if (!Directory.Exists(start)) full = Path.GetDirectoryName(start); full = Path.GetFullPath(full); } catch (Exception) { return null; }
-                string docs = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-                foreach (string b in new[] { docs, home }) {
-                    if (string.IsNullOrEmpty(b) || !AtOrUnder(full, b)) continue;
-                    string rest = full.Substring(b.TrimEnd('\\').Length).TrimStart('\\'); if (rest.Length == 0) return null;
-                    int cut = rest.IndexOf('\\'); string top = Path.Combine(b, cut < 0 ? rest : rest.Substring(0, cut)); return SkipRoot(top) ? null : top; }
+                string full = start, child = null; try { if (!Directory.Exists(start)) full = Path.GetDirectoryName(start); full = Path.GetFullPath(full); } catch (Exception) { return null; }
+                for (int n = 0; n < 40 && !string.IsNullOrEmpty(full); n++) {
+                    if (HomeRoot(full)) return child; string parent; try { parent = Path.GetDirectoryName(full.TrimEnd('\\')); } catch (Exception) { return null; }
+                    if (string.IsNullOrEmpty(parent) || parent.Equals(full, StringComparison.OrdinalIgnoreCase)) return null; child = full; full = parent; }
                 return null; }
+            static bool HomeRoot(string path) {
+                if (string.IsNullOrEmpty(path)) return false; string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+                if (!string.IsNullOrEmpty(home) && SamePath(path, home)) return true; string n = NameOf(path); if (string.IsNullOrEmpty(n)) return false;
+                return n.Equals("Documents", StringComparison.OrdinalIgnoreCase) || n.Equals("Downloads", StringComparison.OrdinalIgnoreCase) || n.Equals("Desktop", StringComparison.OrdinalIgnoreCase) || n.Equals("OneDrive", StringComparison.OrdinalIgnoreCase) || n.StartsWith("OneDrive ", StringComparison.OrdinalIgnoreCase); }
             static void AssignProjectPath(Memo m, string path) {
                 string marker; string root = FindProject(path, out marker); if (string.IsNullOrEmpty(root)) return;
                 m.ProjectFull = root; m.Marker = marker; }
@@ -271,7 +275,7 @@ using System.Security.Cryptography; using System.Text; using System.Text.Regular
                     t.count++; t.cpu += p.Cpu; t.ram_mb += p.Private / 1048576.0; t.vram_mb += VramOf(p.Pid) / 1048576.0;
                     AddPorts(p.Pid, byPid, listeners, t.ports, new HashSet<int>(), m);
                     string state = AgentState(m, p, act, child); if (Rank(state) > Rank(t.state)) t.state = state;
-                    string detail = AgentDetail(m, act, git, child); if (string.IsNullOrEmpty(t.detail) || state == "waiting") t.detail = detail;
+                    string detail = state == "idle" ? IdleLine(act) : AgentDetail(m, act, git, child); if (string.IsNullOrEmpty(t.detail) || state == t.state) t.detail = detail;
                     if (string.IsNullOrEmpty(t.branch) && git != null) t.branch = git.Branch;
                     if (string.IsNullOrEmpty(t.why)) t.why = !string.IsNullOrEmpty(m.AgentModel) ? "model " + m.AgentModel : "agent";
                     if (t.since.Length == 0) t.since = Age(p.CreateTime); m.Kind = "agent"; m.Leaf = m.Agent; }
@@ -299,10 +303,12 @@ using System.Security.Cryptography; using System.Text; using System.Text.Regular
                     if (m != null && string.Equals(m.Agent, mine.Agent, StringComparison.Ordinal)) return true; id = up.Parent; }
                 return false; }
             static string AgentState(Memo m, Proc p, Act act, string child) {
-                if (act != null && act.Open && string.IsNullOrEmpty(child)) return "waiting"; if (!string.IsNullOrEmpty(child)) return "working";
-                if (act != null && act.Kind == "answering" && string.IsNullOrEmpty(child)) return "waiting";
-                double quiet = (DateTime.UtcNow - m.LastActive).TotalMinutes;
-                if (AgeMin(p) >= 5 && quiet >= 5) return string.IsNullOrEmpty(m.ProjectFull) ? "idle" : "quiet"; return "working"; }
+                if (act != null && act.Open && string.IsNullOrEmpty(child)) return "waiting";
+                bool recent = false; try { recent = act != null && act.When != DateTime.MinValue && (DateTime.UtcNow - act.When.ToUniversalTime()).TotalMinutes < 1; if (!recent && m != null && !string.IsNullOrEmpty(m.LogFile)) recent = (DateTime.UtcNow - File.GetLastWriteTimeUtc(m.LogFile)).TotalMinutes < 1; } catch (Exception) { }
+                if (!string.IsNullOrEmpty(child) || recent) return "working"; return "idle"; }
+            static string IdleLine(Act act) {
+                if (act == null || act.When == DateTime.MinValue) return "done"; string age = FormatSpan(DateTime.UtcNow - act.When.ToUniversalTime());
+                return age.Length == 0 ? "done" : "done \u00B7 " + age + " ago"; }
             static string AgentDetail(Memo m, Act act, GitSnap git, string child) {
                 var bits = new List<string>(); if (act != null && !string.IsNullOrEmpty(act.Kind)) {
                     string bit = act.Kind; if (!string.IsNullOrEmpty(act.File)) bit += " " + act.File; if (act.When != DateTime.MinValue) {
@@ -358,8 +364,8 @@ using System.Security.Cryptography; using System.Text; using System.Text.Regular
                 foreach (TaskInfo task in TaskList.Items) {
                     if (task == null || TaskLive(task, things)) continue; var t = new Thing();
                     t.id = "task:" + (string.IsNullOrEmpty(task.Path) ? task.Name : task.Path); t.name = task.Name ?? "";
-                    t.kind = "task"; t.folder = task.Script; string marker; string root = FindProject(task.Script ?? task.Exe, out marker);
-                    t.project = root != null ? Path.GetFileName(root.TrimEnd('\\')) : null;
+                    t.kind = "task"; t.folder = task.Script; string marker; string look = !string.IsNullOrEmpty(task.Script) ? task.Script : task.Exe; string root = FindProject(look, out marker);
+                    if (string.IsNullOrEmpty(task.Script) && marker != ".git") root = null; t.project = root != null ? Path.GetFileName(root.TrimEnd('\\')) : null;
                     if (task.Running) t.state = "running"; else if (task.Failed) t.state = "failed"; else t.state = "idle";
                     t.since = SinceWhen(task.LastRun); t.why = task.Failed ? "last result was not success" : "scheduled task";
                     if (task.Failed && task.LastRun.Year >= 2000) {
@@ -467,7 +473,7 @@ using System.Security.Cryptography; using System.Text; using System.Text.Regular
             static string LeafName(Proc p, Memo m) {
                 string script = ScriptName(m.Script); return !string.IsNullOrEmpty(script) ? script : PrettyExe(p.Exe); }
             static string ShownName(Proc p, Memo m, List<Proc> members, string kind) {
-                if (kind == "bot" && m.TaskHit && !string.IsNullOrEmpty(m.TaskName)) return ShortTask(m.TaskName);
+                if (m.TaskHit && !string.IsNullOrEmpty(m.TaskName) && (kind == "bot" || (kind == "server" && m.TaskName.IndexOf(' ') > 0))) return ShortTask(m.TaskName);
                 string script = ScriptName(m.Script); if (string.IsNullOrEmpty(script)) return PrettyExe(p.Exe);
                 if (LauncherScript(script) && WrapsScript(m, members)) {
                     try { string stem = Path.GetFileNameWithoutExtension(script); if (!string.IsNullOrEmpty(stem)) return stem; }
@@ -489,11 +495,13 @@ using System.Security.Cryptography; using System.Text; using System.Text.Regular
                 string file = ScriptFile(m.Script); if (string.IsNullOrEmpty(file)) return null;
                 try { string dir = Path.GetDirectoryName(file); return string.IsNullOrEmpty(dir) ? null : Path.GetFileName(dir.TrimEnd('\\')); } catch (Exception) { return null; } }
             static string ShortTask(string name) {
-                if (string.IsNullOrEmpty(name)) return name; int sp = name.IndexOf(' '); if (sp <= 0) return name; string first = name.Substring(0, sp);
+                if (string.IsNullOrEmpty(name)) return name; int sp = name.IndexOf(' '); if (sp < 2 || sp > 6) return name;
+                string first = name.Substring(0, sp); if (!CapsToken(first)) return name;
                 foreach (TaskInfo t in TaskList.Items) {
-                    if (t == null || string.IsNullOrEmpty(t.Name)) continue; int s = t.Name.IndexOf(' ');
-                    if (s <= 0 || !first.Equals(t.Name.Substring(0, s), StringComparison.OrdinalIgnoreCase)) return name; }
+                    if (t == null || string.IsNullOrEmpty(t.Name)) continue; int s = t.Name.IndexOf(' '); if (s < 2 || s > 6) continue;
+                    string tok = t.Name.Substring(0, s); if (CapsToken(tok) && !first.Equals(tok, StringComparison.OrdinalIgnoreCase)) return name; }
                 string rest = name.Substring(sp + 1).Trim(); return rest.Length == 0 ? name : rest; }
+            static bool CapsToken(string s) { if (string.IsNullOrEmpty(s)) return false; foreach (char c in s) if (c < 'A' || c > 'Z') return false; return true; }
             static string ScriptName(string script) {
                 if (string.IsNullOrEmpty(script)) return null; if (script.StartsWith("module:", StringComparison.Ordinal)) {
                     string rest = script.Substring(7); int bar = rest.IndexOf('|'); return bar < 0 ? rest : rest.Substring(0, bar); }
@@ -534,7 +542,7 @@ using System.Security.Cryptography; using System.Text; using System.Text.Regular
                     if (a.StartsWith("--model=", StringComparison.OrdinalIgnoreCase)) path = a.Substring(8).Trim('"');
                     else if ((a.Equals("--model", StringComparison.OrdinalIgnoreCase) || a.Equals("-m", StringComparison.OrdinalIgnoreCase) || a.Equals("--model-path", StringComparison.OrdinalIgnoreCase)) && i + 1 < args.Count)
                         path = args[++i].Trim('"');
-                    if (!IsWeightPath(path)) continue; return Path.GetFileNameWithoutExtension(Shard.Replace(Path.GetFileName(path), "")); }
+                    if (!IsWeightPath(path)) continue; return Shard.Replace(Path.GetFileNameWithoutExtension(path), ""); }
                 return null; }
             static Act LogOf(Memo m, Proc p) {
                 try {
@@ -548,16 +556,14 @@ using System.Security.Cryptography; using System.Text; using System.Text.Regular
                 return string.IsNullOrEmpty(h) ? Environment.GetFolderPath(Environment.SpecialFolder.UserProfile) : h; }
             static void Claude(string home, Memo m, Proc p) {
                 if (m.LogFile == null) {
-                    string file = null;
-                    string reg = Path.Combine(home, ".claude", "sessions", p.Pid.ToString(CultureInfo.InvariantCulture) + ".json");
-                    string text = ReadText(reg, 8000); if (!string.IsNullOrEmpty(text)) {
-                        long ps; string procStart = JsonString(text, "\"procStart\":\"", 0);
-                        if (!string.IsNullOrEmpty(procStart) && long.TryParse(procStart, NumberStyles.Integer, CultureInfo.InvariantCulture, out ps)) {
-                            long d = ps - p.CreateTime; if (d < 0) d = -d; if (d > 20000000) text = null; }
-                        if (text != null) {
-                            string sid = JsonString(text, "\"sessionId\":\"", 0); string cwd = JsonString(text, "\"cwd\":\"", 0);
+                    string file = ClaudeByCwd(home, m.Cwd, p.CreateTime);
+                    if (string.IsNullOrEmpty(file)) {
+                        string reg = Path.Combine(home, ".claude", "sessions", p.Pid.ToString(CultureInfo.InvariantCulture) + ".json");
+                        DateTime rw = DateTime.MinValue; try { rw = File.GetLastWriteTimeUtc(reg); } catch (Exception) { }
+                        if (rw >= DateTime.FromFileTimeUtc(p.CreateTime).AddMinutes(-1)) {
+                            string text = ReadText(reg, 8000); string sid = JsonString(text, "\"sessionId\":\"", 0); string cwd = JsonString(text, "\"cwd\":\"", 0);
                             if (!string.IsNullOrEmpty(sid) && !string.IsNullOrEmpty(cwd)) file = Path.Combine(home, ".claude", "projects", Encode(cwd), sid + ".jsonl"); } }
-                    if (string.IsNullOrEmpty(file) || !File.Exists(file)) file = ClaudeByCwd(home, m.Cwd, p.CreateTime); m.LogFile = file ?? ""; }
+                    m.LogFile = file ?? ""; }
                 Apply(m, m.LogFile, true); }
             static string ClaudeByCwd(string home, string cwd, long create) {
                 if (string.IsNullOrEmpty(cwd)) return null; string dir = Path.Combine(home, ".claude", "projects", Encode(cwd));
@@ -632,7 +638,7 @@ using System.Security.Cryptography; using System.Text; using System.Text.Regular
                 bool tool = line.IndexOf("\"type\":\"tool_use\"", StringComparison.Ordinal) >= 0;
                 if (line.IndexOf("\"type\":\"tool_result\"", StringComparison.Ordinal) >= 0 && !tool) { hit.Kind = "tool"; return hit; } if (tool) {
                     string name = JsonString(line, "\"name\":\"", Math.Max(0, line.IndexOf("\"type\":\"tool_use\"", StringComparison.Ordinal)));
-                    hit.Kind = KindFor(name); hit.File = FileFrom(line); hit.Open = true; return hit; }
+                    hit.Kind = KindFor(name); hit.File = FileFrom(line); hit.Open = line.IndexOf("permission_request", StringComparison.OrdinalIgnoreCase) >= 0 || line.IndexOf("approval_request", StringComparison.OrdinalIgnoreCase) >= 0; return hit; }
                 if (line.IndexOf("\"type\":\"thinking\"", StringComparison.Ordinal) >= 0 && line.IndexOf("\"type\":\"text\"", StringComparison.Ordinal) < 0) { hit.Kind = "thinking"; return hit; }
                 if (line.IndexOf("\"type\":\"text\"", StringComparison.Ordinal) >= 0 && line.IndexOf("\"stop_reason\":\"end_turn\"", StringComparison.Ordinal) >= 0) { hit.Kind = "answering"; return hit; }
                 return hit.Model == null ? null : hit; }
@@ -671,7 +677,7 @@ using System.Security.Cryptography; using System.Text; using System.Text.Regular
                 var hit = new Act(); bool call = head.IndexOf("\"type\":\"tool-call\"", StringComparison.Ordinal) >= 0;
                 bool result = head.IndexOf("\"type\":\"tool-result\"", StringComparison.Ordinal) >= 0; if (call || result) {
                     hit.Kind = KindFor(JsonString(head, "\"toolName\":\"", 0)); hit.File = FileFrom(head + end);
-                    hit.Open = call && !result; return hit; }
+                    hit.Open = call && !result && (head.IndexOf("permission_request", StringComparison.OrdinalIgnoreCase) >= 0 || head.IndexOf("approval_request", StringComparison.OrdinalIgnoreCase) >= 0 || end.IndexOf("permission_request", StringComparison.OrdinalIgnoreCase) >= 0 || end.IndexOf("approval_request", StringComparison.OrdinalIgnoreCase) >= 0); return hit; }
                 if (head.IndexOf("\"type\":\"reasoning\"", StringComparison.Ordinal) >= 0) { hit.Kind = "thinking"; return hit; }
                 if (head.IndexOf("\"type\":\"text\"", StringComparison.Ordinal) >= 0 && JsonString(head, "\"role\":\"", 0) == "assistant") { hit.Kind = "answering"; return hit; }
                 return null; }
@@ -753,7 +759,7 @@ using System.Security.Cryptography; using System.Text; using System.Text.Regular
                     foreach (var kv in files) {
                         if (!IsWeightFile(kv.Key, kv.Value)) continue; long bytes = kv.Value;
                         try { if (File.Exists(kv.Key)) bytes = new FileInfo(kv.Key).Length; } catch (Exception) { }
-                        string name = Path.GetFileNameWithoutExtension(Shard.Replace(Path.GetFileName(kv.Key), "")); long have;
+                        string name = Shard.Replace(Path.GetFileNameWithoutExtension(kv.Key), ""); long have;
                         names.TryGetValue(name, out have); names[name] = have + bytes;
                         if (have + bytes > bestBytes) { bestBytes = have + bytes; best = name; } }
                     return best; }
