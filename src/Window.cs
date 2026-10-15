@@ -828,6 +828,7 @@ namespace DesktopVitals
             ids.Sort(StringComparer.OrdinalIgnoreCase);
             foreach (string id in ids) rows.Add(Item(Remembered(id), delegate { Unhide(id); }));
             rows.Add(Item("Frontier Deployments", OpenFrontier));
+            rows.Add(Item("DEG Consulting Group", OpenDeg));
             rows.Add(new MenuRow { Label = ErrorLog.Ver, Dim = true });
             return rows;
         }
@@ -1058,11 +1059,8 @@ namespace DesktopVitals
             try { using (Process.Start(new ProcessStartInfo("http://127.0.0.1:" + port) { UseShellExecute = true })) { } }
             catch (Exception) { }
         }
-        static void OpenFrontier()
-        {
-            try { using (Process.Start(new ProcessStartInfo("https://frontierdeployments.com") { UseShellExecute = true })) { } }
-            catch (Exception) { }
-        }
+        static void OpenFrontier() { try { using (Process.Start(new ProcessStartInfo("https://frontierdeployments.com") { UseShellExecute = true })) { } } catch (Exception) { } }
+        static void OpenDeg() { try { using (Process.Start(new ProcessStartInfo("https://degconsultinggroup.com") { UseShellExecute = true })) { } } catch (Exception) { } }
         void FitSnapshotHeight()
         {
             if (pane == null) return;

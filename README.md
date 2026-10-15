@@ -46,4 +46,4 @@ Click a name to open its folder. Click a port to open it. Right-click a line to 
 
 MIT. See [LICENSE](LICENSE).
 
-Made by [Frontier Deployments](https://frontierdeployments.com).
+Made by [Frontier Deployments](https://frontierdeployments.com) / [DEG Consulting Group](https://degconsultinggroup.com).
