@@ -1,8 +1,17 @@
 # Desktop Vitals
 
-Task Manager wasn't enough for me. I run Claude Code, Codex, Cursor, a few bots and local models on one PC, and I wanted one window to see all of it.
+```
+Note from Danny - the rest is written by Opus:
+
+Task Manager is just not enough re: what I want to see about my Windows computer. So I built this and use it all the time to show my processor threads (so cool to see), graphics card usage, models downloaded and whether or not they are being served, any harnesses that are active and how many agents they are running, scheduled jobs/crons/whatever. It's just so much more informative than whatever I had before and I didn't need to go looking for something out there, just built what I wanted. I love AI :)
+
+Tell your agent to install it and configure it for your PC, it'll likely find bugs, but it'll fix em!
+Danny @ Frontier Deployments / DEG Consulting Group
+
+```
 
 Desktop Vitals just reads what's running and shows you. It never starts or stops anything and doesn't need admin.
+
 
 <img src="docs/screenshot.png" alt="Desktop Vitals" width="400">
 
@@ -40,4 +49,4 @@ Not tested yet on Windows 10 or a PC without an NVIDIA card.
 
 MIT.
 
-Made with love by me ([Frontier Deployments](https://frontierdeployments.com)) prompting Opus 5.5, who managed a bunch of Cursor Grok 4.7 and Composer agents.
+Made with love by Danny ([Frontier Deployments](https://frontierdeployments.com)) prompting Opus 5.5, who managed a bunch of Cursor Grok 4.7 and Composer agents.
