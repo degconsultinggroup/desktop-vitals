@@ -1,12 +1,12 @@
 {
   "name": "Laptop",
   "strip": {
-    "cpu": 3,
+    "cpu": 8,
     "ram_used_gb": 5,
     "ram_total_gb": 16,
-    "disk_free_gb": 210,
+    "disk_free_gb": 148,
     "disk_total_gb": 256,
-    "threads": [5, 3, 2, 4, 2, 3, 3, 2],
+    "threads": [18, 7, 12, 4, 9, 3, 6, 4],
     "core_groups": [
       {"kind": "core", "threads": [0, 1]},
       {"kind": "core", "threads": [2, 3]},
