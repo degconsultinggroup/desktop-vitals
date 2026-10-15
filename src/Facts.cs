@@ -344,7 +344,7 @@ using System.Security.Cryptography; using System.Text; using System.Text.Regular
                 if (!pin) foreach (PinRule rule in Prefs.PinRules)
                     if (rule != null && string.Equals(rule.Label, name, StringComparison.OrdinalIgnoreCase)) { pin = true; break; }
                 if (!heavy && !pin) return false; string path = m == null ? null : m.Image;
-                if (string.IsNullOrEmpty(path) || Forbidden(path) || UnderWindows(path)) return false;
+                if (string.IsNullOrEmpty(path) || Forbidden(path) || UnderWindows(path) || Paths.Noise(name, path)) return false;
                 if (AtOrUnder(path, Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData))) return false;
                 return !SignedMicrosoft(path); }
             static bool SignedMicrosoft(string path) {

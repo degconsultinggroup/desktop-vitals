@@ -124,7 +124,8 @@ namespace DesktopVitals {
             if (s.IndexOf("\\microsoft\\edge") >= 0 || s.IndexOf("microsoft edge") >= 0 || s.IndexOf("googleupdate") >= 0) return true;
             if (s.IndexOf("dellsupport") >= 0 || s.IndexOf("lenovo") >= 0 || s.IndexOf("hpsupport") >= 0) return true;
             if (s.IndexOf("zoom") >= 0 && s.IndexOf("update") >= 0) return true;
-            if ((s.IndexOf("asus") >= 0 && s.IndexOf("system") >= 0) || s.IndexOf("hostedcompute") >= 0 || s.IndexOf("hosted-compute") >= 0) return true; return false; }
+            if ((s.IndexOf("asus") >= 0 && s.IndexOf("system") >= 0) || s.IndexOf("hostedcompute") >= 0 || s.IndexOf("hosted-compute") >= 0) return true;
+            if (s.IndexOf("runner.worker") >= 0 || s.IndexOf("runner.listener") >= 0 || s.IndexOf("runner.pluginhost") >= 0) return true; return false; }
         public static string Find(string exe, string cmd, string cwd) {
             if (!Interpreter(exe) || string.IsNullOrEmpty(cmd)) return null; var args = Split(cmd);
             for (int i = 1; i < args.Count; i++) {
