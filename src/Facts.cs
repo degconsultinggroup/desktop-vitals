@@ -9,7 +9,7 @@ using System.Security.Cryptography; using System.Text; using System.Text.Regular
             static readonly Dictionary<string, string> projects = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             static readonly Dictionary<string, long> tails = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
             static readonly List<ExitNote> exits = new List<ExitNote>(); static Dictionary<string, string> dos; class Memo {
-                public long Create, LastIo, LastCpu, CpuBucket, GitStamp;
+                public long Create, LastIo, LastCpu, CpuBucket, GitStamp, LastWriteBytes = -1;
                 public string Cmd = "", Cwd, Image, Script, Leaf = "", LaunchKind, LaunchName, TaskName, TaskPath, ProjectFull, Marker, Agent, Weight, AgentModel, Kind = "script", RecentWrite, LogFile, GitHead = "";
                 public bool Yours, Orphan, Plain, TaskHit, Mapped; public int TaskGen = -1, CadenceSec;
                 public DateTime LastActive, WriteChecked, LastWrite, TaskNext; public IntPtr Handle; public Act Action; public GitSnap Git; }
@@ -61,17 +61,23 @@ using System.Security.Cryptography; using System.Text; using System.Text.Regular
                 if (p.Io != m.LastIo || m.CpuBucket >= 5000000) { m.LastActive = now; m.CpuBucket = 0; }
                 m.LastCpu = p.CpuTime; m.LastIo = p.Io; if (m.Yours && !string.IsNullOrEmpty(m.Script)) NoteWrite(m, p, now); }
             static void NoteWrite(Memo m, Proc p, DateTime now) {
-                if ((now - m.WriteChecked).TotalSeconds < 0.35) return; m.WriteChecked = now; string dir = null; string file = ScriptFile(m.Script);
-                try { if (!string.IsNullOrEmpty(file)) dir = Path.GetDirectoryName(file); } catch (Exception) { }
-                if (string.IsNullOrEmpty(dir)) dir = m.Cwd; if (string.IsNullOrEmpty(dir) || !Directory.Exists(dir) || Forbidden(dir)) return;
-                DateTime born = p.CreateTime > 0 ? DateTime.FromFileTime(p.CreateTime) : DateTime.MinValue;
-                DateTime best = DateTime.MinValue; string name = null; try {
+                if ((now - m.WriteChecked).TotalSeconds < 0.35) return;
+                DateTime prevAt = m.WriteChecked; m.WriteChecked = now; long prev = m.LastWriteBytes; m.LastWriteBytes = p.WriteBytes;
+                if (prev < 0) return; if (p.WriteBytes <= prev) { m.RecentWrite = null; return; }
+                if (m.LastWrite != DateTime.MinValue) {
+                    double d = (now - m.LastWrite).TotalSeconds; if (d >= 0.3 && d < 180) m.CadenceSec = (int)Math.Max(1, Math.Round(d)); }
+                m.LastWrite = now; m.RecentWrite = OneWrite(m, prevAt); }
+            // A file name only when this process's write counter moved and exactly one file in its own script folder did. No cwd fallback.
+            static string OneWrite(Memo m, DateTime sinceUtc) {
+                string file = ScriptFile(m.Script); if (string.IsNullOrEmpty(file)) return null; string dir;
+                try { dir = Path.GetDirectoryName(file); } catch (Exception) { return null; }
+                if (string.IsNullOrEmpty(dir) || !Directory.Exists(dir) || Forbidden(dir)) return null;
+                DateTime since = sinceUtc.Year < 2000 ? DateTime.MinValue : sinceUtc.ToLocalTime().AddSeconds(-1);
+                string only = null; int hits = 0; try {
                     int n = 0; foreach (string f in Directory.EnumerateFiles(dir)) {
                         if (++n > 40) break; DateTime w; try { w = File.GetLastWriteTime(f); } catch (Exception) { continue; }
-                        if (w >= born && w > best && (DateTime.Now - w).TotalSeconds <= 90) { best = w; name = Path.GetFileName(f); } } }
-                catch (Exception) { return; } if (best == DateTime.MinValue) return; if (m.LastWrite != DateTime.MinValue) {
-                    double d = (best - m.LastWrite).TotalSeconds; if (d >= 0.3 && d < 180) m.CadenceSec = (int)Math.Max(1, Math.Round(d)); }
-                m.LastWrite = best; if (!string.IsNullOrEmpty(name)) m.RecentWrite = name; }
+                        if (w < since) continue; if (++hits > 1) return null; only = Path.GetFileName(f); } }
+                catch (Exception) { return null; } return hits == 1 ? only : null; }
             static void Launch(Proc p, Memo m, Dictionary<int, Proc> byPid) {
                 Proc cur = p; var guard = new HashSet<int>(); for (int n = 0; n < 40 && guard.Add(cur.Pid); n++) {
                     Proc parent; if (!byPid.TryGetValue(cur.Parent, out parent)) { m.Orphan = true; break; }
@@ -293,7 +299,7 @@ using System.Security.Cryptography; using System.Text; using System.Text.Regular
                 else if (string.IsNullOrEmpty(m.Script)) kind = "app";
                 if (kind == "app" && !ShowApp(p, m, cpu, ram)) return null;
                 bool quiet = ports.Count == 0 && m.CadenceSec == 0 && string.IsNullOrEmpty(m.RecentWrite) && AgeMin(p) >= 5 && (DateTime.UtcNow - m.LastActive).TotalMinutes >= 5;
-                var t = new Thing(); t.kind = kind; t.state = quiet ? "quiet" : "running"; t.name = kind == "model" ? m.Weight : LeafName(p, m);
+                var t = new Thing(); t.kind = kind; t.state = quiet ? "quiet" : "running"; t.name = kind == "model" ? m.Weight : ShownName(p, m, members, kind);
                 t.id = IdOf(m, p, kind, t.name); t.project = ProjectLabel(m); t.folder = FolderOf(m); t.cpu = cpu; t.ram_mb = ram;
                 t.vram_mb = vram; t.ports = ports; t.since = Age(p.CreateTime); t.count = 1; t.why = Why(m, ports); string starter = StartedBy(p, byPid);
                 if (!string.IsNullOrEmpty(starter)) t.why = "started by " + starter + (string.IsNullOrEmpty(t.why) ? "" : "; " + t.why);
@@ -438,6 +444,40 @@ using System.Security.Cryptography; using System.Text; using System.Text.Regular
                 return bits.Count == 0 ? "yours" : string.Join("; ", bits.ToArray()); }
             static string LeafName(Proc p, Memo m) {
                 string script = ScriptName(m.Script); return !string.IsNullOrEmpty(script) ? script : PrettyExe(p.Exe); }
+            static string ShownName(Proc p, Memo m, List<Proc> members, string kind) {
+                if (kind == "bot" && m.TaskHit && !string.IsNullOrEmpty(m.TaskName)) return ShortTask(m.TaskName);
+                string script = ScriptName(m.Script); if (string.IsNullOrEmpty(script)) return PrettyExe(p.Exe);
+                if (LauncherScript(script) && WrapsScript(m, members)) {
+                    try { string stem = Path.GetFileNameWithoutExtension(script); if (!string.IsNullOrEmpty(stem)) return stem; }
+                    catch (Exception) { } }
+                if (GenericStem(script)) { string folder = ScriptFolder(m); if (!string.IsNullOrEmpty(folder)) return folder + "/" + script; }
+                return script; }
+            static bool LauncherScript(string name) {
+                string ext; try { ext = Path.GetExtension(name); } catch (Exception) { return false; }
+                return ext.Equals(".vbs", StringComparison.OrdinalIgnoreCase) || ext.Equals(".cmd", StringComparison.OrdinalIgnoreCase)
+                    || ext.Equals(".bat", StringComparison.OrdinalIgnoreCase) || ext.Equals(".ps1", StringComparison.OrdinalIgnoreCase); }
+            static bool WrapsScript(Memo root, List<Proc> members) {
+                if (members == null) return false; foreach (Proc c in members) {
+                    Memo cm = memo(c); if (cm == null || string.IsNullOrEmpty(cm.Script) || SameScript(cm, root)) continue; return true; }
+                return false; }
+            static bool GenericStem(string file) {
+                string stem; try { stem = Path.GetFileNameWithoutExtension(file ?? ""); } catch (Exception) { return false; }
+                if (string.IsNullOrEmpty(stem)) return false;
+                return stem.Equals("run", StringComparison.OrdinalIgnoreCase) || stem.Equals("main", StringComparison.OrdinalIgnoreCase)
+                    || stem.Equals("index", StringComparison.OrdinalIgnoreCase) || stem.Equals("app", StringComparison.OrdinalIgnoreCase)
+                    || stem.Equals("server", StringComparison.OrdinalIgnoreCase) || stem.Equals("record", StringComparison.OrdinalIgnoreCase)
+                    || stem.Equals("start", StringComparison.OrdinalIgnoreCase) || stem.Equals("launch", StringComparison.OrdinalIgnoreCase)
+                    || stem.Equals("worker", StringComparison.OrdinalIgnoreCase); }
+            static string ScriptFolder(Memo m) {
+                string file = ScriptFile(m.Script); if (string.IsNullOrEmpty(file)) return null; try {
+                    string dir = Path.GetDirectoryName(file); if (string.IsNullOrEmpty(dir)) return null; return Path.GetFileName(dir.TrimEnd('\\')); }
+                catch (Exception) { return null; } }
+            static string ShortTask(string name) {
+                if (string.IsNullOrEmpty(name)) return name; int sp = name.IndexOf(' '); if (sp <= 0) return name; string first = name.Substring(0, sp);
+                foreach (TaskInfo t in TaskList.Items) {
+                    if (t == null || string.IsNullOrEmpty(t.Name)) continue; int s = t.Name.IndexOf(' ');
+                    if (s <= 0 || !first.Equals(t.Name.Substring(0, s), StringComparison.OrdinalIgnoreCase)) return name; }
+                string rest = name.Substring(sp + 1).Trim(); return rest.Length == 0 ? name : rest; }
             static string ScriptName(string script) {
                 if (string.IsNullOrEmpty(script)) return null; if (script.StartsWith("module:", StringComparison.Ordinal)) {
                     string rest = script.Substring(7); int bar = rest.IndexOf('|'); return bar < 0 ? rest : rest.Substring(0, bar); }

@@ -11,6 +11,7 @@ namespace DesktopVitals {
         public long Private;      // private working set, what Task Manager calls Memory
         public long Committed;    // private bytes, held even when Windows pages an idle process out of RAM
         public long Io;           // read + write operation counts from the snapshot
+        public long WriteBytes;  // WriteTransferCount, this process only
         public double Cpu;       // percent of the whole machine
         public string Cmd = ""; }
     static class Procs {
@@ -32,7 +33,8 @@ namespace DesktopVitals {
                     var pr = new Proc(); pr.Pid = pid; pr.Parent = (int)Marshal.ReadIntPtr(p, 88).ToInt64();
                     pr.Session = Marshal.ReadInt32(p, 100); pr.Private = Marshal.ReadInt64(p, 8);
                     pr.Committed = Marshal.ReadInt64(p, 200);   // PrivatePageCount
-                    pr.Io = Marshal.ReadInt64(p, 208) + Marshal.ReadInt64(p, 216); pr.CreateTime = Marshal.ReadInt64(p, 32);
+                    pr.Io = Marshal.ReadInt64(p, 208) + Marshal.ReadInt64(p, 216); pr.WriteBytes = Marshal.ReadInt64(p, 240);
+                    pr.CreateTime = Marshal.ReadInt64(p, 32);
                     pr.CpuTime = Marshal.ReadInt64(p, 40) + Marshal.ReadInt64(p, 48);
                     int nlen = Marshal.ReadInt16(p, 56) & 0xffff; IntPtr name = Marshal.ReadIntPtr(p, 64);
                     pr.Exe = name == IntPtr.Zero ? "System" : Marshal.PtrToStringUni(name, nlen / 2); list.Add(pr); }
@@ -679,10 +681,7 @@ namespace DesktopVitals {
                     else if (t.state == "failed" && t.kind == "task") taskFailed += n;
                     else if (t.state == "failed") exitFailed += n; else if (t.state == "quiet" && t.kind == "bot") quiet += n; }
             if (waiting == 0 && taskFailed == 0 && exitFailed == 0 && quiet == 0) {
-                board.headline.text = "All good"; board.headline.needs_you = false;
-                // Wait until the task scan has finished. An earlier tick looks calm only because failures are not in yet.
-                if (Prefs.ImportNote && TaskList.Ready)
-                    board.headline.text = "Imported hides and pins from your old watch.txt. Change them anytime with right-click."; }
+                board.headline.text = "All good"; board.headline.needs_you = false; }
             else {
                 var bits = new List<string>();
                 if (waiting > 0) bits.Add(waiting.ToString(CultureInfo.InvariantCulture) + (waiting == 1 ? " agent waiting on you" : " agents waiting on you"));

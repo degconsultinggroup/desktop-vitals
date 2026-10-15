@@ -821,16 +821,16 @@ while ($true) { Start-Sleep -Seconds 2 }
             return "$($t.Name) $($t.Detail) $($t.Why) $($t.Id) $($t.Project) $($t.Group)"
         }
         if ($py) {
-            $shim = @($things | Where-Object { $_.Name -eq 'run.py' })
+            $shim = @($things | Where-Object { $_.Name -eq $TaskShim -and $_.Kind -eq 'bot' })
             if ($shim.Count -ne 1) { $boxOk = $false; [void]$script:Fn.Add("shim lines=$($shim.Count)") }
-            elseif ($shim[0].Kind -ne 'bot' -or $shim[0].State -ne 'running' -or $shim[0].Project -ne 'shim-repo' -or $shim[0].Detail -notmatch [regex]::Escape($TaskShim) -or $shim[0].Detail -notmatch 'works every|wrote beat\.txt') {
+            elseif ($shim[0].State -ne 'running' -or $shim[0].Project -ne 'shim-repo' -or $shim[0].Detail -notmatch [regex]::Escape($TaskShim) -or $shim[0].Detail -notmatch 'works every|wrote beat\.txt') {
                 $boxOk = $false
                 [void]$script:Fn.Add("shim kind=$($shim[0].Kind) state=$($shim[0].State) project=$($shim[0].Project) detail=$($shim[0].Detail)")
             }
-            if (@($things | Where-Object { $_.Name -eq $TaskShim }).Count -ne 0) { $boxOk = $false; [void]$script:Fn.Add('shim task is its own line') }
+            if (@($things | Where-Object { $_.Kind -eq 'task' -and $_.Name -eq $TaskShim }).Count -ne 0) { $boxOk = $false; [void]$script:Fn.Add('shim task is its own line') }
         }
         else { [void]$script:Fn.Add('python missing for shim'); $boxOk = $false }
-        $gate = @($things | Where-Object { $_.Name -match 'gateway' -and $_.Kind -eq 'server' })
+        $gate = @($things | Where-Object { $_.Name -eq 'gateway' -and $_.Kind -eq 'server' })
         if ($gate.Count -ne 1 -or -not ($gate[0].Ports -contains $gatePort) -or $gate[0].Detail -notmatch [regex]::Escape($TaskGate)) {
             $boxOk = $false
             $shown = if ($gate.Count -ge 1) { "ports=$($gate[0].Ports -join ',') detail=$($gate[0].Detail)" } else { 'none' }
@@ -855,6 +855,11 @@ while ($true) { Start-Sleep -Seconds 2 }
         }
         if (@($things | Where-Object { $_.Kind -eq 'task' -and $_.State -eq 'ended' }).Count -ne 0) { $boxOk = $false; [void]$script:Fp.Add('successful task marked ended') }
         if (@($things | Where-Object { $_.Detail -match 'works on its own' }).Count -ne 0) { $boxOk = $false; [void]$script:Fp.Add('works on its own') }
+        $wrongWrite = @($things | Where-Object { $_.Name -ne 'dv_acc_listen.ps1' -and (($_.Detail + ' ' + $_.Why) -match 'wrote listen\.port') })
+        if ($wrongWrite.Count -ne 0) {
+            $boxOk = $false
+            [void]$script:Fp.Add('listen.port credited to ' + (($wrongWrite | ForEach-Object { $_.Name }) -join ','))
+        }
         if (-not $boxOk) {
             $boxDetail = ((@($script:Fn) + @($script:Fp)) -join '; ')
             $names = ($things | ForEach-Object { "$($_.Kind):$($_.Name):$($_.Project):$($_.State):$($_.Detail)" }) -join ' | '

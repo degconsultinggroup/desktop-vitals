@@ -589,9 +589,8 @@ Checked = something | check: http://example.com
         }
         if (Test-Path -LiteralPath $ConfigFile) { throw 'watch.txt was not renamed' }
         if (-not (Test-Path -LiteralPath $migWatch)) { throw 'watch.txt.migrated missing' }
-        $shown = $migSnap.Text -match 'Imported hides and pins'
-        $kept = $prefsText -match 'importNote=1'
-        if (-not $shown -and -not $kept) { throw 'import note was not shown or kept' }
+        if ($migSnap.Text -match 'Imported hides and pins') { throw 'import headline was shown' }
+        if ($prefsText -notmatch 'importNote=1') { throw 'import note was not kept' }
         $watchOk = $true
     }
     catch {
