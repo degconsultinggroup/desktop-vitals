@@ -368,7 +368,7 @@ function Register-UserTask {
         $Execute = 'powershell.exe'
         $Arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$ScriptPath`""
     }
-    $action = New-ScheduledTaskAction -Execute $Execute -Argument $Arguments
+    $action = if ([string]::IsNullOrWhiteSpace($Arguments)) { New-ScheduledTaskAction -Execute $Execute } else { New-ScheduledTaskAction -Execute $Execute -Argument $Arguments }
     # Once = timed trigger (shows under Scheduled, not Starts with Windows).
     if ($RepeatMin -gt 0) {
         $trigger = New-ScheduledTaskTrigger -Once -At ((Get-Date).AddMinutes(-1)) -RepetitionInterval (New-TimeSpan -Minutes $RepeatMin) -RepetitionDuration (New-TimeSpan -Days 1)
@@ -413,7 +413,7 @@ function Clear-Fixtures {
     foreach ($extra in @($SplitA, $SplitB)) {
         if ($extra -and (Test-Path -LiteralPath $extra)) { Remove-Item -LiteralPath $extra -Force -ErrorAction SilentlyContinue }
     }
-    foreach ($dir in @($BundleDir, $HomeRun, $HomePtt, $RgbDir)) {
+    foreach ($dir in @($BundleDir, $HomeRun, $HomePtt, $RgbDir, $LlmDir)) {
         if ($dir -and (Test-Path -LiteralPath $dir)) { Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue }
     }
     if ($ToolDir -and (Test-Path -LiteralPath $ToolDir)) {
@@ -462,6 +462,13 @@ try {
     $shardByte = New-Object byte[] 64
     [System.IO.File]::WriteAllBytes($SplitA, $shardByte)
     [System.IO.File]::WriteAllBytes($SplitB, $shardByte)
+    $LlmDir = Join-Path $ModelsDir ("dv-acc-llm-" + $Stamp)
+    New-Item -ItemType Directory -Force -Path (Join-Path $LlmDir 'packs'), (Join-Path $LlmDir 'mtp') | Out-Null
+    [System.IO.File]::WriteAllBytes((Join-Path $LlmDir 'weights.gguf'), $shardByte)
+    [System.IO.File]::WriteAllBytes((Join-Path $LlmDir 'mmproj-weights.gguf'), $shardByte)
+    [System.IO.File]::WriteAllBytes((Join-Path $LlmDir 'tokenizer.gguf'), $shardByte)
+    [System.IO.File]::WriteAllBytes((Join-Path $LlmDir 'packs\dv-acc-pack.gguf'), $shardByte)
+    [System.IO.File]::WriteAllBytes((Join-Path $LlmDir 'mtp\dv-acc-mtp.gguf'), $shardByte)
 
     # Disabled startup app: Run key + StartupApproved off (must not appear under Starts)
     [System.IO.File]::WriteAllBytes($DisabledExe, [byte[]](0x4D, 0x5A))
@@ -609,8 +616,15 @@ while True:
     open(beat, "w").write("x")
     time.sleep(0.25)
 '@ | Set-Content -LiteralPath $runPy -Encoding ASCII
-    New-Item -ItemType Directory -Force -Path $BundleDir | Out-Null
-    $gateJs = Join-Path $BundleDir 'openclaw.js'
+    $portable = Join-Path $BundleDir 'deps\portable-node'
+    $gateDist = Join-Path $portable 'node_modules\openclaw\dist'
+    New-Item -ItemType Directory -Force -Path $portable, $gateDist | Out-Null
+    $linkedNode = Join-Path $portable 'node.exe'
+    if ($nodeCmd) {
+        & cmd.exe /c "mklink /H `"$linkedNode`" `"$($nodeCmd.Source)`"" | Out-Null
+        if (-not (Test-Path -LiteralPath $linkedNode)) { Copy-Item -LiteralPath $nodeCmd.Source -Destination $linkedNode -Force }
+    }
+    $gateJs = Join-Path $gateDist 'index.js'
     $gateCmd = Join-Path $GateRepo 'gateway.cmd'
     $gateVbs = Join-Path $GateRepo 'gateway.vbs'
     $gatePortPath = Join-Path $GateRepo 'port.txt'
@@ -624,14 +638,13 @@ srv.listen(0, "127.0.0.1", function () {
   fs.writeFileSync(portFile, String(srv.address().port));
 });
 cp.spawn(process.execPath, ["-e", "/*dv-acc-gate-child*/require('net').createServer(function(){}).listen(0,'127.0.0.1');setInterval(function(){},1000);"]);
+cp.spawn("cmd.exe", ["/d", "/s", "/c", process.execPath + " -e \"/*dv-acc-gate-deep*/setInterval(function(){},1000);\""]);
 setInterval(function () {}, 1000);
 '@ | Set-Content -LiteralPath $gateJs -Encoding ASCII
-    Set-Content -LiteralPath $gateCmd -Value ("@echo off`r`nnode `"{0}`" `"{1}`"`r`n" -f $gateJs, $gatePortPath) -Encoding ASCII
-    @'
-Dim dir
-dir = Replace(WScript.ScriptFullName, WScript.ScriptName, "")
-CreateObject("Wscript.Shell").Run "cmd.exe /c " & Chr(34) & dir & "gateway.cmd" & Chr(34), 0, False
-'@ | Set-Content -LiteralPath $gateVbs -Encoding ASCII
+    $gateNode = '"' + $linkedNode + '" --max-old-space-size=8192 "' + $gateJs + '" "' + $gatePortPath + '"'
+    Set-Content -LiteralPath $gateCmd -Value ("@echo off`r`n" + $gateNode + "`r`n") -Encoding ASCII
+    $gateRun = 'cmd.exe /d /c "' + $gateNode + '"'
+    Set-Content -LiteralPath $gateVbs -Value ('CreateObject("Wscript.Shell").Run "' + $gateRun.Replace('"', '""') + '", 0, False') -Encoding ASCII
     $windirScript = Join-Path $WinRepo 'dv_acc_windir.ps1'
     Set-Content -LiteralPath $windirScript -Value "while (`$true) { Start-Sleep -Seconds 2 }`r`n" -Encoding ASCII
     if ($py) {
@@ -654,17 +667,17 @@ CreateObject("Wscript.Shell").Run "cmd.exe /c " & Chr(34) & dir & "gateway.cmd" 
         }
     }
     if ($nodeCmd) {
-        $null = Start-Child -FilePath 'wscript.exe' -ArgumentList @($gateVbs) -WorkingDirectory $GateRepo
+        $null = Start-Child -FilePath 'wscript.exe' -ArgumentList @($gateVbs) -WorkingDirectory $env:WINDIR
         Register-UserTask -Name $TaskGate -Execute 'wscript.exe' -Arguments ('"' + $gateVbs + '"') -NoStart
         $gateDeadline = (Get-Date).AddSeconds(15)
         while ((Get-Date) -lt $gateDeadline) {
-            $nodes = @(Get-CimInstance Win32_Process -Filter "Name = 'node.exe'" | Where-Object { $_.CommandLine -and $_.CommandLine -like '*openclaw.js*' })
+            $nodes = @(Get-CimInstance Win32_Process -Filter "Name = 'node.exe'" | Where-Object { $_.CommandLine -and $_.CommandLine -like '*node_modules\openclaw\dist\index.js*' })
             if ($nodes.Count -ge 1) {
                 foreach ($hit in $nodes) {
                     $proc = Get-Process -Id $hit.ProcessId -ErrorAction SilentlyContinue
                     if ($proc) { $Children.Add($proc) | Out-Null }
                 }
-                $gateKids = @(Get-CimInstance Win32_Process -Filter "Name = 'node.exe'" | Where-Object { $_.CommandLine -and $_.CommandLine -like '*dv-acc-gate-child*' })
+                $gateKids = @(Get-CimInstance Win32_Process -Filter "Name = 'node.exe'" | Where-Object { $_.CommandLine -and ($_.CommandLine -like '*dv-acc-gate-child*' -or $_.CommandLine -like '*dv-acc-gate-deep*') })
                 foreach ($hit in $gateKids) {
                     $proc = Get-Process -Id $hit.ProcessId -ErrorAction SilentlyContinue
                     if ($proc) { $Children.Add($proc) | Out-Null }
@@ -943,7 +956,7 @@ while ($true) { Start-Sleep -Seconds 2 }
         }
         else { [void]$script:Fn.Add('python missing for shim'); $boxOk = $false }
         $gate = @($things | Where-Object { $_.Name -eq 'gateway' -and $_.Kind -eq 'server' })
-        if ($gate.Count -ne 1 -or -not ($gate[0].Ports -contains $gatePort) -or $gate[0].Detail -notmatch [regex]::Escape($TaskGate)) {
+        if ($gate.Count -ne 1 -or -not ($gate[0].Ports -contains $gatePort) -or $gate[0].Detail -notmatch [regex]::Escape($TaskGate) -or @($things | Where-Object { $_.Ports -contains $gatePort }).Count -ne 1) {
             $boxOk = $false
             $shown = if ($gate.Count -ge 1) { "ports=$($gate[0].Ports -join ',') detail=$($gate[0].Detail)" } else { 'none' }
             [void]$script:Fn.Add("gateway count=$($gate.Count) $shown")
@@ -1005,6 +1018,8 @@ while ($true) { Start-Sleep -Seconds 2 }
         }
         if ($text -match '00001-of-') { $boxOk = $false; [void]$script:Fp.Add('split shards counted separately') }
         if ($text -notmatch [regex]::Escape('dv-acc-split-' + $Stamp)) { $boxOk = $false; [void]$script:Fn.Add('split model missing from the disk line') }
+        if ($text -notmatch [regex]::Escape('dv-acc-llm-' + $Stamp)) { $boxOk = $false; [void]$script:Fn.Add('model folder missing from the disk line') }
+        if ($text -match 'mmproj-weights' -or $text -match 'dv-acc-pack' -or $text -match 'dv-acc-mtp') { $boxOk = $false; [void]$script:Fp.Add('side file or tool pack counted as a model') }
         $wrongWrite = @($things | Where-Object { $_.Name -ne 'dv_acc_listen.ps1' -and (($_.Detail + ' ' + $_.Why) -match 'wrote listen\.port') })
         if ($wrongWrite.Count -ne 0) {
             $boxOk = $false
@@ -1140,7 +1155,7 @@ while ($true) { Start-Sleep -Seconds 2 }
     $runLeft = Get-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name $DisabledName -ErrorAction SilentlyContinue
     if ($runLeft) { $leftOk = $false; $leftDetail = 'leftover disabled Run key' }
     if ($ModelCreated -and (Test-Path -LiteralPath $ModelFile)) { $leftOk = $false; $leftDetail = 'leftover fake model' }
-    if ((Test-Path -LiteralPath $SplitA) -or (Test-Path -LiteralPath $SplitB)) { $leftOk = $false; $leftDetail = 'leftover split model' }
+    if ((Test-Path -LiteralPath $SplitA) -or (Test-Path -LiteralPath $SplitB) -or (Test-Path -LiteralPath $LlmDir)) { $leftOk = $false; $leftDetail = 'leftover split model' }
     if ((Test-Path -LiteralPath $HomeRun) -or (Test-Path -LiteralPath $RgbDir) -or (Test-Path -LiteralPath $BundleDir)) { $leftOk = $false; $leftDetail = 'leftover home fixture' }
     Write-Check 'cleanup' $leftOk $leftDetail
 }

@@ -161,11 +161,13 @@ using System.Security.Cryptography; using System.Text; using System.Text.Regular
                 if (!string.IsNullOrEmpty(cm.Weight)) return true;
                 if (SameScript(cm, am) || SameStem(cm, am)) return false;
                 return UserScript(cm.Script); }
+            static bool Toolish(Memo m) {
+                if (m == null || UserScript(m.Script)) return false; string b = (m.Script ?? "") + "\n" + (m.Cmd ?? "") + "\n" + (m.Image ?? ""); if (b.IndexOf("\\node_modules\\", StringComparison.OrdinalIgnoreCase) >= 0 || b.IndexOf("\\resources\\app", StringComparison.OrdinalIgnoreCase) >= 0) return true; string img = m.Image ?? ""; return img.IndexOf("\\AppData\\Local\\", StringComparison.OrdinalIgnoreCase) >= 0 && (img.IndexOf("\\deps\\", StringComparison.OrdinalIgnoreCase) >= 0 || img.IndexOf("portable-node", StringComparison.OrdinalIgnoreCase) >= 0); }
             static bool Owned(Proc p, Memo m, Dictionary<int, Proc> byPid, Dictionary<int, List<int>> listeners) {
-                Proc cur = p; var guard = new HashSet<int>(); for (int n = 0; n < 40 && guard.Add(cur.Pid); n++) {
+                bool tool = Toolish(m); Proc cur = p; var guard = new HashSet<int>(); for (int n = 0; n < 40 && guard.Add(cur.Pid); n++) {
                     Proc parent; if (!byPid.TryGetValue(cur.Parent, out parent)) return false;
-                    if (parent.CreateTime == 0 || cur.CreateTime == 0 || parent.CreateTime >= cur.CreateTime) return false;
-                    Memo pm = memo(parent); if (pm == null || !pm.Yours) return false;
+                    if (parent.CreateTime == 0 || p.CreateTime == 0 || parent.CreateTime >= p.CreateTime) { if (!tool) return false; cur = parent; continue; }
+                    Memo pm = memo(parent); if (pm == null || !pm.Yours) { if (!tool) return false; cur = parent; continue; }
                     if (SameScript(m, pm) || SameStem(m, pm)) return true; if (string.IsNullOrEmpty(pm.Script)) { cur = parent; continue; }
                     if (OwnOf(p, m, pm, listeners)) return false; if (!UserScript(m.Script)) return true;
                     if (Container(parent.Exe)) { cur = parent; continue; }

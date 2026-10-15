@@ -175,22 +175,22 @@ namespace DesktopVitals {
                     string ext = f.Extension.ToLowerInvariant();
                     bool known = ext == ".gguf" || ext == ".safetensors" || ext == ".ggml";
                     bool big = f.Length >= (20L << 20) && (ext == ".bin" || ext == ".pt" || ext == ".pth" || ext == ".onnx" || ext == ".ckpt" || ext.Length == 0);
-                    if (!known && !big) continue; string name = Shard.Replace(Path.GetFileNameWithoutExtension(f.Name), "");
-                    if (name.Length >= 32 || name.StartsWith("sha256-", StringComparison.OrdinalIgnoreCase)) name = FolderName(f.Directory);
+                    if (!known && !big) continue; string low = f.Name.ToLowerInvariant(); if (low.IndexOf("mmproj") >= 0 || low.IndexOf("tokenizer") >= 0 || low.IndexOf("vocab") >= 0) continue;
+                    string name = Shard.Replace(Path.GetFileNameWithoutExtension(f.Name), "");
+                    if ((depth > 0 && !f.Directory.Name.Equals("models", StringComparison.OrdinalIgnoreCase)) || name.Length >= 32 || name.StartsWith("sha256-", StringComparison.OrdinalIgnoreCase)) name = FolderName(f.Directory);
                     Add(list, Pretty(name), f.FullName, f.Length); }
                 if (depth == 4) return;
                 foreach (DirectoryInfo sub in d.EnumerateDirectories()) {
-                    if ((sub.Attributes & FileAttributes.ReparsePoint) != 0 || sub.Name.StartsWith(".")) continue;
+                    if ((sub.Attributes & FileAttributes.ReparsePoint) != 0 || sub.Name.StartsWith(".") || sub.Name.Equals("packs", StringComparison.OrdinalIgnoreCase) || sub.Name.Equals("mtp", StringComparison.OrdinalIgnoreCase)) continue;
                     Walk(sub.FullName, list, seen, depth + 1, ref budget); } }
             catch (Exception) { } }
         static string FolderName(DirectoryInfo dir) {
-            if (dir == null) return "model"; string n = dir.Name;
-            if ((n == "blobs" || n == "snapshots") && dir.Parent != null) n = dir.Parent.Name;
-            if (n.StartsWith("models--")) n = n.Substring(8).Replace("--", "/"); int slash = n.LastIndexOf('/');
-            if (slash >= 0 && slash < n.Length - 1) n = n.Substring(slash + 1); return n.Length == 0 ? "model" : n; }
+            string local = null; for (int i = 0; dir != null && i < 6; i++, dir = dir.Parent) {
+                string n = dir.Name; if (n == "blobs" || n == "snapshots") continue; if (n.StartsWith("models--")) { n = n.Substring(8).Replace("--", "/"); int s = n.LastIndexOf('/'); return s >= 0 && s < n.Length - 1 ? n.Substring(s + 1) : n; }
+                if (local == null && n.Length > 0) local = n; }
+            return string.IsNullOrEmpty(local) ? "model" : local; }
         static string Pretty(string name) {
-            if (string.IsNullOrEmpty(name)) return "model"; int at = name.IndexOf("__");
-            if (at > 0 && at < name.Length - 2) name = name.Substring(at + 2); return name; }
+            if (string.IsNullOrEmpty(name)) return "model"; int at = name.IndexOf("__"); if (at > 0 && at < name.Length - 2) name = name.Substring(at + 2); return name; }
         static void Add(List<InstalledModel> list, string name, string path, long bytes) {
             foreach (InstalledModel m in list)
                 if (string.Equals(m.Name, name, StringComparison.OrdinalIgnoreCase)) { m.Bytes += bytes; return; }
